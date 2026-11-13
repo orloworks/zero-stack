@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { runPool } from "../../scripts/ci-full";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { hash, runPool } from "../../scripts/ci-full";
 import { MATRIX } from "../../scripts/matrix";
 import { validateFlags } from "../../src/flags";
 
@@ -30,4 +33,20 @@ test("every matrix entry is a valid flag set", () => {
     const a = p.args, i = a.indexOf("--framework");
     expect(() => validateFlags({ name: "x", framework: i >= 0 ? a[i + 1] : undefined, shadcn: a.includes("--shadcn") })).not.toThrow();
   }
+});
+
+test("hash is stable and tracks gate.ts and the routing doc", () => {
+  const repo = join(import.meta.dir, "../..");
+  const tmp = mkdtempSync(join(tmpdir(), "zs-hash-"));
+  for (const d of ["src", "template", "docs", "scripts"]) mkdirSync(join(tmp, d), { recursive: true });
+  for (const f of ["src/a.ts", "template/b.txt", "docs/cloudflare-routing.md", "scripts/gate.ts", "package.json", "bun.lock"])
+    writeFileSync(join(tmp, f), f);
+  const h0 = hash(tmp, ["--auth"]);
+  expect(hash(tmp, ["--auth"])).toBe(h0);
+  writeFileSync(join(tmp, "scripts/gate.ts"), "changed");
+  const h1 = hash(tmp, ["--auth"]);
+  expect(h1).not.toBe(h0);
+  writeFileSync(join(tmp, "docs/cloudflare-routing.md"), "changed");
+  expect(hash(tmp, ["--auth"])).not.toBe(h1);
+  expect(hash(repo, [])).toMatch(/^[0-9a-f]{64}$/); // real repo has every input file
 });

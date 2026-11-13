@@ -27,10 +27,13 @@ const files = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]));
 
 // src/ already contains src/versions.ts.
-function hash(args: string[]): string {
-  const h = createHash("sha256").update(args.join(" "));
-  for (const f of [...files(join(root, "src")), ...files(join(root, "template"))].sort())
-    h.update(f).update(readFileSync(f));
+export function hash(repo: string, args: string[]): string {
+  const h = createHash("sha256").update(args.join(" ")).update(Bun.version);
+  const all = [
+    ...files(join(repo, "src")), ...files(join(repo, "template")),
+    ...["docs/cloudflare-routing.md", "scripts/gate.ts", "package.json", "bun.lock"].map((f) => join(repo, f)),
+  ];
+  for (const f of all.sort()) h.update(f.slice(repo.length)).update(readFileSync(f));
   return h.digest("hex");
 }
 
@@ -46,7 +49,7 @@ if (import.meta.main) {
   const status: Record<string, string> = {};
 
   const ok = await runPool(MATRIX, MAX_PARALLEL, async (p) => {
-    const h = hash(p.args);
+    const h = hash(root, p.args);
     if (green[p.name] === h) { status[p.name] = "skipped (unchanged)"; console.log(`${p.name}: skipped (unchanged)`); return true; }
     const start = Date.now();
     console.log(`${p.name}: running (${p.args.join(" ") || "no flags"})`);
