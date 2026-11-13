@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, chmodSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, chmodSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scaffold } from "../../src/pipeline";
@@ -96,6 +96,7 @@ test("auth merges @auth-schema into existing paths, writes .env, enables auth", 
   expect(Object.keys(paths).sort()).toEqual(["@/*", "@auth-schema"]);
   expect(readFileSync(join(dir, "void.config.ts"), "utf8")).toContain('"auth"');
   expect(readFileSync(join(dir, ".gitignore"), "utf8").split("\n")).toContain(".env");
+  expect(statSync(join(dir, ".env")).mode & 0o777).toBe(0o600);
   expect(readFileSync(join(dir, ".env"), "utf8")).toMatch(/^BETTER_AUTH_SECRET=\S{40,}\nBETTER_AUTH_URL=http:\/\/localhost:5173\n$/);
   expect(existsSync(join(dir, "pages/sign-in.tsx"))).toBe(true);
 });
