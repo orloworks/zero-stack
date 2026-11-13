@@ -15,7 +15,8 @@
     "test": "bun test tests/unit",
     "link-skill": "bun scripts/link-skill.ts",
     "typecheck": "tsc -p . --noEmit",
-    "ci": "bun run typecheck && bun test tests/unit && bun scripts/gate.ts --tailwind --shadcn --zod-rpc --auth"
+    "ci": "bun run typecheck && bun test tests/unit && bun scripts/gate.ts --tailwind --shadcn --zod-rpc --auth",
+    "ci:full": "bun scripts/ci-full.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

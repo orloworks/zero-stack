@@ -1,5 +1,5 @@
 // Scaffold into a temp dir, then vp check/build/test, verify, db:reset, GET / against vp dev.
-// Optional args choose the permutation: bun scripts/gate.ts [--framework vue] [--tailwind] [--shadcn] [--zod-rpc] [--auth]
+// Optional args choose the permutation: bun scripts/gate.ts [--framework vue] [--tailwind] [--shadcn] [--zod-rpc] [--auth] [--name x]
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +7,10 @@ import { validateFlags } from "../src/flags";
 import { preflight, scaffold } from "../src/pipeline";
 
 const root = mkdtempSync(join(tmpdir(), "zs-gate-"));
-const app = join(root, "gate-app");
+const argv = process.argv.slice(2);
+const arg = (flag: string) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
+const name = arg("--name") ?? "gate-app";
+const app = join(root, name);
 const vp = join(app, "node_modules/.bin/vp");
 let dev: ReturnType<typeof Bun.spawn> | undefined;
 
@@ -24,11 +27,9 @@ async function step(args: string[]) {
 
 try {
   preflight();
-  const argv = process.argv.slice(2);
-  const fw = argv.indexOf("--framework");
   const input = {
-    name: "gate-app",
-    framework: fw >= 0 ? argv[fw + 1] : undefined,
+    name,
+    framework: arg("--framework"),
     tailwind: argv.includes("--tailwind") || undefined,
     shadcn: argv.includes("--shadcn") || undefined,
     zodRpc: argv.includes("--zod-rpc") || undefined,
@@ -57,11 +58,17 @@ try {
     console.log("gate: zod-rpc client type reflects the schema");
   }
 
-  const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
-  const port = probe.port;
-  probe.stop(true);
+  // Each run needs its own vite port and Cloudflare inspector port (default 9229 collides across runs).
+  const freePort = () => {
+    const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+    const p = probe.port;
+    probe.stop(true);
+    return p;
+  };
+  const port = freePort();
   dev = Bun.spawn([vp, "dev", "--port", String(port), "--strictPort"], {
     cwd: app, stdio: ["ignore", "inherit", "inherit"], detached: true,
+    env: { ...process.env, VOID_INSPECTOR_PORT: String(freePort()) },
   });
   let status = 0;
   for (let i = 0; i < 120 && status !== 200; i++) {
