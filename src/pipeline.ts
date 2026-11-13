@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "./flags";
+import { installTailwind } from "./installers/tailwind";
 import { CREATE_VOID, NODE_RANGE } from "./versions";
 
 export type Run = (cmd: string[], cwd: string) => Promise<void>;
@@ -27,6 +28,8 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
         "--framework", config.framework, "--starter", "sqlite", "--deploy", "none", "--git"],
       dirname(targetDir),
     );
+    // Installers edit deps; the single `bun install` below picks them up.
+    if (config.tailwind) installTailwind(targetDir);
     // Void does not handle bun script approvals.
     const pkgPath = join(targetDir, "package.json");
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
