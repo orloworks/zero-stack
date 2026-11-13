@@ -26,6 +26,11 @@ try {
   await scaffold(validateFlags({ name: "gate-app" }), app);
   await step(["check"]);
   await step(["build"]);
+  await step(["test"]);
+  for (const script of ["verify", "db:reset"]) {
+    const p = Bun.spawn([process.execPath, "run", script], { cwd: app, stdio: ["ignore", "inherit", "inherit"] });
+    if ((await p.exited) !== 0) throw new Error(`bun run ${script} failed`);
+  }
 
   const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
   const port = probe.port;
