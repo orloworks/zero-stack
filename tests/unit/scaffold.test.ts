@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { scaffold } from "../../src/pipeline";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "zs-test-"));
-const cfg = { name: "app", framework: "react" } as const;
+const cfg = { name: "app", framework: "react", tailwind: false, shadcn: false, zodRpc: false, auth: false } as const;
 
 test("refuses a non-empty target and writes nothing", async () => {
   const dir = join(tmp(), "app");
@@ -32,4 +32,14 @@ test("wrong Node version exits 1 with the supported range", () => {
   });
   expect(r.exitCode).toBe(1);
   expect(r.stderr.toString()).toContain("^24.22 || >=26.12");
+});
+
+test("--shadcn with a non-React framework exits 1 with the fix and creates nothing", () => {
+  const dir = join(tmp(), "app");
+  const r = Bun.spawnSync([process.execPath, "src/index.ts", dir, "--framework", "vue", "--shadcn"]);
+  expect(r.exitCode).toBe(1);
+  expect(r.stderr.toString()).toContain(
+    "error: --shadcn requires --framework react (got vue); drop --shadcn or use --framework react.",
+  );
+  expect(existsSync(dir)).toBe(false);
 });
