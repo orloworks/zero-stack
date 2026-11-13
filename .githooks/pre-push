@@ -1,0 +1,3 @@
+#!/bin/sh
+# Local CI is the gate: a red `bun run ci` blocks the push.
+exec bun run ci
