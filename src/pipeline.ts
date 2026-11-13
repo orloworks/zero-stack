@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles } from "./agent-files";
 import type { Config } from "./flags";
 import { installTailwind } from "./installers/tailwind";
+import { installZodRpc } from "./installers/zod-rpc";
 import { CREATE_VOID, NODE_RANGE } from "./versions";
 
 export type Run = (cmd: string[], cwd: string) => Promise<void>;
@@ -56,6 +57,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     );
     // Installers edit deps; the single `bun install` below picks them up.
     if (config.tailwind) installTailwind(targetDir);
+    if (config.zodRpc) installZodRpc(targetDir);
     // Void does not handle bun script approvals.
     const pkgPath = join(targetDir, "package.json");
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));

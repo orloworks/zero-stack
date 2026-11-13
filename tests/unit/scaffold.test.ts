@@ -40,7 +40,7 @@ function seeded(agents: string, scripts: object = { postinstall: "void prepare" 
     dir,
     exec: async (cmd: string[]) => {
       if (cmd[1] !== "x") return;
-      mkdirSync(dir);
+      mkdirSync(join(dir, "routes/api"), { recursive: true });
       writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts }));
       writeFileSync(join(dir, "AGENTS.md"), agents);
     },
@@ -72,4 +72,12 @@ test("--shadcn with a non-React framework exits 1 with the fix and creates nothi
     "error: --shadcn requires --framework react (got vue); drop --shadcn or use --framework react.",
   );
   expect(existsSync(dir)).toBe(false);
+});
+
+test("zodRpc adds zod, the validated route and the typed client sample", async () => {
+  const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  await scaffold({ ...cfg, zodRpc: true }, dir, exec);
+  expect(JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).dependencies.zod).toMatch(/^4\./);
+  expect(readFileSync(join(dir, "routes/api/echo.ts"), "utf8")).toContain("withValidator");
+  expect(readFileSync(join(dir, "src/rpc.ts"), "utf8")).toContain('"/api/echo"');
 });
