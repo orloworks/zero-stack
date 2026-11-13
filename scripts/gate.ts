@@ -23,7 +23,7 @@ async function step(args: string[]) {
 
 try {
   preflight();
-  await scaffold(validateFlags({ name: "gate-app" }), app);
+  await scaffold(validateFlags({ name: "gate-app" }).config, app);
   await step(["check"]);
   await step(["build"]);
   await step(["test"]);

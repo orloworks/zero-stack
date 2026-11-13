@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { scaffold } from "../../src/pipeline";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "zs-test-"));
-const cfg = { name: "app", framework: "react" } as const;
+const cfg = { name: "app", framework: "react", tailwind: false, shadcn: false, zodRpc: false, auth: false } as const;
 
 test("refuses a non-empty target and writes nothing", async () => {
   const dir = join(tmp(), "app");
@@ -61,5 +61,15 @@ test("adds verify, test, db:reset, the route test and a fenced AGENTS.md line", 
 test("a missing AGENTS.md anchor is a hard error and leaves no directory", async () => {
   const { dir, exec } = seeded("no anchor here");
   await expect(scaffold(cfg, dir, exec)).rejects.toThrow(/anchor missing/);
+  expect(existsSync(dir)).toBe(false);
+});
+
+test("--shadcn with a non-React framework exits 1 with the fix and creates nothing", () => {
+  const dir = join(tmp(), "app");
+  const r = Bun.spawnSync([process.execPath, "src/index.ts", dir, "--framework", "vue", "--shadcn"]);
+  expect(r.exitCode).toBe(1);
+  expect(r.stderr.toString()).toContain(
+    "error: --shadcn requires --framework react (got vue); drop --shadcn or use --framework react.",
+  );
   expect(existsSync(dir)).toBe(false);
 });
