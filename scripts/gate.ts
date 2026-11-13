@@ -1,6 +1,6 @@
 // Scaffold into a temp dir, then vp check/build/test, verify, db:reset, GET / against vp dev.
 // Optional args choose the permutation: bun scripts/gate.ts [--framework vue] [--tailwind] [--shadcn] [--zod-rpc] [--auth]
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateFlags } from "../src/flags";
@@ -84,6 +84,39 @@ try {
     const [bad, good] = [await post({ name: "" }), await post({ name: "zero" })];
     console.log(`gate: POST /api/echo invalid -> ${bad}, valid -> ${good}`);
     if (bad < 400 || bad >= 500 || good !== 200) throw new Error("zod-rpc route did not validate");
+  }
+  if (input.auth) {
+    const base = `http://localhost:${port}`;
+    const post = (path: string, body: object, cookie?: string) =>
+      fetch(base + path, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: base, ...(cookie && { cookie }) },
+        body: JSON.stringify(body),
+      });
+    const email = `gate-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
+    const password = "gate-password-123";
+    const up = await post("/api/auth/sign-up/email", { name: "Gate", email, password });
+    if (!up.ok) throw new Error(`auth sign-up -> ${up.status}`);
+    const inn = await post("/api/auth/sign-in/email", { email, password });
+    const cookie = inn.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+    if (!inn.ok || !cookie) throw new Error(`auth sign-in -> ${inn.status}, cookie ${cookie ? "set" : "missing"}`);
+    const session = await fetch(`${base}/api/auth/get-session`, { headers: { cookie } }).then((r) => r.json() as Promise<any>);
+    if (session?.user?.email !== email) throw new Error("auth get-session did not return the signed-in user");
+    console.log("gate: auth sign-up -> sign-in -> session ok");
+    const pages = readdirSync(join(app, "pages")).filter((f) => f.startsWith("sign-"));
+    if (pages.length !== 2) throw new Error(`expected sign-in and sign-up pages, found ${pages}`);
+    for (const p of ["/sign-in", "/sign-up"]) {
+      const r = await fetch(base + p);
+      if (r.status !== 200) throw new Error(`GET ${p} -> ${r.status}`);
+    }
+    const migrations = readdirSync(join(app, "db/migrations")).filter((f) => f.endsWith(".sql"));
+    if (!migrations.some((f) => /user/i.test(readFileSync(join(app, "db/migrations", f), "utf8"))))
+      throw new Error("no migration creates the auth tables");
+    if (!readFileSync(join(app, ".gitignore"), "utf8").split("\n").includes(".env")) throw new Error(".env not gitignored");
+    const env = readFileSync(join(app, ".env"), "utf8");
+    if (!/^BETTER_AUTH_SECRET=\S{40,}$/m.test(env) || !env.includes("BETTER_AUTH_URL=http://localhost:5173"))
+      throw new Error(".env missing secret or url");
+    console.log("gate: auth migration present, .env gitignored");
   }
 } catch (e) {
   console.error(`gate failed: ${(e as Error).message}`);

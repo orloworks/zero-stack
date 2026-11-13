@@ -81,3 +81,27 @@ test("zodRpc adds zod, the validated route and the typed client sample", async (
   expect(readFileSync(join(dir, "routes/api/echo.ts"), "utf8")).toContain("withValidator");
   expect(readFileSync(join(dir, "src/rpc.ts"), "utf8")).toContain('"/api/echo"');
 });
+
+test("auth merges @auth-schema into existing paths, writes .env, enables auth", async () => {
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, ".gitignore"), "node_modules\n");
+    writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { paths: { "@/*": ["./src/*"] } } }));
+  };
+  await scaffold({ ...cfg, auth: true }, dir, exec);
+  const paths = JSON.parse(readFileSync(join(dir, "tsconfig.json"), "utf8")).compilerOptions.paths;
+  expect(Object.keys(paths).sort()).toEqual(["@/*", "@auth-schema"]);
+  expect(readFileSync(join(dir, "void.config.ts"), "utf8")).toContain('"auth"');
+  expect(readFileSync(join(dir, ".gitignore"), "utf8").split("\n")).toContain(".env");
+  expect(readFileSync(join(dir, ".env"), "utf8")).toMatch(/^BETTER_AUTH_SECRET=\S{40,}\nBETTER_AUTH_URL=http:\/\/localhost:5173\n$/);
+  expect(existsSync(join(dir, "pages/sign-in.tsx"))).toBe(true);
+});
+
+test("no .env without auth", async () => {
+  const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  await scaffold(cfg, dir, exec);
+  expect(existsSync(join(dir, ".env"))).toBe(false);
+});
