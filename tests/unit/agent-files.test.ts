@@ -12,8 +12,8 @@ const OPEN = "<!-- zero-stack:routing -->";
 const fake = (dir: string) => async (cmd: string[]) => {
   if (cmd.includes("create-void@1.8.0")) {
     mkdirSync(dir);
-    writeFileSync(join(dir, "package.json"), "{}");
-    writeFileSync(join(dir, "AGENTS.md"), "# Void\nvoid section\n");
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { postinstall: "void prepare" } }));
+    writeFileSync(join(dir, "AGENTS.md"), "# Void\nvoid section\n<!--/injected-by-void-->\n");
   }
 };
 
@@ -21,7 +21,7 @@ test("scaffold appends one routing block to AGENTS.md and writes .mcp.json", asy
   const dir = join(tmp(), "app");
   await scaffold({ name: "app", framework: "react" }, dir, fake(dir));
   const agents = readFileSync(join(dir, "AGENTS.md"), "utf8");
-  expect(agents.startsWith("# Void\nvoid section\n")).toBe(true);
+  expect(agents.startsWith("# Void\nvoid section\n<!--/injected-by-void-->\n")).toBe(true);
   expect(agents.split(OPEN).length).toBe(2);
   expect(agents).toContain("migrate-vite-cloudflare-to-void");
   expect(JSON.parse(readFileSync(join(dir, ".mcp.json"), "utf8")).mcpServers["cloudflare-docs"].url).toBe(

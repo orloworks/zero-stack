@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { writeAgentFiles } from "./agent-files";
 import type { Config } from "./flags";
 import { CREATE_VOID, NODE_RANGE } from "./versions";
@@ -19,6 +20,30 @@ export function preflight(): void {
   if (!ok) throw new Error(`Node ${NODE_RANGE} required on PATH (found ${m ? m[0] : "none"}).`);
 }
 
+const VERIFY_BLOCK = `
+<!-- zero-stack:verify -->
+Run \`bun run verify\` before finishing any task; it must pass.
+<!-- /zero-stack:verify -->
+`;
+
+// Anchored edits to the pinned create-void output; a missing anchor is a hard error.
+function addAppScripts(targetDir: string): void {
+  const pkgPath = join(targetDir, "package.json");
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+  if (!pkg.scripts?.postinstall) throw new Error("package.json anchor missing: scripts.postinstall");
+  Object.assign(pkg.scripts, {
+    verify: "void prepare && vp check && vp build && vp test",
+    test: "vp test",
+    "db:reset": "void db reset --yes",
+  });
+  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+  const agents = join(targetDir, "AGENTS.md");
+  if (!readFileSync(agents, "utf8").includes("<!--/injected-by-void-->"))
+    throw new Error("AGENTS.md anchor missing: <!--/injected-by-void-->");
+  appendFileSync(agents, VERIFY_BLOCK);
+  cpSync(join(dirname(fileURLToPath(import.meta.url)), "../template/tests"), join(targetDir, "tests"), { recursive: true });
+}
+
 export async function scaffold(config: Config, targetDir: string, exec: Run = run): Promise<void> {
   if (existsSync(targetDir) && readdirSync(targetDir).length > 0)
     throw new Error(`Target directory ${targetDir} is not empty.`);
@@ -33,6 +58,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
     pkg.trustedDependencies = ["esbuild", "workerd", "sharp"];
     writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+    addAppScripts(targetDir);
     await exec([process.execPath, "install"], targetDir);
     writeAgentFiles(targetDir); // before vp check so the block gets formatted too
     // create-void 1.8.0 output fails its own `vp check` on formatting (docs/facts.md).
