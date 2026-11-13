@@ -56,7 +56,8 @@ Starter is fixed to sqlite (D1). No `--ui none`; no API-only mode exists upstrea
 Add `auth` to `void.config.ts`, a minimal sign-in/sign-up page for the chosen framework,
 the `@auth-schema` tsconfig alias, run `void db generate` so the migration is committed,
 and write a gitignored root `.env` with a random `BETTER_AUTH_SECRET` and
-`BETTER_AUTH_URL=http://localhost:5173` plus `.env.example` (no values). Void reads one
+`BETTER_AUTH_URL=http://localhost:5173` (mode 0600). No `.env.example`: Void 1.8.0 refuses
+to start when one exists (`env.ts` is the key list). Void reads one
 root `.env`; `.dev.vars` is unsupported. Social providers are out of scope.
 
 ## Generated app
