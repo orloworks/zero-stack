@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles } from "./agent-files";
 import type { Config } from "./flags";
+import { installShadcn } from "./installers/shadcn";
 import { installTailwind } from "./installers/tailwind";
 import { CREATE_VOID, NODE_RANGE } from "./versions";
 
@@ -56,6 +57,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     );
     // Installers edit deps; the single `bun install` below picks them up.
     if (config.tailwind) installTailwind(targetDir);
+    if (config.shadcn) installShadcn(targetDir);
     // Void does not handle bun script approvals.
     const pkgPath = join(targetDir, "package.json");
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));

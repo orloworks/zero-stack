@@ -56,6 +56,11 @@ try {
     status = await fetch(`http://localhost:${port}/`).then((r) => r.status, () => 0);
   }
   if (status !== 200) throw new Error(`GET / returned ${status}`);
+  if (input.shadcn) {
+    const html = await fetch(`http://localhost:${port}/`).then((r) => r.text());
+    if (!html.includes('data-slot="button"')) throw new Error("shadcn Button not rendered on /");
+    console.log("gate: shadcn Button rendered");
+  }
   console.log(`gate: GET / -> ${status}`);
 } catch (e) {
   console.error(`gate failed: ${(e as Error).message}`);
