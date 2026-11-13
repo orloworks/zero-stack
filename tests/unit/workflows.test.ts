@@ -15,3 +15,9 @@ test.each(files)("%s triggers only on workflow_dispatch", (f) => {
   const triggers = typeof wf.on === "string" ? [wf.on] : Array.isArray(wf.on) ? wf.on : Object.keys(wf.on as object);
   expect(triggers).toEqual(["workflow_dispatch"]);
 });
+
+test.each(files)("%s never publishes to npm", (f) => {
+  const wf = Bun.YAML.parse(readFileSync(join(dir, f), "utf8")) as { jobs: Record<string, { steps: { run?: string }[] }> };
+  const runs = Object.values(wf.jobs).flatMap((j) => j.steps.map((s) => s.run ?? ""));
+  for (const r of runs) expect(r).not.toContain("npm publish");
+});

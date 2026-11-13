@@ -1,6 +1,7 @@
 name: Release
 
 # Dispatch only: no push, pull_request or ready_for_review triggers (Actions minutes are capped).
+# Verification only; publishing is done by hand from the owner's machine (docs/release-checklist.md).
 on:
   workflow_dispatch:
 
@@ -10,7 +11,6 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write # npm provenance
 
 jobs:
   release:
@@ -21,9 +21,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 26
-          registry-url: https://registry.npmjs.org
       - run: bun install --frozen-lockfile
       - run: bun run ci:full
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

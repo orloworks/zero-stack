@@ -10,6 +10,4 @@ Do these in order on the release commit. Stop at the first failure.
 4. The name is free before the first publish: `npm view create-zero-stack` returns 404.
 5. `npm pack --dry-run` lists the template, skills and routing doc, and no tests, scripts,
    `.ci-cache` or `.env`.
-6. Publish: dispatch the Release workflow (`gh workflow run Release --ref <branch>`, needs the
-   `NPM_TOKEN` secret) or run `npm publish --access public` by hand. `prepublishOnly` runs
-   `ci:full` again.
+6. Publish by hand from the owner's machine: `npm publish --access public`; `prepublishOnly` re-runs `ci:full`.
