@@ -1,0 +1,25 @@
+name: Release
+
+# Dispatch only: no push, pull_request or ready_for_review triggers (Actions minutes are capped).
+# Verification only; publishing is done by hand from the owner's machine (docs/release-checklist.md).
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - run: bun install --frozen-lockfile
+      - run: bun run ci:full

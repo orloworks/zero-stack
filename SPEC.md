@@ -32,9 +32,11 @@ tests/
    --starter sqlite --deploy none --git`. It always installs and cannot be prevented.
 5. Apply installers by anchored string replace against the known generated output of the
    pinned version. A missing anchor is a hard error (caught by tests on every pin bump).
-6. Add `trustedDependencies: ["esbuild","workerd","sharp"]` to package.json (Void does
+6. Run `vp check --fix` in the new app: untouched `create-void@1.8.0` output fails its own
+   `vp check` on formatting in 11 files (see `docs/facts.md`). Re-test on every pin bump.
+7. Add `trustedDependencies: ["esbuild","workerd","sharp"]` to package.json (Void does
    not handle bun script approvals). Verified by the scaffold gate.
-7. Write the routing block into `AGENTS.md` and a `.mcp.json` with the Cloudflare Docs
+8. Write the routing block into `AGENTS.md` and a `.mcp.json` with the Cloudflare Docs
    MCP (`https://docs.mcp.cloudflare.com/mcp`). Re-run `bun install` if deps changed.
 
 ## Flags
@@ -44,7 +46,7 @@ tests/
 | `--framework` | react (default), vue, svelte, solid | passthrough to create-void |
 | `--tailwind` | bool | Tailwind v4 via `@tailwindcss/vite` (Void has no guidance) |
 | `--shadcn` | bool | React only, implies `--tailwind` |
-| `--zod-rpc` | bool | `@hono/zod-validator` + typed `void/client` helper |
+| `--zod-rpc` | bool | Void `defineHandler.withValidator` with a zod body schema + typed `void/client` call (no `@hono/zod-validator`: Void takes Standard Schema and feeds the client types) |
 | `--auth` | bool | Void built-in Better Auth wiring, see below |
 
 Starter is fixed to sqlite (D1). No `--ui none`; no API-only mode exists upstream.
@@ -52,14 +54,15 @@ Starter is fixed to sqlite (D1). No `--ui none`; no API-only mode exists upstrea
 ## Auth installer
 
 Add `auth` to `void.config.ts`, a minimal sign-in/sign-up page for the chosen framework,
-the `@auth-schema` tsconfig alias, run `void db generate` so the migration is committed,
+the `@auth-schema` tsconfig alias, run `void db generate` so the migration is in the generated tree, ready for the user's first commit (create-void `--git` only runs `git init`),
 and write a gitignored root `.env` with a random `BETTER_AUTH_SECRET` and
-`BETTER_AUTH_URL=http://localhost:5173` plus `.env.example` (no values). Void reads one
+`BETTER_AUTH_URL=http://localhost:5173` (mode 0600). No `.env.example`: Void 1.8.0 refuses
+to start when one exists (`env.ts` is the key list). Void reads one
 root `.env`; `.dev.vars` is unsupported. Social providers are out of scope.
 
 ## Generated app
 
-Scripts: `verify` (`void prepare && vp check && vp build && vp test`), `test`,
+Scripts: `verify` (`void prepare && vp check && tsc --noEmit && vp build && vp test`), `test`,
 `db:reset` (`void db reset --yes`). Ships one `vi.mock`-based route test (Void tests run
 in Node; bindings are unavailable). `AGENTS.md` tells agents to run `verify` before
 finishing. No wrangler files, ever (Void migrates a root `wrangler.jsonc` itself).
