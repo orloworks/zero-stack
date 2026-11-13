@@ -12,7 +12,7 @@ test("defaults: react, every installer off, no notes", () => {
 
 test("every framework is accepted", () => {
   for (const framework of ["react", "vue", "svelte", "solid"])
-    expect(validateFlags({ name: "x", framework }).config.framework).toBe(framework);
+    expect(validateFlags({ name: "x", framework }).config.framework as string).toBe(framework);
 });
 
 test("installer flags are recorded", () => {

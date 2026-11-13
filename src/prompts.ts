@@ -15,8 +15,8 @@ const guard = <T>(v: T | symbol): T => {
 };
 
 export const clackUi: Ui = {
-  text: async (message) => guard(await text({ message })),
-  confirm: async (message) => guard(await confirm({ message, initialValue: false })),
+  text: async (message) => guard<string>(await text({ message })),
+  confirm: async (message) => guard<boolean>(await confirm({ message, initialValue: false })),
 };
 
 // Asks only for what flags left undefined; the result goes through validateFlags like flag-only input.

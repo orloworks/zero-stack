@@ -19,7 +19,7 @@ const fake = (dir: string) => async (cmd: string[]) => {
 
 test("scaffold appends one routing block to AGENTS.md and writes .mcp.json", async () => {
   const dir = join(tmp(), "app");
-  await scaffold({ name: "app", framework: "react" }, dir, fake(dir));
+  await scaffold({ name: "app", framework: "react", tailwind: false, shadcn: false, zodRpc: false, auth: false }, dir, fake(dir));
   const agents = readFileSync(join(dir, "AGENTS.md"), "utf8");
   expect(agents.startsWith("# Void\nvoid section\n<!--/injected-by-void-->\n")).toBe(true);
   expect(agents.split(OPEN).length).toBe(2);
@@ -31,7 +31,7 @@ test("scaffold appends one routing block to AGENTS.md and writes .mcp.json", asy
 
 test("re-running replaces the block in place and keeps surrounding text", async () => {
   const dir = join(tmp(), "app");
-  await scaffold({ name: "app", framework: "react" }, dir, fake(dir));
+  await scaffold({ name: "app", framework: "react", tailwind: false, shadcn: false, zodRpc: false, auth: false }, dir, fake(dir));
   const f = join(dir, "AGENTS.md");
   writeFileSync(f, readFileSync(f, "utf8").replace("void section", "void section edited") + "\ntail\n");
   const { writeAgentFiles } = await import("../../src/agent-files");

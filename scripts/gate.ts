@@ -1,4 +1,5 @@
-// Scaffold the bare app into a temp dir, then vp check, vp build, GET / against vp dev.
+// Scaffold into a temp dir, then vp check/build/test, verify, db:reset, GET / against vp dev.
+// Optional args choose the permutation: bun scripts/gate.ts [--framework vue] [--tailwind] [--shadcn] [--zod-rpc] [--auth]
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,7 +24,17 @@ async function step(args: string[]) {
 
 try {
   preflight();
-  await scaffold(validateFlags({ name: "gate-app" }).config, app);
+  const argv = process.argv.slice(2);
+  const fw = argv.indexOf("--framework");
+  const input = {
+    name: "gate-app",
+    framework: fw >= 0 ? argv[fw + 1] : undefined,
+    tailwind: argv.includes("--tailwind") || undefined,
+    shadcn: argv.includes("--shadcn") || undefined,
+    zodRpc: argv.includes("--zod-rpc") || undefined,
+    auth: argv.includes("--auth") || undefined,
+  };
+  await scaffold(validateFlags(input).config, app);
   await step(["check"]);
   await step(["build"]);
   await step(["test"]);
