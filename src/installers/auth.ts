@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { replaceAnchor } from "../anchor";
 import type { Framework } from "../flags";
+import { CREATE_VOID } from "../versions";
 
 // Void's generated mappings (.void/tsconfig.json), restored whenever we write `paths`.
 const VOID_PATHS = {
@@ -30,7 +31,7 @@ export function installAuth(dir: string, framework: Framework): void {
   // A `paths` entry replaces the generated ones, so merge into whatever shadcn wrote (or add Void's four).
   const tsconfig = join(dir, "tsconfig.json");
   const ts = JSON.parse(readFileSync(tsconfig, "utf8"));
-  if (!ts.compilerOptions) throw new Error("tsconfig.json anchor missing: compilerOptions");
+  if (!ts.compilerOptions) throw new Error(`tsconfig.json anchor missing: compilerOptions (create-void@${CREATE_VOID})`);
   ts.compilerOptions.paths = { ...(ts.compilerOptions.paths ?? VOID_PATHS), "@auth-schema": ["./.void/better-auth-schema.ts"] };
   writeFileSync(tsconfig, JSON.stringify(ts, null, 2) + "\n");
 

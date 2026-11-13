@@ -60,7 +60,7 @@ test("adds verify, test, db:reset, the route test and a fenced AGENTS.md line", 
 
 test("a missing AGENTS.md anchor is a hard error and leaves no directory", async () => {
   const { dir, exec } = seeded("no anchor here");
-  await expect(scaffold(cfg, dir, exec)).rejects.toThrow(/anchor missing/);
+  await expect(scaffold(cfg, dir, exec)).rejects.toThrow(/anchor missing.*create-void@\d/);
   expect(existsSync(dir)).toBe(false);
 });
 
@@ -104,4 +104,23 @@ test("no .env without auth", async () => {
   const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
   await scaffold(cfg, dir, exec);
   expect(existsSync(join(dir, ".env"))).toBe(false);
+});
+
+test("Ctrl-C mid-scaffold removes the target and exits 130", async () => {
+  const dir = join(tmp(), "app");
+  const p = Bun.spawn([process.execPath, join(import.meta.dir, "fixtures/hang-scaffold.ts"), dir], { stdout: "pipe", stderr: "ignore" });
+  const reader = p.stdout.getReader();
+  while (!new TextDecoder().decode((await reader.read()).value ?? new Uint8Array()).includes("ready")) {}
+  expect(existsSync(dir)).toBe(true);
+  p.kill("SIGINT");
+  expect(await p.exited).toBe(130);
+  expect(existsSync(dir)).toBe(false);
+});
+
+test("zod-rpc refuses to overwrite an existing routes/api/echo.ts", async () => {
+  const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const seed = exec;
+  const withEcho = async (cmd: string[]) => { await seed(cmd); if (cmd[1] === "x") writeFileSync(join(dir, "routes/api/echo.ts"), "mine"); };
+  await expect(scaffold({ ...cfg, zodRpc: true }, dir, withEcho)).rejects.toThrow(/echo\.ts already exists.*create-void@\d/);
+  expect(existsSync(dir)).toBe(false);
 });

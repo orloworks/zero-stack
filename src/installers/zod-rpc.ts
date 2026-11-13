@@ -1,11 +1,13 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { ZOD } from "../versions";
+import { CREATE_VOID, ZOD } from "../versions";
 
 // Void's defineHandler.withValidator accepts any Standard Schema and feeds void/client's types,
 // so @hono/zod-validator is not needed (SPEC listed it; see ticket #9 notes).
 // Needs a `bun install` afterwards (the pipeline runs one).
 export function installZodRpc(dir: string): void {
+  if (!existsSync(join(dir, "routes/api"))) throw new Error(`routes/api anchor missing (create-void@${CREATE_VOID})`);
+  if (existsSync(join(dir, "routes/api/echo.ts"))) throw new Error(`routes/api/echo.ts already exists (create-void@${CREATE_VOID})`);
   const pkgPath = join(dir, "package.json");
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
   pkg.dependencies = { ...pkg.dependencies, zod: ZOD };

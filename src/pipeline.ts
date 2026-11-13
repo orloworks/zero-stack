@@ -34,7 +34,7 @@ Run \`bun run verify\` before finishing any task; it must pass.
 function addAppScripts(targetDir: string): void {
   const pkgPath = join(targetDir, "package.json");
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-  if (!pkg.scripts?.postinstall) throw new Error("package.json anchor missing: scripts.postinstall");
+  if (!pkg.scripts?.postinstall) throw new Error(`package.json anchor missing: scripts.postinstall (create-void@${CREATE_VOID})`);
   Object.assign(pkg.scripts, {
     verify: "void prepare && vp check && tsc --noEmit && vp build && vp test",
     test: "vp test",
@@ -43,7 +43,7 @@ function addAppScripts(targetDir: string): void {
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
   const agents = join(targetDir, "AGENTS.md");
   if (!readFileSync(agents, "utf8").includes("<!--/injected-by-void-->"))
-    throw new Error("AGENTS.md anchor missing: <!--/injected-by-void-->");
+    throw new Error(`AGENTS.md anchor missing: <!--/injected-by-void--> (create-void@${CREATE_VOID})`);
   appendFileSync(agents, VERIFY_BLOCK);
   cpSync(join(dirname(fileURLToPath(import.meta.url)), "../template/tests"), join(targetDir, "tests"), { recursive: true });
 }
@@ -51,6 +51,8 @@ function addAppScripts(targetDir: string): void {
 export async function scaffold(config: Config, targetDir: string, exec: Run = run): Promise<void> {
   if (existsSync(targetDir) && readdirSync(targetDir).length > 0)
     throw new Error(`Target directory ${targetDir} is not empty.`);
+  const onSignal = () => { rmSync(targetDir, { recursive: true, force: true }); process.exit(130); };
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, onSignal);
   try {
     await exec(
       [process.execPath, "x", `create-void@${CREATE_VOID}`, config.name, "--toolchain", "vite-plus",
@@ -77,5 +79,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
   } catch (e) {
     rmSync(targetDir, { recursive: true, force: true });
     throw e;
+  } finally {
+    for (const sig of ["SIGINT", "SIGTERM"] as const) process.off(sig, onSignal);
   }
 }

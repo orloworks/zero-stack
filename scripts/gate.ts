@@ -18,7 +18,7 @@ const stopDev = () => {
   // detached => own process group; kill the whole group so no vite/workerd child survives.
   if (dev?.pid) try { process.kill(-dev.pid, "SIGTERM"); } catch {}
 };
-for (const s of ["SIGINT", "SIGTERM"] as const) process.on(s, () => { stopDev(); process.exit(130); });
+for (const s of ["SIGINT", "SIGTERM"] as const) process.on(s, () => { stopDev(); rmSync(root, { recursive: true, force: true }); process.exit(130); });
 
 async function step(args: string[]) {
   const p = Bun.spawn([vp, ...args], { cwd: app, stdio: ["ignore", "inherit", "inherit"] });
