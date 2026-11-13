@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { writeAgentFiles } from "./agent-files";
 import type { Config } from "./flags";
 import { CREATE_VOID, NODE_RANGE } from "./versions";
 
@@ -33,6 +34,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     pkg.trustedDependencies = ["esbuild", "workerd", "sharp"];
     writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
     await exec([process.execPath, "install"], targetDir);
+    writeAgentFiles(targetDir); // before vp check so the block gets formatted too
     // create-void 1.8.0 output fails its own `vp check` on formatting (docs/facts.md).
     await exec([join(targetDir, "node_modules/.bin/vp"), "check", "--fix"], targetDir);
   } catch (e) {
