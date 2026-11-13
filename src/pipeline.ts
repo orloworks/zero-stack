@@ -35,7 +35,7 @@ function addAppScripts(targetDir: string): void {
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
   if (!pkg.scripts?.postinstall) throw new Error("package.json anchor missing: scripts.postinstall");
   Object.assign(pkg.scripts, {
-    verify: "void prepare && vp check && vp build && vp test",
+    verify: "void prepare && vp check && tsc --noEmit && vp build && vp test",
     test: "vp test",
     "db:reset": "void db reset --yes",
   });

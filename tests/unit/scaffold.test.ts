@@ -51,7 +51,7 @@ test("adds verify, test, db:reset, the route test and a fenced AGENTS.md line", 
   const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
   await scaffold(cfg, dir, exec);
   const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
-  expect(pkg.scripts.verify).toBe("void prepare && vp check && vp build && vp test");
+  expect(pkg.scripts.verify).toBe("void prepare && vp check && tsc --noEmit && vp build && vp test");
   expect(pkg.scripts["db:reset"]).toBe("void db reset --yes");
   expect(pkg.scripts.test).toBe("vp test");
   expect(existsSync(join(dir, "tests/hello.test.ts"))).toBe(true);

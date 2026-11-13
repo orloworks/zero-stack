@@ -46,7 +46,7 @@ tests/
 | `--framework` | react (default), vue, svelte, solid | passthrough to create-void |
 | `--tailwind` | bool | Tailwind v4 via `@tailwindcss/vite` (Void has no guidance) |
 | `--shadcn` | bool | React only, implies `--tailwind` |
-| `--zod-rpc` | bool | `@hono/zod-validator` + typed `void/client` helper |
+| `--zod-rpc` | bool | Void `defineHandler.withValidator` with a zod body schema + typed `void/client` call (no `@hono/zod-validator`: Void takes Standard Schema and feeds the client types) |
 | `--auth` | bool | Void built-in Better Auth wiring, see below |
 
 Starter is fixed to sqlite (D1). No `--ui none`; no API-only mode exists upstream.
@@ -61,7 +61,7 @@ root `.env`; `.dev.vars` is unsupported. Social providers are out of scope.
 
 ## Generated app
 
-Scripts: `verify` (`void prepare && vp check && vp build && vp test`), `test`,
+Scripts: `verify` (`void prepare && vp check && tsc --noEmit && vp build && vp test`), `test`,
 `db:reset` (`void db reset --yes`). Ships one `vi.mock`-based route test (Void tests run
 in Node; bindings are unavailable). `AGENTS.md` tells agents to run `verify` before
 finishing. No wrangler files, ever (Void migrates a root `wrangler.jsonc` itself).
