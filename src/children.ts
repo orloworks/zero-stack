@@ -29,16 +29,19 @@ export const terminating = () => down;
 // Returns the disposer; the process listeners are removed when the last cleanup is disposed.
 const cleanups = new Set<() => void>();
 const handlers = { SIGINT: 130, SIGTERM: 143 } as const;
+let grace = 5000;
 const onSignal = (sig: keyof typeof handlers) => async () => {
   if (down) return;
   down = true;
-  await killChildren();
+  await killChildren(grace);
   for (const c of cleanups) try { c(); } catch {}
   process.exit(handlers[sig]);
 };
 const listeners = { SIGINT: onSignal("SIGINT"), SIGTERM: onSignal("SIGTERM") };
 
-export function onTerminate(cleanup: () => void): () => void {
+// graceMs: how long to wait for children after SIGTERM (a parent of other signal-handling parents waits longer).
+export function onTerminate(cleanup: () => void, graceMs = 5000): () => void {
+  grace = Math.max(grace, graceMs);
   if (!cleanups.size) for (const s of Object.keys(listeners) as (keyof typeof listeners)[]) process.on(s, listeners[s]);
   cleanups.add(cleanup);
   return () => {

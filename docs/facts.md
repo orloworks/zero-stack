@@ -6,7 +6,7 @@
 then `bun pm untrusted` in the app: `Found 0 untrusted dependencies with scripts.`
 `node_modules/workerd/bin/workerd --version` runs (`workerd 2026-11-10`). So nothing needs
 approval today (workerd ships its binary through the platform optional dep). We still write
-`trustedDependencies: ["esbuild","workerd","sharp"]` (SPEC step 6) as cheap insurance; the
+`trustedDependencies: ["esbuild","workerd","sharp"]` (SPEC step 7) as cheap insurance; the
 scaffold gate (`bun run ci`) proves build and dev work with it.
 
 ## `vp install` with `bun.lock`
