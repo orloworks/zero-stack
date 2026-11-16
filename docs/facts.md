@@ -6,7 +6,7 @@
 then `bun pm untrusted` in the app: `Found 0 untrusted dependencies with scripts.`
 `node_modules/workerd/bin/workerd --version` runs (`workerd 2026-11-10`). So nothing needs
 approval today (workerd ships its binary through the platform optional dep). We still write
-`trustedDependencies: ["esbuild","workerd","sharp"]` (SPEC step 6) as cheap insurance; the
+`trustedDependencies: ["esbuild","workerd","sharp"]` (SPEC step 7) as cheap insurance; the
 scaffold gate (`bun run ci`) proves build and dev work with it.
 
 ## `vp install` with `bun.lock`
@@ -34,3 +34,12 @@ issues found in 11 files" (AGENTS.md, package.json, pages/*, db/*, configs...).
 
 `vp dev` listens on `localhost` (check with `http://localhost:<port>/`, not 127.0.0.1).
 It prints a Cloudflare agent banner and an inspector-port notice; harmless.
+
+## `@cloudflare/vite-plugin@2.0.0-rc.0` breaks `vp build` (2026-11-16)
+
+void@1.8.0 depends on `@cloudflare/vite-plugin@^2.0.0-beta.v.15`, which now resolves to `2.0.0-rc.0`.
+It writes `.cloudflare/output/v1/` while void's `@cloudflare/build-output-utils@^0.9.13` reads
+`v0/config.json`, so every fresh scaffold fails `vp build` with "no root config found". Reproduced on a
+plain react scaffold; `overrides: {"@cloudflare/vite-plugin": "2.0.0-beta.v.17"}` plus `bun install`
+builds again. The generated package.json carries that override (`OVERRIDES` in `src/versions.ts`);
+drop it when the void pin moves to a release that matches rc.0.

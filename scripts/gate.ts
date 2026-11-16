@@ -1,10 +1,13 @@
 // Scaffold into a temp dir, then vp check/build/test, verify, db:reset, GET / against vp dev.
 // Optional args choose the permutation: bun scripts/gate.ts [--framework vue] [--tailwind] [--shadcn] [--zod-rpc] [--auth] [--name x]
+import { Database } from "bun:sqlite";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateFlags } from "../src/flags";
-import { preflight, scaffold } from "../src/pipeline";
+import { killChildren, onTerminate, spawnTracked } from "../src/children";
+import { preflight, run, scaffold } from "../src/pipeline";
+import { TRUSTED_DEPENDENCIES } from "../src/versions";
 
 const root = mkdtempSync(join(tmpdir(), "zs-gate-"));
 const argv = process.argv.slice(2);
@@ -14,16 +17,13 @@ const app = join(root, name);
 const vp = join(app, "node_modules/.bin/vp");
 let dev: ReturnType<typeof Bun.spawn> | undefined;
 
-const stopDev = () => {
-  // detached => own process group; kill the whole group so no vite/workerd child survives.
-  if (dev?.pid) try { process.kill(-dev.pid, "SIGTERM"); } catch {}
-};
-for (const s of ["SIGINT", "SIGTERM"] as const) process.on(s, () => { stopDev(); rmSync(root, { recursive: true, force: true }); process.exit(130); });
+// SIGINT/SIGTERM: every child (steps, dev server) is killed and awaited, then the temp dir goes; exit 130/143.
+onTerminate(() => rmSync(root, { recursive: true, force: true }), 10_000);
 
-async function step(args: string[]) {
-  const p = Bun.spawn([vp, ...args], { cwd: app, stdio: ["ignore", "inherit", "inherit"] });
-  if ((await p.exited) !== 0) throw new Error(`vp ${args.join(" ")} failed`);
-}
+const step = (args: string[]) => run([vp, ...args], app);
+const sqliteFiles = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? sqliteFiles(join(dir, e.name)) : e.name.endsWith(".sqlite") ? [join(dir, e.name)] : []);
 
 try {
   preflight();
@@ -35,14 +35,48 @@ try {
     zodRpc: argv.includes("--zod-rpc") || undefined,
     auth: argv.includes("--auth") || undefined,
   };
-  await scaffold(validateFlags(input).config, app);
+  const { config } = validateFlags(input);
+  await scaffold(config, app);
+  const pkgJson = JSON.parse(readFileSync(join(app, "package.json"), "utf8"));
+  if (JSON.stringify(pkgJson.trustedDependencies) !== JSON.stringify(TRUSTED_DEPENDENCIES))
+    throw new Error(`package.json trustedDependencies is ${JSON.stringify(pkgJson.trustedDependencies)}`);
   await step(["check"]);
   await step(["build"]);
-  await step(["test"]);
-  for (const script of ["verify", "db:reset"]) {
-    const p = Bun.spawn([process.execPath, "run", script], { cwd: app, stdio: ["ignore", "inherit", "inherit"] });
-    if ((await p.exited) !== 0) throw new Error(`bun run ${script} failed`);
+  if (config.tailwind) {
+    // The banner only survives if tailwind processed pages/style.css (a raw `@import "tailwindcss"` would not have it).
+    const css = readdirSync(join(app, "dist/client/assets")).filter((f) => f.endsWith(".css"))
+      .map((f) => readFileSync(join(app, "dist/client/assets", f), "utf8"));
+    if (!css.some((c) => /tailwindcss v\d/.test(c) && c.includes("--tw-"))) throw new Error("built CSS has no Tailwind output");
+    console.log("gate: tailwind styles in built CSS");
   }
+  await step(["test"]);
+  await run([process.execPath, "run", "verify"], app);
+  await run([process.execPath, "run", "db:reset"], app);
+  // A reset must wipe rows, not just exit 0: plant one, reset again, expect every app table empty.
+  const [dbFile, ...extra] = sqliteFiles(join(app, ".void"));
+  if (!dbFile || extra.length) throw new Error(`expected one local sqlite database under .void, found ${(dbFile ? [dbFile, ...extra] : []).length}`);
+  // The app table is derived, not named: any table that is not sqlite, void, drizzle or better-auth internals.
+  const INTERNAL = /^(sqlite_|_void|__drizzle|user$|session$|account$|verification$)/;
+  const plant = new Database(dbFile);
+  const appTables = (plant.query("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((t) => t.name).filter((n) => !INTERNAL.test(n));
+  if (!appTables.length) throw new Error(`db:reset check expected an app table in ${dbFile} (not sqlite_*, _void*, __drizzle*, user/session/account/verification); found none`);
+  const t = appTables[0]!;
+  const cols = (plant.query(`PRAGMA table_info("${t}")`).all() as { name: string; type: string; notnull: number; dflt_value: unknown; pk: number }[])
+    .filter((c) => c.notnull && c.dflt_value === null && !c.pk);
+  plant.run(cols.length
+    ? `INSERT INTO "${t}" (${cols.map((c) => `"${c.name}"`).join(",")}) VALUES (${cols.map((c) => (/INT|REAL|NUM/i.test(c.type) ? "0" : "'stale'")).join(",")})`
+    : `INSERT INTO "${t}" DEFAULT VALUES`);
+  const planted = (plant.query(`SELECT count(*) AS c FROM "${t}"`).get() as { c: number }).c;
+  plant.close();
+  if (!planted) throw new Error(`db:reset check could not plant a row in ${t}`);
+  await run([process.execPath, "run", "db:reset"], app);
+  const after = new Database(dbFile, { readonly: true });
+  const tables = (after.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_void_migrations'").all() as { name: string }[]).map((x) => x.name);
+  if (!tables.includes(t)) throw new Error(`db:reset dropped the ${t} table`);
+  const rows = tables.filter((t) => (after.query(`SELECT count(*) AS c FROM "${t}"`).get() as { c: number }).c > 0);
+  after.close();
+  if (rows.length) throw new Error(`db:reset left rows in: ${rows.join(", ")}`);
+  console.log("gate: db:reset empties the app database");
 
   const agents = readFileSync(join(app, "AGENTS.md"), "utf8");
   for (const b of ["routing", "verify"])
@@ -50,15 +84,14 @@ try {
 
   if (input.zodRpc) {
     // `vp check` does not type-check by default, so run tsc (types were regenerated by `verify`).
-    const tsc = (): Promise<number> =>
-      Bun.spawn([join(app, "node_modules/.bin/tsc"), "--noEmit"], { cwd: app, stdio: ["ignore", "inherit", "inherit"] }).exited;
-    if ((await tsc()) !== 0) throw new Error("tsc failed on the zod-rpc client sample");
+    const tscOk = () => run([join(app, "node_modules/.bin/tsc"), "--noEmit"], app).then(() => true, () => false);
+    if (!(await tscOk())) throw new Error("tsc failed on the zod-rpc client sample");
     const rpc = join(app, "src/rpc.ts");
     const good = readFileSync(rpc, "utf8");
     writeFileSync(rpc, good.replace("{ name }", "{ nom: name }"));
-    const bad = await tsc();
+    const accepted = await tscOk();
     writeFileSync(rpc, good);
-    if (bad === 0) throw new Error("tsc accepted a body that violates the zod schema");
+    if (accepted) throw new Error("tsc accepted a body that violates the zod schema");
     console.log("gate: zod-rpc client type reflects the schema");
   }
 
@@ -70,8 +103,8 @@ try {
     return p;
   };
   const port = freePort();
-  dev = Bun.spawn([vp, "dev", "--port", String(port), "--strictPort"], {
-    cwd: app, stdio: ["ignore", "inherit", "inherit"], detached: true,
+  dev = spawnTracked([vp, "dev", "--port", String(port), "--strictPort"], {
+    cwd: app, stdio: ["ignore", "inherit", "inherit"],
     env: { ...process.env, VOID_INSPECTOR_PORT: String(freePort()) },
   });
   let status = 0;
@@ -122,7 +155,7 @@ try {
     }
     const migrations = readdirSync(join(app, "db/migrations")).filter((f) => f.endsWith(".sql"));
     const sql = migrations.map((f) => readFileSync(join(app, "db/migrations", f), "utf8")).join("\n");
-    for (const t of ["session", "account", "verification"])
+    for (const t of ["user", "session", "account", "verification"])
       if (!new RegExp(`CREATE TABLE\\s+[\`"']?${t}\\b`, "i").test(sql)) throw new Error(`no migration creates the ${t} table`);
     if (!readFileSync(join(app, ".gitignore"), "utf8").split("\n").includes(".env")) throw new Error(".env not gitignored");
     if ((statSync(join(app, ".env")).mode & 0o777) !== 0o600) throw new Error(".env is not mode 0600");
@@ -135,6 +168,6 @@ try {
   console.error(`gate failed: ${(e as Error).message}`);
   process.exitCode = 1;
 } finally {
-  stopDev();
+  await killChildren(); // the dev server and anything still running
   rmSync(root, { recursive: true, force: true });
 }

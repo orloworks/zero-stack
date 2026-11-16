@@ -1,8 +1,10 @@
-// Every permutation through scripts/gate.ts: max 2 at once, under nice, one shared bun cache,
+// Every permutation through scripts/gate.ts: max 2 at once, under nice, bun's shared install cache,
 // skipped when nothing relevant changed since its last green run (.ci-cache/green.json, gitignored).
+// --force ignores that cache (prepublishOnly: publishing never trusts it).
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { onTerminate, spawnTracked } from "../src/children";
 import { MATRIX } from "./matrix";
 
 export const MAX_PARALLEL = 2;
@@ -26,9 +28,13 @@ const root = resolve(import.meta.dir, "..");
 const files = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]));
 
-// src/ already contains src/versions.ts.
-export function hash(repo: string, args: string[]): string {
-  const h = createHash("sha256").update(args.join(" ")).update(Bun.version);
+export const isGreen = (green: Record<string, string>, name: string, h: string, force: boolean) => !force && green[name] === h;
+
+// src/ already contains src/versions.ts. The Node on PATH (not process.versions) is what Void runs on.
+export const nodeVersion = (): string => Bun.spawnSync(["node", "--version"], { env: process.env }).stdout.toString();
+
+export function hash(repo: string, args: string[], node: string): string {
+  const h = createHash("sha256").update(args.join(" ")).update(Bun.version).update(node);
   const all = [
     ...files(join(repo, "src")), ...files(join(repo, "template")),
     ...["docs/cloudflare-routing.md", "scripts/gate.ts", "package.json", "bun.lock"].map((f) => join(repo, f)),
@@ -40,26 +46,23 @@ export function hash(repo: string, args: string[]): string {
 if (import.meta.main) {
   const cacheDir = join(root, ".ci-cache");
   const greenFile = join(cacheDir, "green.json");
-  mkdirSync(join(cacheDir, "bun-install"), { recursive: true });
+  mkdirSync(cacheDir, { recursive: true });
+  const force = process.argv.includes("--force");
   const green: Record<string, string> = existsSync(greenFile) ? JSON.parse(readFileSync(greenFile, "utf8")) : {};
-  const children = new Set<ReturnType<typeof Bun.spawn>>();
-  for (const s of ["SIGINT", "SIGTERM"] as const)
-    process.on(s, () => { for (const c of children) c.kill("SIGTERM"); }); // gate cleans up on SIGTERM
+  onTerminate(() => {}, 20_000); // each gate cleans up on SIGTERM; wait for them before exiting
+  const node = nodeVersion(); // once per run; every permutation shares the same PATH
   const t0 = Date.now();
   const status: Record<string, string> = {};
 
   const ok = await runPool(MATRIX, MAX_PARALLEL, async (p) => {
-    const h = hash(root, p.args);
-    if (green[p.name] === h) { status[p.name] = "skipped (unchanged)"; console.log(`${p.name}: skipped (unchanged)`); return true; }
+    const h = hash(root, p.args, node);
+    if (isGreen(green, p.name, h, force)) { status[p.name] = "skipped (unchanged)"; console.log(`${p.name}: skipped (unchanged)`); return true; }
     const start = Date.now();
     console.log(`${p.name}: running (${p.args.join(" ") || "no flags"})`);
-    const child = Bun.spawn(["nice", process.execPath, join(root, "scripts/gate.ts"), ...p.args, "--name", `zs-${p.name}`], {
+    const child = spawnTracked(["nice", process.execPath, join(root, "scripts/gate.ts"), ...p.args, "--name", `zs-${p.name}`], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, BUN_INSTALL_CACHE_DIR: join(cacheDir, "bun-install") },
     });
-    children.add(child);
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    children.delete(child);
     const secs = Math.round((Date.now() - start) / 1000);
     if (code === 0) {
       green[p.name] = h;

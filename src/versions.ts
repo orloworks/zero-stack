@@ -6,3 +6,10 @@ export const ZOD = "4.6.7"; // Void's own dev pin; zod is an optional peer of vo
 export const CLASS_VARIANCE_AUTHORITY = "0.7.1";
 export const CLSX = "2.1.1";
 export const TAILWIND_MERGE = "3.7.0";
+
+// Void does not handle bun script approvals; the generated package.json trusts these (gate asserts it).
+export const TRUSTED_DEPENDENCIES = ["esbuild", "workerd", "sharp"];
+
+// void@1.8.0's `^2.0.0-beta.v.15` range picks @cloudflare/vite-plugin@2.0.0-rc.0 (2026-11-16), which writes
+// Build Output v1 while void's build-output-utils@0.9 reads v0, so `vp build` fails. Drop on the next void pin.
+export const OVERRIDES = { "@cloudflare/vite-plugin": "2.0.0-beta.v.17" };

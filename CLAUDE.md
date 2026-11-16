@@ -10,7 +10,7 @@ Scaffolder for Void (Cloudflare) apps. Read `SPEC.md` first; it is the source of
   the release workflow is `workflow_dispatch` only.
 - Installers edit generated files by anchored string replace and must fail hard on a
   missing anchor. Bumping `src/versions.ts` requires `ci:full`.
-- The CLI writes only inside the target directory and deletes it on failure.
+- The CLI writes only inside the target directory and, on failure, deletes a directory it created (a pre-existing empty target is emptied, not removed).
 
 ## Agent skills
 

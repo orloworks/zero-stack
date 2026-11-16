@@ -25,7 +25,7 @@ tests/
 
 1. Preflight: spawn `node --version`, require `^24.22 || >=26.12` (Void needs real Node
    on PATH even under bun; `process.versions.node` is unreliable under bun).
-2. Target dir must be new or empty. On any failure, delete it wholesale.
+2. Target dir must be new or empty. On any failure, delete a directory zero-stack created; a pre-existing empty target is emptied, not removed.
 3. Validate flags, fail fast with a one-line fix. Only implied flag: `--shadcn` enables
    `--tailwind` and says so. `--shadcn` requires `--framework react`.
 4. Run pinned `bunx create-void@<pin> <name> --toolchain vite-plus --framework <fw>
@@ -35,7 +35,8 @@ tests/
 6. Run `vp check --fix` in the new app: untouched `create-void@1.8.0` output fails its own
    `vp check` on formatting in 11 files (see `docs/facts.md`). Re-test on every pin bump.
 7. Add `trustedDependencies: ["esbuild","workerd","sharp"]` to package.json (Void does
-   not handle bun script approvals). Verified by the scaffold gate.
+   not handle bun script approvals). Verified by the scaffold gate. Also write the `overrides`
+   in `src/versions.ts` (today: pin `@cloudflare/vite-plugin`; see `docs/facts.md`).
 8. Write the routing block into `AGENTS.md` and a `.mcp.json` with the Cloudflare Docs
    MCP (`https://docs.mcp.cloudflare.com/mcp`). Re-run `bun install` if deps changed.
 

@@ -1,17 +1,15 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { CREATE_VOID, ZOD } from "../versions";
+import { anchorError, editJson, needKey } from "../anchor";
+import { ZOD } from "../versions";
 
 // Void's defineHandler.withValidator accepts any Standard Schema and feeds void/client's types,
 // so @hono/zod-validator is not needed (SPEC listed it; see ticket #9 notes).
 // Needs a `bun install` afterwards (the pipeline runs one).
 export function installZodRpc(dir: string): void {
-  if (!existsSync(join(dir, "routes/api"))) throw new Error(`routes/api anchor missing (create-void@${CREATE_VOID})`);
-  if (existsSync(join(dir, "routes/api/echo.ts"))) throw new Error(`routes/api/echo.ts already exists (create-void@${CREATE_VOID})`);
-  const pkgPath = join(dir, "package.json");
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-  pkg.dependencies = { ...pkg.dependencies, zod: ZOD };
-  writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+  if (!existsSync(join(dir, "routes/api"))) throw anchorError("routes/api", "the generated app");
+  if (existsSync(join(dir, "routes/api/echo.ts"))) throw anchorError("routes/api/echo.ts", "the generated app", "already exists");
+  editJson(dir, "package.json", (pkg) => { Object.assign(needKey(pkg, "dependencies", "package.json"), { zod: ZOD }); });
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(
     join(dir, "routes/api/echo.ts"),
