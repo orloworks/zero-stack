@@ -7,9 +7,9 @@ import { installAuth } from "./installers/auth";
 import { installShadcn } from "./installers/shadcn";
 import { installTailwind } from "./installers/tailwind";
 import { installZodRpc } from "./installers/zod-rpc";
-import { CREATE_VOID, NODE_RANGE } from "./versions";
+import { CREATE_VOID, NODE_RANGE, TRUSTED_DEPENDENCIES } from "./versions";
 import { anchorError, editJson } from "./anchor";
-import { killChildren, onTerminate, spawnTracked, terminating } from "./children";
+import { onTerminate, spawnTracked, terminating } from "./children";
 
 export type Run = (cmd: string[], cwd: string) => Promise<void>;
 
@@ -19,8 +19,6 @@ export const run: Run = async (cmd, cwd) => {
   if (terminating()) await new Promise(() => {}); // the signal handler is cleaning up and will exit
   if (code !== 0) throw new Error(`${cmd.join(" ")} failed`);
 };
-
-export { killChildren, onTerminate, spawnTracked, terminating };
 
 // Void needs real Node on PATH even under bun; process.versions.node is unreliable under bun.
 export function preflight(): void {
@@ -46,7 +44,7 @@ function addAppScripts(targetDir: string): void {
       "db:reset": "void db reset --yes",
     });
     // Void does not handle bun script approvals.
-    pkg.trustedDependencies = ["esbuild", "workerd", "sharp"];
+    pkg.trustedDependencies = TRUSTED_DEPENDENCIES;
   });
   const agents = join(targetDir, "AGENTS.md");
   if (!readFileSync(agents, "utf8").includes("<!--/injected-by-void-->")) throw anchorError("<!--/injected-by-void-->", "AGENTS.md");

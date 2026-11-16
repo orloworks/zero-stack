@@ -6,3 +6,6 @@ export const ZOD = "4.6.7"; // Void's own dev pin; zod is an optional peer of vo
 export const CLASS_VARIANCE_AUTHORITY = "0.7.1";
 export const CLSX = "2.1.1";
 export const TAILWIND_MERGE = "3.7.0";
+
+// Void does not handle bun script approvals; the generated package.json trusts these (gate asserts it).
+export const TRUSTED_DEPENDENCIES = ["esbuild", "workerd", "sharp"];

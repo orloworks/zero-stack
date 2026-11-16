@@ -62,7 +62,7 @@ if (import.meta.main) {
     const child = spawnTracked(["nice", process.execPath, join(root, "scripts/gate.ts"), ...p.args, "--name", `zs-${p.name}`], {
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const [out, err, code] = await Promise.all([new Response(child.stdout as ReadableStream).text(), new Response(child.stderr as ReadableStream).text(), child.exited]);
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     const secs = Math.round((Date.now() - start) / 1000);
     if (code === 0) {
       green[p.name] = h;
