@@ -31,8 +31,9 @@ const files = (dir: string): string[] =>
 export const isGreen = (green: Record<string, string>, name: string, h: string, force: boolean) => !force && green[name] === h;
 
 // src/ already contains src/versions.ts. The Node on PATH (not process.versions) is what Void runs on.
-export function hash(repo: string, args: string[]): string {
-  const node = Bun.spawnSync(["node", "--version"], { env: process.env }).stdout.toString();
+export const nodeVersion = (): string => Bun.spawnSync(["node", "--version"], { env: process.env }).stdout.toString();
+
+export function hash(repo: string, args: string[], node: string): string {
   const h = createHash("sha256").update(args.join(" ")).update(Bun.version).update(node);
   const all = [
     ...files(join(repo, "src")), ...files(join(repo, "template")),
@@ -49,11 +50,12 @@ if (import.meta.main) {
   const force = process.argv.includes("--force");
   const green: Record<string, string> = existsSync(greenFile) ? JSON.parse(readFileSync(greenFile, "utf8")) : {};
   onTerminate(() => {}, 20_000); // each gate cleans up on SIGTERM; wait for them before exiting
+  const node = nodeVersion(); // once per run; every permutation shares the same PATH
   const t0 = Date.now();
   const status: Record<string, string> = {};
 
   const ok = await runPool(MATRIX, MAX_PARALLEL, async (p) => {
-    const h = hash(root, p.args);
+    const h = hash(root, p.args, node);
     if (isGreen(green, p.name, h, force)) { status[p.name] = "skipped (unchanged)"; console.log(`${p.name}: skipped (unchanged)`); return true; }
     const start = Date.now();
     console.log(`${p.name}: running (${p.args.join(" ") || "no flags"})`);

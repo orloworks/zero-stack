@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hash, isGreen, runPool } from "../../scripts/ci-full";
+import { hash, isGreen, nodeVersion, runPool } from "../../scripts/ci-full";
 import { MATRIX } from "../../scripts/matrix";
 import { validateFlags } from "../../src/flags";
 
@@ -41,30 +41,29 @@ test("hash is stable and tracks gate.ts and the routing doc", () => {
   for (const d of ["src", "template", "docs", "scripts"]) mkdirSync(join(tmp, d), { recursive: true });
   for (const f of ["src/a.ts", "template/b.txt", "docs/cloudflare-routing.md", "scripts/gate.ts", "package.json", "bun.lock"])
     writeFileSync(join(tmp, f), f);
-  const h0 = hash(tmp, ["--auth"]);
-  expect(hash(tmp, ["--auth"])).toBe(h0);
+  const h0 = hash(tmp, ["--auth"], "v1");
+  expect(hash(tmp, ["--auth"], "v1")).toBe(h0);
   writeFileSync(join(tmp, "scripts/gate.ts"), "changed");
-  const h1 = hash(tmp, ["--auth"]);
+  const h1 = hash(tmp, ["--auth"], "v1");
   expect(h1).not.toBe(h0);
   writeFileSync(join(tmp, "docs/cloudflare-routing.md"), "changed");
-  expect(hash(tmp, ["--auth"])).not.toBe(h1);
-  expect(hash(repo, [])).toMatch(/^[0-9a-f]{64}$/); // real repo has every input file
+  expect(hash(tmp, ["--auth"], "v1")).not.toBe(h1);
+  expect(hash(repo, [], "v1")).toMatch(/^[0-9a-f]{64}$/); // real repo has every input file
 });
 
-test("the Node version on PATH is part of the hash", () => {
+test("the Node version is part of the hash", () => {
   const repo = join(import.meta.dir, "../..");
-  const fakeNode = (v: string) => {
-    const bin = mkdtempSync(join(tmpdir(), "zs-node-"));
-    writeFileSync(join(bin, "node"), `#!/bin/sh\necho ${v}\n`);
-    chmodSync(join(bin, "node"), 0o755);
-    return bin;
-  };
+  expect(hash(repo, [], "v24.22.0")).not.toBe(hash(repo, [], "v26.13.1"));
+});
+
+test("nodeVersion reads `node` from PATH", () => {
+  const bin = mkdtempSync(join(tmpdir(), "zs-node-"));
+  writeFileSync(join(bin, "node"), "#!/bin/sh\necho v24.22.0\n");
+  chmodSync(join(bin, "node"), 0o755);
   const path = process.env.PATH;
   try {
-    process.env.PATH = `${fakeNode("v24.22.0")}:${path}`;
-    const a = hash(repo, []);
-    process.env.PATH = `${fakeNode("v26.13.1")}:${path}`;
-    expect(hash(repo, [])).not.toBe(a);
+    process.env.PATH = `${bin}:${path}`;
+    expect(nodeVersion().trim()).toBe("v24.22.0");
   } finally {
     process.env.PATH = path;
   }
