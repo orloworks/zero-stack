@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hash, runPool } from "../../scripts/ci-full";
+import { hash, isGreen, runPool } from "../../scripts/ci-full";
 import { MATRIX } from "../../scripts/matrix";
 import { validateFlags } from "../../src/flags";
 
@@ -49,4 +49,30 @@ test("hash is stable and tracks gate.ts and the routing doc", () => {
   writeFileSync(join(tmp, "docs/cloudflare-routing.md"), "changed");
   expect(hash(tmp, ["--auth"])).not.toBe(h1);
   expect(hash(repo, [])).toMatch(/^[0-9a-f]{64}$/); // real repo has every input file
+});
+
+test("the Node version on PATH is part of the hash", () => {
+  const repo = join(import.meta.dir, "../..");
+  const fakeNode = (v: string) => {
+    const bin = mkdtempSync(join(tmpdir(), "zs-node-"));
+    writeFileSync(join(bin, "node"), `#!/bin/sh\necho ${v}\n`);
+    chmodSync(join(bin, "node"), 0o755);
+    return bin;
+  };
+  const path = process.env.PATH;
+  try {
+    process.env.PATH = `${fakeNode("v24.22.0")}:${path}`;
+    const a = hash(repo, []);
+    process.env.PATH = `${fakeNode("v26.13.1")}:${path}`;
+    expect(hash(repo, [])).not.toBe(a);
+  } finally {
+    process.env.PATH = path;
+  }
+});
+
+test("--force ignores a warm green cache, and prepublishOnly uses it", () => {
+  expect(isGreen({ a: "h" }, "a", "h", false)).toBe(true);
+  expect(isGreen({ a: "h" }, "a", "h", true)).toBe(false);
+  const pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));
+  expect(pkg.scripts.prepublishOnly).toMatch(/ci-full\.ts --force$/);
 });
