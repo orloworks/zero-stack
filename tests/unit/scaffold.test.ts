@@ -44,7 +44,7 @@ function seeded(agents: string, scripts: object = { postinstall: "void prepare" 
     exec: async (cmd: string[]) => {
       if (cmd[1] !== "x") return;
       mkdirSync(join(dir, "routes/api"), { recursive: true });
-      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts }));
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts, dependencies: {} }));
       writeFileSync(join(dir, "AGENTS.md"), agents);
     },
   };
