@@ -15,26 +15,41 @@ export function spawnTracked<In extends Bun.SpawnOptions.Writable = "ignore", Ou
   return p;
 }
 
+// A process as `ps` sees it; `id` (pid + start time) names one process, so a reused pid never matches.
+export type Proc = { pid: number; ppid: number; id: string };
+
+function snapshot(): Proc[] {
+  return Bun.spawnSync(["ps", "-axo", "pid=,ppid=,lstart="]).stdout.toString().trim().split("\n").map((l) => {
+    const [pid, ppid, ...start] = l.trim().split(/\s+/);
+    return { pid: +pid!, ppid: +ppid!, id: `${pid} ${start.join(" ")}` };
+  });
+}
+
 // Every descendant of `roots` (a gate's detached children sit in their own groups, outside the gate's).
-function descendants(roots: number[]): number[] {
-  const rows = Bun.spawnSync(["ps", "-axo", "pid=,ppid="]).stdout.toString().trim().split("\n")
-    .map((l) => l.trim().split(/\s+/).map(Number) as [number, number]);
-  const out = new Set<number>(), todo = [...roots];
+function descendants(rows: Proc[], roots: number[]): Proc[] {
+  const out = new Map<number, Proc>(), todo = [...roots];
   for (let r = todo.pop(); r !== undefined; r = todo.pop())
-    for (const [pid, ppid] of rows) if (ppid === r && !out.has(pid)) { out.add(pid); todo.push(pid); }
-  return [...out];
+    for (const p of rows) if (p.ppid === r && !out.has(p.pid)) { out.set(p.pid, p); todo.push(p.pid); }
+  return [...out.values()];
+}
+
+// What the SIGKILL sweep may hit: processes still alive from the pre-TERM snapshot (same pid AND start time;
+// orphans lost their parent link) plus current descendants of the run's children.
+export function sweepTargets(seen: Set<string>, now: Proc[], roots: number[]): number[] {
+  return [...new Set([...now.filter((p) => seen.has(p.id)), ...descendants(now, roots)].map((p) => p.pid))];
 }
 
 // SIGTERM every group, wait up to graceMs, then SIGKILL stragglers (and their descendants) and wait briefly again.
 export async function killChildren(graceMs = 5000): Promise<void> {
   const live = [...children];
-  const seen = new Set(descendants(live.map((c) => c.pid))); // snapshot before TERM: orphans lose their parent link
-  const signal = (sig: "SIGTERM" | "SIGKILL") => { for (const c of live) try { process.kill(-c.pid, sig); } catch {} };
+  const roots = live.map((c) => c.pid);
+  const seen = new Set(descendants(snapshot(), roots).map((p) => p.id));
+  const running = () => live.filter((c) => c.exitCode === null && c.signalCode === null); // an unreaped leader's pid is still ours
   const gone = Promise.all(live.map((c) => c.exited));
-  signal("SIGTERM");
+  for (const c of running()) try { process.kill(-c.pid, "SIGTERM"); } catch {}
   const done = await Promise.race([gone.then(() => true), Bun.sleep(graceMs).then(() => false)]);
-  signal("SIGKILL"); // stragglers: an exited group leader may have left members behind
-  for (const pid of [...seen, ...descendants(live.map((c) => c.pid))]) for (const t of [-pid, pid]) try { process.kill(t, "SIGKILL"); } catch {}
+  for (const c of running()) try { process.kill(-c.pid, "SIGKILL"); } catch {}
+  for (const pid of sweepTargets(seen, snapshot(), roots)) for (const t of [-pid, pid]) try { process.kill(t, "SIGKILL"); } catch {}
   if (!done) await Promise.race([gone, Bun.sleep(2000)]);
 }
 

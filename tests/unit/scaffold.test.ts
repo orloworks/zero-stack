@@ -237,6 +237,6 @@ test("zod-rpc refuses to overwrite an existing routes/api/echo.ts", async () => 
   const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
   const seed = exec;
   const withEcho = async (cmd: string[]) => { await seed(cmd); if (cmd[1] === "x") writeFileSync(join(dir, "routes/api/echo.ts"), "mine"); };
-  await expect(scaffold({ ...cfg, zodRpc: true }, dir, withEcho)).rejects.toThrow(/echo\.ts already exists.*create-void@\d/);
+  await expect(scaffold({ ...cfg, zodRpc: true }, dir, withEcho)).rejects.toThrow(/echo\.ts" already exists.*create-void@\d/);
   expect(existsSync(dir)).toBe(false);
 });

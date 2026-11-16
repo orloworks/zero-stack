@@ -7,7 +7,7 @@ import { installAuth } from "./installers/auth";
 import { installShadcn } from "./installers/shadcn";
 import { installTailwind } from "./installers/tailwind";
 import { installZodRpc } from "./installers/zod-rpc";
-import { CREATE_VOID, NODE_RANGE, TRUSTED_DEPENDENCIES } from "./versions";
+import { CREATE_VOID, NODE_RANGE, OVERRIDES, TRUSTED_DEPENDENCIES } from "./versions";
 import { anchorError, editJson } from "./anchor";
 import { onTerminate, spawnTracked, terminating } from "./children";
 
@@ -45,6 +45,7 @@ function addAppScripts(targetDir: string): void {
     });
     // Void does not handle bun script approvals.
     pkg.trustedDependencies = TRUSTED_DEPENDENCIES;
+    pkg.overrides = { ...pkg.overrides, ...OVERRIDES };
   });
   const agents = join(targetDir, "AGENTS.md");
   if (!readFileSync(agents, "utf8").includes("<!--/injected-by-void-->")) throw anchorError("<!--/injected-by-void-->", "AGENTS.md");

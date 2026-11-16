@@ -35,7 +35,8 @@ tests/
 6. Run `vp check --fix` in the new app: untouched `create-void@1.8.0` output fails its own
    `vp check` on formatting in 11 files (see `docs/facts.md`). Re-test on every pin bump.
 7. Add `trustedDependencies: ["esbuild","workerd","sharp"]` to package.json (Void does
-   not handle bun script approvals). Verified by the scaffold gate.
+   not handle bun script approvals). Verified by the scaffold gate. Also write the `overrides`
+   in `src/versions.ts` (today: pin `@cloudflare/vite-plugin`; see `docs/facts.md`).
 8. Write the routing block into `AGENTS.md` and a `.mcp.json` with the Cloudflare Docs
    MCP (`https://docs.mcp.cloudflare.com/mcp`). Re-run `bun install` if deps changed.
 

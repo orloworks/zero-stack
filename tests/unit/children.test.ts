@@ -2,7 +2,17 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { graceMs, onTerminate } from "../../src/children";
+import { graceMs, onTerminate, sweepTargets } from "../../src/children";
+
+test("the SIGKILL sweep skips a pid reused since the snapshot", () => {
+  const seen = new Set(["10 Mon Nov 16 05:00:00 2026", "11 Mon Nov 16 05:00:00 2026"]);
+  const now = [
+    { pid: 10, ppid: 1, id: "10 Mon Nov 16 05:00:00 2026" }, // orphaned straggler: still the same process
+    { pid: 11, ppid: 1, id: "11 Mon Nov 16 05:00:15 2026" }, // pid reused by an unrelated process
+    { pid: 12, ppid: 99, id: "12 Mon Nov 16 05:00:16 2026" }, // new descendant of a run's child
+  ];
+  expect(sweepTargets(seen, now, [99]).sort()).toEqual([10, 12]);
+});
 
 test("a run's grace timeout ends with its disposer", () => {
   const dispose = onTerminate(() => {}, 30_000);
