@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, chmodSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { installShadcn } from "../../src/installers/shadcn";
+import { installTailwind } from "../../src/installers/tailwind";
 import { scaffold } from "../../src/pipeline";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "zs-test-"));
@@ -60,7 +62,7 @@ test("adds verify, test, db:reset, the route test and a fenced AGENTS.md line", 
 
 test("a missing AGENTS.md anchor is a hard error and leaves no directory", async () => {
   const { dir, exec } = seeded("no anchor here");
-  await expect(scaffold(cfg, dir, exec)).rejects.toThrow(/anchor missing.*create-void@\d/);
+  await expect(scaffold(cfg, dir, exec)).rejects.toThrow(/"<!--\/injected-by-void-->" not found in AGENTS\.md \(create-void@\d/);
   expect(existsSync(dir)).toBe(false);
 });
 
@@ -82,6 +84,9 @@ test("zodRpc adds zod, the validated route and the typed client sample", async (
   expect(readFileSync(join(dir, "src/rpc.ts"), "utf8")).toContain('"/api/echo"');
 });
 
+// Shaped like create-void's tsconfig.json: the anchors are `"compilerOptions": {` and, once shadcn ran, `"paths": {`.
+const tsconfig = (extra = "") => `{\n"extends": "./.void/tsconfig.json",\n"compilerOptions": {\n${extra ? extra + ",\n" : ""}"jsx": "react-jsx"\n}\n}\n`;
+
 test("auth merges @auth-schema into existing paths, writes .env, enables auth", async () => {
   const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
   const exec = async (cmd: string[]) => {
@@ -89,7 +94,7 @@ test("auth merges @auth-schema into existing paths, writes .env, enables auth", 
     if (cmd[1] !== "x") return;
     writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
     writeFileSync(join(dir, ".gitignore"), "node_modules\n");
-    writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { paths: { "@/*": ["./src/*"] } } }));
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig(`"paths": {\n"@/*": ["./src/*"]\n}`));
   };
   await scaffold({ ...cfg, auth: true }, dir, exec);
   const paths = JSON.parse(readFileSync(join(dir, "tsconfig.json"), "utf8")).compilerOptions.paths;
@@ -101,20 +106,101 @@ test("auth merges @auth-schema into existing paths, writes .env, enables auth", 
   expect(existsSync(join(dir, "pages/sign-in.tsx"))).toBe(true);
 });
 
+test("auth without shadcn adds Void's four mappings with @auth-schema, as valid JSON", async () => {
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  await scaffold({ ...cfg, auth: true }, dir, exec);
+  const ts = JSON.parse(readFileSync(join(dir, "tsconfig.json"), "utf8"));
+  expect(Object.keys(ts.compilerOptions.paths).sort()).toEqual(["@auth-schema", "@schema", "@schema/*", "void/db", "void/routes"]);
+  expect(ts.compilerOptions.jsx).toBe("react-jsx");
+});
+
+test("a missing tsconfig anchor is the anchor error naming the file and pin", async () => {
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), "{}");
+  };
+  await expect(scaffold({ ...cfg, auth: true }, dir, exec)).rejects.toThrow(/not found in tsconfig\.json \(create-void@\d/);
+});
+
+test("tailwind and shadcn report a missing package.json key as an anchor error, not a TypeError", () => {
+  for (const [install, key] of [[installTailwind, "devDependencies"], [installShadcn, "dependencies"]] as const) {
+    const dir = tmp();
+    writeFileSync(join(dir, "package.json"), "{}");
+    expect(() => install(dir)).toThrow(new RegExp(`Anchor "${key}" not found in package\\.json \\(create-void@\\d`));
+  }
+});
+
 test("no .env without auth", async () => {
   const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
   await scaffold(cfg, dir, exec);
   expect(existsSync(join(dir, ".env"))).toBe(false);
 });
 
-test("Ctrl-C mid-scaffold removes the target and exits 130", async () => {
-  const dir = join(tmp(), "app");
-  const p = Bun.spawn([process.execPath, join(import.meta.dir, "fixtures/hang-scaffold.ts"), dir], { stdout: "pipe", stderr: "ignore" });
+async function hung(sig: "SIGINT" | "SIGTERM") {
+  const base = tmp();
+  const dir = join(base, "app"), pidfile = join(base, "pid");
+  const p = Bun.spawn([process.execPath, join(import.meta.dir, "fixtures/hang-scaffold.ts"), dir, pidfile], { stdout: "pipe", stderr: "ignore" });
   const reader = p.stdout.getReader();
-  while (!new TextDecoder().decode((await reader.read()).value ?? new Uint8Array()).includes("ready")) {}
+  let out = "";
+  const deadline = Date.now() + 10_000;
+  while (!out.includes("ready")) {
+    const r = await Promise.race([reader.read(), Bun.sleep(Math.max(0, deadline - Date.now())).then(() => "timeout" as const)]);
+    if (r === "timeout" || r.done) { p.kill("SIGKILL"); throw new Error(`helper never printed ready (got ${JSON.stringify(out)})`); }
+    out += new TextDecoder().decode(r.value);
+  }
+  const pid = +readFileSync(pidfile, "utf8");
   expect(existsSync(dir)).toBe(true);
-  p.kill("SIGINT");
-  expect(await p.exited).toBe(130);
+  p.kill(sig);
+  const code = await Promise.race([p.exited, Bun.sleep(10_000).then(() => { p.kill("SIGKILL"); return "hung" as const; })]);
+  return { code, dir, pid };
+}
+const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const gone = async (pid: number) => { for (let i = 0; i < 40 && alive(pid); i++) await Bun.sleep(50); return !alive(pid); };
+
+test("Ctrl-C mid-scaffold kills the child tree, removes the target and exits 130", async () => {
+  const { code, dir, pid } = await hung("SIGINT");
+  expect(code).toBe(130);
+  expect(existsSync(dir)).toBe(false);
+  expect(await gone(pid)).toBe(true);
+});
+
+test("SIGTERM mid-scaffold kills the child tree, removes the target and exits 143", async () => {
+  const { code, dir, pid } = await hung("SIGTERM");
+  expect(code).toBe(143);
+  expect(existsSync(dir)).toBe(false);
+  expect(await gone(pid)).toBe(true);
+});
+
+test("a failed run in an existing empty directory leaves it in place and empty", async () => {
+  const dir = join(tmp(), "app");
+  mkdirSync(dir);
+  await expect(scaffold(cfg, dir, async () => { writeFileSync(join(dir, "junk"), "x"); throw new Error("boom"); })).rejects.toThrow(/boom/);
+  expect(readdirSync(dir)).toEqual([]);
+});
+
+test("signal handlers are removed after scaffold resolves and after it rejects", async () => {
+  const count = () => process.listenerCount("SIGINT") + process.listenerCount("SIGTERM");
+  const before = count();
+  const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  await scaffold(cfg, dir, exec);
+  expect(count()).toBe(before);
+  await expect(scaffold(cfg, join(tmp(), "app"), async () => { throw new Error("boom"); })).rejects.toThrow();
+  expect(count()).toBe(before);
+});
+
+test("fails clearly when create-void made a different directory than the target", async () => {
+  const base = tmp();
+  const dir = join(base, "other");
+  await expect(scaffold(cfg, dir, async () => { mkdirSync(join(base, "app")); })).rejects.toThrow(/not the target directory/);
   expect(existsSync(dir)).toBe(false);
 });
 

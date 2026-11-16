@@ -1,43 +1,21 @@
-import { appendFileSync, cpSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { replaceAnchor } from "../anchor";
+import { addPaths, editFile as edit, editJson, needKey, replaceAnchor } from "../anchor";
 import { CLASS_VARIANCE_AUTHORITY, CLSX, TAILWIND_MERGE } from "../versions";
-
-const edit = (dir: string, file: string, fn: (s: string) => string) => {
-  const p = join(dir, file);
-  writeFileSync(p, fn(readFileSync(p, "utf8")));
-};
 
 // Runs after installTailwind (shadcn implies it). Needs a `bun install` afterwards.
 // shortcut: hand-written files instead of `shadcn init`, which is interactive/network-bound; re-check on shadcn upgrades.
 export function installShadcn(dir: string): void {
   const slice = join(dirname(fileURLToPath(import.meta.url)), "../../template/shadcn");
-  edit(dir, "package.json", (s) => {
-    const pkg = JSON.parse(s);
-    Object.assign(pkg.dependencies, {
+  editJson(dir, "package.json", (pkg) => {
+    Object.assign(needKey(pkg, "dependencies", "package.json"), {
       "class-variance-authority": CLASS_VARIANCE_AUTHORITY,
       clsx: CLSX,
       "tailwind-merge": TAILWIND_MERGE,
     });
-    return JSON.stringify(pkg, null, 2) + "\n";
   });
-  // `paths` in a child tsconfig replaces the generated ones, so retain them (Void auth docs).
-  edit(dir, "tsconfig.json", (s) =>
-    replaceAnchor(
-      s,
-      '"jsx": "react-jsx"',
-      `"jsx": "react-jsx",
-    "paths": {
-      "@/*": ["./src/*"],
-      "void/db": ["./.void/db.d.ts"],
-      "@schema": ["./db/schema.ts"],
-      "@schema/*": ["./db/schema/*"],
-      "void/routes": ["./.void/routes.d.ts"]
-    }`,
-      "tsconfig.json",
-    ),
-  );
+  addPaths(dir, { "@/*": ["./src/*"] });
   edit(dir, "vite.config.ts", (s) => {
     const f = "vite.config.ts";
     s = replaceAnchor(s, "export default defineConfig({", 'export default defineConfig({\n  resolve: { alias: { "@": new URL("./src", import.meta.url).pathname } },', f);
