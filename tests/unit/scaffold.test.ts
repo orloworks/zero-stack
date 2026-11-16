@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync, chmodSync, readdirSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installShadcn } from "../../src/installers/shadcn";
+import { installZodRpc } from "../../src/installers/zod-rpc";
 import { installTailwind } from "../../src/installers/tailwind";
 import { scaffold } from "../../src/pipeline";
 
@@ -191,7 +192,9 @@ test("signal handlers are removed after scaffold resolves and after it rejects",
   const count = () => process.listenerCount("SIGINT") + process.listenerCount("SIGTERM");
   const before = count();
   const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
-  await scaffold(cfg, dir, exec);
+  let during = 0;
+  await scaffold(cfg, dir, async (c, cwd) => { during = count(); await exec(c); });
+  expect(during).toBeGreaterThan(before);
   expect(count()).toBe(before);
   await expect(scaffold(cfg, join(tmp(), "app"), async () => { throw new Error("boom"); })).rejects.toThrow();
   expect(count()).toBe(before);
@@ -200,8 +203,34 @@ test("signal handlers are removed after scaffold resolves and after it rejects",
 test("fails clearly when create-void made a different directory than the target", async () => {
   const base = tmp();
   const dir = join(base, "other");
-  await expect(scaffold(cfg, dir, async () => { mkdirSync(join(base, "app")); })).rejects.toThrow(/not the target directory/);
+  await expect(scaffold(cfg, dir, async () => { mkdirSync(join(base, "app")); })).rejects.toThrow(/did not produce .*other\/package\.json.*app/);
   expect(existsSync(dir)).toBe(false);
+});
+
+test("a pre-existing empty target with no create-void output fails clearly and stays empty", async () => {
+  const dir = join(tmp(), "app");
+  mkdirSync(dir);
+  await expect(scaffold(cfg, dir, async () => {})).rejects.toThrow(/did not produce .*app\/package\.json/);
+  expect(readdirSync(dir)).toEqual([]);
+});
+
+test("auth tsconfig with an empty compilerOptions stays valid JSON", async () => {
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), '{ "compilerOptions": {} }');
+  };
+  await scaffold({ ...cfg, auth: true }, dir, exec);
+  expect(Object.keys(JSON.parse(readFileSync(join(dir, "tsconfig.json"), "utf8")).compilerOptions.paths)).toContain("@auth-schema");
+});
+
+test("zod-rpc reports a missing dependencies key as an anchor error", () => {
+  const dir = tmp();
+  mkdirSync(join(dir, "routes/api"), { recursive: true });
+  writeFileSync(join(dir, "package.json"), "{}");
+  expect(() => installZodRpc(dir)).toThrow(/Anchor "dependencies" not found in package\.json \(create-void@\d/);
 });
 
 test("zod-rpc refuses to overwrite an existing routes/api/echo.ts", async () => {

@@ -34,22 +34,3 @@ export function needKey(obj: any, key: string, file: string): any {
   if (obj?.[key] == null) throw anchorError(key, file);
   return obj[key];
 }
-
-// Void's generated mappings (.void/tsconfig.json). A `paths` entry in tsconfig.json replaces them
-// (Void auth docs), so they are written whenever we create `paths`.
-const VOID_PATHS = {
-  "void/db": ["./.void/db.d.ts"],
-  "@schema": ["./db/schema.ts"],
-  "@schema/*": ["./db/schema/*"],
-  "void/routes": ["./.void/routes.d.ts"],
-};
-
-// Adds `extra` mappings to tsconfig.json by anchored edit, creating `paths` (with Void's four) if absent.
-export function addPaths(dir: string, extra: Record<string, string[]>): void {
-  const entries = (m: object) => Object.entries(m).map(([k, v]) => `${JSON.stringify(k)}: ${JSON.stringify(v)}`).join(",\n");
-  editFile(dir, "tsconfig.json", (s) =>
-    s.includes('"paths": {')
-      ? replaceAnchor(s, '"paths": {', `"paths": {\n${entries(extra)},`, "tsconfig.json")
-      : replaceAnchor(s, '"compilerOptions": {', `"compilerOptions": {\n"paths": {\n${entries({ ...VOID_PATHS, ...extra })}\n},`, "tsconfig.json"),
-  );
-}

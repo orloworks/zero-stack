@@ -2,13 +2,14 @@ import { appendFileSync, cpSync, existsSync, readFileSync, writeFileSync } from 
 import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { addPaths, editFile as edit, replaceAnchor } from "../anchor";
+import { editFile, replaceAnchor } from "../anchor";
+import { addPaths } from "./shared";
 import type { Framework } from "../flags";
 
 // Runs after installShadcn. Pages are copied; `void db generate` runs later in the pipeline (needs deps).
 export function installAuth(dir: string, framework: Framework): void {
   const slice = join(dirname(fileURLToPath(import.meta.url)), "../../template/auth", framework);
-  edit(dir, "void.config.ts", (s) =>
+  editFile(dir, "void.config.ts", (s) =>
     replaceAnchor(s, "export default defineConfig({", 'export default defineConfig({\n  "auth": { "providers": ["email"] },', "void.config.ts"),
   );
 

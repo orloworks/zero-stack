@@ -1,5 +1,5 @@
 import { appendFileSync, cpSync, existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles } from "./agent-files";
 import type { Config } from "./flags";
@@ -69,8 +69,9 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
         "--framework", config.framework, "--starter", "sqlite", "--deploy", "none", "--git"],
       dirname(targetDir),
     );
-    if (resolve(dirname(targetDir), config.name) !== resolve(targetDir) || !existsSync(targetDir))
-      throw new Error(`create-void created ${join(dirname(targetDir), config.name)}, not the target directory ${targetDir}.`);
+    // Also catches a pre-existing target (`create-zero-stack .`) where create-void wrote elsewhere.
+    if (!existsSync(join(targetDir, "package.json")))
+      throw new Error(`create-void did not produce ${join(targetDir, "package.json")}; it works in ${join(dirname(targetDir), config.name)}, the target directory is ${targetDir}.`);
     // Installers edit deps; the single `bun install` below picks them up.
     if (config.tailwind) installTailwind(targetDir);
     if (config.zodRpc) installZodRpc(targetDir);

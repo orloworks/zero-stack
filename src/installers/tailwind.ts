@@ -1,4 +1,4 @@
-import { editFile as edit, editJson, needKey, replaceAnchor } from "../anchor";
+import { editFile, editJson, needKey, replaceAnchor } from "../anchor";
 import { TAILWIND } from "../versions";
 
 // Needs a `bun install` afterwards (the pipeline runs one).
@@ -6,10 +6,10 @@ export function installTailwind(dir: string): void {
   editJson(dir, "package.json", (pkg) => {
     Object.assign(needKey(pkg, "devDependencies", "package.json"), { tailwindcss: TAILWIND, "@tailwindcss/vite": TAILWIND });
   });
-  edit(dir, "vite.config.ts", (s) => {
+  editFile(dir, "vite.config.ts", (s) => {
     const f = "vite.config.ts";
     s = replaceAnchor(s, 'import { defineConfig } from "vite";', 'import { defineConfig } from "vite";\nimport tailwindcss from "@tailwindcss/vite";', f);
     return replaceAnchor(s, "plugins: [", "plugins: [tailwindcss(), ", f); // formatting fixed by `vp check --fix`
   });
-  edit(dir, "pages/style.css", (s) => replaceAnchor(s, ":root {\n  --text:", '@import "tailwindcss";\n\n:root {\n  --text:', "pages/style.css"));
+  editFile(dir, "pages/style.css", (s) => replaceAnchor(s, ":root {\n  --text:", '@import "tailwindcss";\n\n:root {\n  --text:', "pages/style.css"));
 }
