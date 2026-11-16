@@ -25,7 +25,7 @@ tests/
 
 1. Preflight: spawn `node --version`, require `^24.22 || >=26.12` (Void needs real Node
    on PATH even under bun; `process.versions.node` is unreliable under bun).
-2. Target dir must be new or empty. On any failure, delete it wholesale.
+2. Target dir must be new or empty. On any failure, delete a directory zero-stack created; a pre-existing empty target is emptied, not removed.
 3. Validate flags, fail fast with a one-line fix. Only implied flag: `--shadcn` enables
    `--tailwind` and says so. `--shadcn` requires `--framework react`.
 4. Run pinned `bunx create-void@<pin> <name> --toolchain vite-plus --framework <fw>
