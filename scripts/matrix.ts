@@ -7,6 +7,7 @@ export const MATRIX: { name: string; args: string[] }[] = [
   ...FRAMEWORKS.map((fw) => ({ name: `${fw}-all`, args: ["--framework", fw, ...all(fw)] })),
   { name: "bare", args: [] },
   { name: "auth", args: ["--auth"] },
+  { name: "svelte-auth", args: ["--framework", "svelte", "--auth"] },
   { name: "tailwind", args: ["--tailwind"] },
   { name: "zod-rpc", args: ["--zod-rpc"] },
 ];

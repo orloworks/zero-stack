@@ -31,6 +31,7 @@ try {
   const target = positionals[0] ?? config.name;
   await scaffold(config, resolve(target));
   console.log(`\nDone. cd ${target} && bun dev`);
+  if (config.auth && config.framework === "svelte") console.log("Account page: /settings (link it from your nav).");
 } catch (e) {
   console.error(`error: ${(e as Error).message}`);
   process.exit(1);

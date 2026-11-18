@@ -240,3 +240,38 @@ test("zod-rpc refuses to overwrite an existing routes/api/echo.ts", async () => 
   await expect(scaffold({ ...cfg, zodRpc: true }, dir, withEcho)).rejects.toThrow(/echo\.ts" already exists.*create-void@\d/);
   expect(existsSync(dir)).toBe(false);
 });
+
+const authApp = (framework: "react" | "vue" | "svelte" | "solid") => {
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  return { dir, run: () => scaffold({ ...cfg, framework, auth: true }, dir, exec) };
+};
+
+test("react, vue and solid --auth keep v0.1 output: sign-in/up only, no auth.ts, no Account note", async () => {
+  const want: Record<string, string[]> = { react: ["sign-in.tsx", "sign-up.tsx"], vue: ["sign-in.vue", "sign-up.vue"], solid: ["sign-in.tsx", "sign-up.tsx"] };
+  for (const fw of ["react", "vue", "solid"] as const) {
+    const { dir, run } = authApp(fw);
+    await run();
+    expect(readdirSync(join(dir, "pages")).sort()).toEqual(want[fw]!);
+    for (const f of want[fw]!)
+      expect(readFileSync(join(dir, "pages", f), "utf8")).toBe(readFileSync(join(import.meta.dir, "../../template/auth", fw, "pages", f), "utf8"));
+    expect(existsSync(join(dir, "auth.ts"))).toBe(false);
+    expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).not.toContain("/settings");
+  }
+});
+
+test("svelte --auth ships /settings with its loader, a plain composed auth.ts and the AGENTS.md note", async () => {
+  const { dir, run } = authApp("svelte");
+  await run();
+  expect(readdirSync(join(dir, "pages")).sort()).toEqual(["settings.server.ts", "settings.svelte", "sign-in.svelte", "sign-up.svelte"]);
+  expect(readFileSync(join(dir, "auth.ts"), "utf8")).toBe(
+    'import { defineAuth } from "void/auth";\n\nexport default defineAuth(({ defaults }) => ({\n  ...defaults,\n}));\n',
+  );
+  expect(readFileSync(join(dir, "pages/settings.svelte"), "utf8")).toContain("<!-- zero-stack:account-deletion -->");
+  expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain("`/settings`");
+});

@@ -4,16 +4,20 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { editFile, replaceAnchor } from "../anchor";
 import { addPaths } from "./shared";
-import type { Framework } from "../flags";
+import type { Config } from "../flags";
+import { composeAuthTs } from "./auth-ts";
 
 // Runs after installShadcn. Pages are copied; `void db generate` runs later in the pipeline (needs deps).
-export function installAuth(dir: string, framework: Framework): void {
+export function installAuth(dir: string, config: Config): void {
+  const framework = config.framework;
   const slice = join(dirname(fileURLToPath(import.meta.url)), "../../template/auth", framework);
   editFile(dir, "void.config.ts", (s) =>
     replaceAnchor(s, "export default defineConfig({", 'export default defineConfig({\n  "auth": { "providers": ["email"] },', "void.config.ts"),
   );
 
   addPaths(dir, { "@auth-schema": ["./.void/better-auth-schema.ts"] });
+
+  if (framework === "svelte") writeFileSync(join(dir, "auth.ts"), composeAuthTs(config));
 
   cpSync(join(slice, "pages"), join(dir, "pages"), { recursive: true });
 

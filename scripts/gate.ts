@@ -144,11 +144,36 @@ try {
     const session = await fetch(`${base}/api/auth/get-session`, { headers: { cookie } }).then((r) => r.json() as Promise<any>);
     if (session?.user?.email !== email) throw new Error("auth get-session did not return the signed-in user");
     console.log("gate: auth sign-up -> sign-in -> session ok");
-    const pages = readdirSync(join(app, "pages")).filter((f) => f.startsWith("sign-"));
-    if (pages.length !== 2) throw new Error(`expected sign-in and sign-up pages, found ${pages}`);
-    for (const p of ["/sign-in", "/sign-up"]) {
-      const r = await fetch(base + p);
-      if (r.status !== 200) throw new Error(`GET ${p} -> ${r.status}`);
+    // Route pages for the enabled features; the loader is a file, not a route, so it is checked separately.
+    const routes = ["sign-in", "sign-up", ...(config.framework === "svelte" ? ["settings"] : [])];
+    const pageNames = readdirSync(join(app, "pages")).filter((f) => !f.includes(".server.")).map((f) => f.replace(/\.[^.]+$/, ""));
+    for (const r of ["sign-in", "sign-up", "settings"])
+      if (pageNames.includes(r) !== routes.includes(r)) throw new Error(`pages/${r} ${routes.includes(r) ? "missing" : "unexpected"} for ${config.framework}`);
+    for (const p of routes) {
+      const r = await fetch(`${base}/${p}`);
+      if (r.status !== 200) throw new Error(`GET /${p} -> ${r.status}`);
+    }
+    if (config.framework === "svelte") {
+      if (!statSync(join(app, "pages/settings.server.ts")).isFile()) throw new Error("settings.server.ts missing");
+      const html = (c?: string) => fetch(`${base}/settings`, { headers: c ? { cookie: c } : {} }).then((r) => r.text());
+      const [signedIn, signedOut] = [await html(cookie), await html()];
+      if (!signedIn.includes("Change password") || !signedIn.includes(`Signed in as ${email}`))
+        throw new Error("/settings signed in lacks the Account sections");
+      if (signedOut.includes("Change password") || !signedOut.includes("Sign in to manage your account"))
+        throw new Error("/settings signed out lacks the sign-in line");
+      // A second session, created before the change, must be revoked by it.
+      const second = (await post("/api/auth/sign-in/email", { email, password })).headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+      const sessionOf = (c: string) => fetch(`${base}/api/auth/get-session`, { headers: { cookie: c } }).then((r) => r.json() as Promise<any>);
+      if ((await sessionOf(second))?.user?.email !== email) throw new Error("second session did not start");
+      const next = "gate-password-456";
+      const wrong = await post("/api/auth/change-password", { currentPassword: "not-the-password", newPassword: next, revokeOtherSessions: true }, cookie);
+      if (wrong.ok) throw new Error("change-password accepted a wrong current password");
+      const right = await post("/api/auth/change-password", { currentPassword: password, newPassword: next, revokeOtherSessions: true }, cookie);
+      if (!right.ok) throw new Error(`change-password with the right password -> ${right.status}`);
+      if ((await sessionOf(second))?.user) throw new Error("second session survived change-password");
+      const fresh = await post("/api/auth/sign-in/email", { email, password: next });
+      if (!fresh.ok) throw new Error("sign-in with the new password failed");
+      console.log("gate: /settings signed in/out, change-password wrong rejected, right accepted, other session revoked");
     }
     const migrations = readdirSync(join(app, "db/migrations")).filter((f) => f.endsWith(".sql"));
     const sql = migrations.map((f) => readFileSync(join(app, "db/migrations", f), "utf8")).join("\n");
