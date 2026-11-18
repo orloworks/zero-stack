@@ -426,3 +426,15 @@ test("svelte --storage --account-deletion purges before and after deletion and m
   expect(offPage).not.toMatch(/uploaded files|STORAGE_PURGE_FAILED/);
   expect(existsSync(join(off.dir, "src/storage.ts"))).toBe(false);
 });
+
+test("secrets adds scripts/secrets.ts, the secrets:pull script and the .env.pull-tmp ignore; without it, none of them", async () => {
+  const on = seeded("<!--/injected-by-void-->\n");
+  await scaffold({ ...cfg, secrets: true }, on.dir, on.exec);
+  expect(JSON.parse(readFileSync(join(on.dir, "package.json"), "utf8")).scripts["secrets:pull"]).toBe("bun scripts/secrets.ts pull");
+  expect(existsSync(join(on.dir, "scripts/secrets.ts"))).toBe(true);
+  expect(readFileSync(join(on.dir, ".gitignore"), "utf8").split("\n")).toContain(".env.pull-tmp");
+  const off = seeded("<!--/injected-by-void-->\n");
+  await scaffold(cfg, off.dir, off.exec);
+  expect(JSON.parse(readFileSync(join(off.dir, "package.json"), "utf8")).scripts["secrets:pull"]).toBeUndefined();
+  expect(existsSync(join(off.dir, "scripts/secrets.ts"))).toBe(false);
+});

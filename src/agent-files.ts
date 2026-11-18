@@ -25,7 +25,10 @@ export function writeAgentFiles(targetDir: string, config?: Config): void {
   const storage = config?.storage
     ? `\n\n## Storage\n\nFiles live in R2 through \`void/storage\`. \`src/storage.ts\` builds per-user keys (\`users/<id>/<name>\`, rejecting names that could leave the prefix) and purges a user's files." \`routes/api/files/[name].ts\` has PUT (streamed upload, needs Content-Length), GET and DELETE for the signed-in user's own files; every handler calls \`requireAuth\`. Keep user data under \`users/<id>/\` so account deletion can purge it."${config.accountDeletion ? " Deleting an account first deletes its files (\`beforeDelete\` in \`auth.ts\`; any storage error aborts the deletion) and sweeps again after." : ""}`
     : "";
-  const block = `${OPEN}\n${readFileSync(ROUTING, "utf8").trimEnd()}${account}${deletion}${email}${turnstile}${storage}\n${CLOSE}`;
+  const secrets = config?.secrets
+    ? `\n\n## Secrets\n\nSecrets live in Infisical; \`.env\` is a local copy (gitignored, mode 0600). Link this folder first: run the \`secret-sync\` skill, or \`infisical init --project-id <id>\`, which writes \`.infisical.yaml\` (legacy \`.infisical.json\` also works). Then \`bun run secrets:pull\` replaces \`.env\` with the Infisical \`dev\` environment, verbatim (no \`\${VAR}\` expansion). It refuses, leaving \`.env\` untouched and no temp file behind, when the folder has no link file, when Infisical exits non-zero, or when the export lacks any key the current \`.env\` has (it names the missing keys). Infisical's own output is never printed; a failure shows only the exit code and the command to rerun by hand.`
+    : "";
+  const block = `${OPEN}\n${readFileSync(ROUTING, "utf8").trimEnd()}${account}${deletion}${email}${turnstile}${storage}${secrets}\n${CLOSE}`;
   const text = readFileSync(agents, "utf8");
   const start = text.indexOf(OPEN);
   const end = text.indexOf(CLOSE);

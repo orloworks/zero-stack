@@ -50,3 +50,15 @@ test("link-skill symlinks into the given dir and is idempotent", () => {
   expect(readlinkSync(join(dir, "routing.md"))).toMatch(/docs\/cloudflare-routing\.md$/);
   expect(readFileSync(join(dir, "SKILL.md"), "utf8")).toContain("Containers");
 });
+
+test("--secrets adds an AGENTS.md section on linking, what pull does and what it refuses", async () => {
+  const on = join(tmp(), "app");
+  await scaffold({ name: "app", framework: "react", tailwind: false, shadcn: false, zodRpc: false, auth: false, secrets: true }, on, fake(on));
+  const agents = readFileSync(join(on, "AGENTS.md"), "utf8");
+  expect(agents).toContain("## Secrets");
+  for (const s of ["secret-sync", "infisical init --project-id", "bun run secrets:pull", ".infisical.yaml", "lacks any key"])
+    expect(agents).toContain(s);
+  const off = join(tmp(), "app");
+  await scaffold({ name: "app", framework: "react", tailwind: false, shadcn: false, zodRpc: false, auth: false }, off, fake(off));
+  expect(readFileSync(join(off, "AGENTS.md"), "utf8")).not.toContain("## Secrets");
+});

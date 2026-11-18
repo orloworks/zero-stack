@@ -1,10 +1,10 @@
 // Scaffold into a temp dir, then vp check/build/test, verify, db:reset, GET / against vp dev.
 // Optional args choose the permutation: bun scripts/gate.ts [--framework vue] [--<feature flag from src/flags.ts>...] [--name x]
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FEATURE_LIST, validateFlags } from "../src/flags";
+import { argv as featureArgv, FEATURE_LIST, validateFlags } from "../src/flags";
 import { killChildren, onTerminate, spawnTracked } from "../src/children";
 import { preflight, run, scaffold } from "../src/pipeline";
 import { TRUSTED_DEPENDENCIES } from "../src/versions";
@@ -12,6 +12,7 @@ import { TRUSTED_DEPENDENCIES } from "../src/versions";
 const root = mkdtempSync(join(tmpdir(), "zs-gate-"));
 const argv = process.argv.slice(2);
 const arg = (flag: string) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
+const hasSeq = (seq: string[]) => argv.some((_, i) => seq.every((t, j) => argv[i + j] === t));
 const name = arg("--name") ?? "gate-app";
 const app = join(root, name);
 const vp = join(app, "node_modules/.bin/vp");
@@ -32,7 +33,7 @@ try {
   const input = {
     name,
     framework: arg("--framework"),
-    ...Object.fromEntries(FEATURE_LIST.map((f) => [f.key, argv.includes(`--${f.flag}`) || undefined])),
+    ...Object.fromEntries(FEATURE_LIST.map((f) => [f.key, hasSeq(featureArgv(f)) || undefined])),
   };
   const { config } = validateFlags(input);
   await scaffold(config, app);
@@ -312,6 +313,61 @@ try {
     if (!/^BETTER_AUTH_SECRET=\S{40,}$/m.test(env) || !env.includes("BETTER_AUTH_URL=http://localhost:5173"))
       throw new Error(".env missing secret or url");
     console.log("gate: auth migration present, .env gitignored");
+  }
+  if (config.secrets) {
+    // A fake `infisical` first on PATH records its argv (FAKE_LOG) and is driven by env: FAKE_EXIT, FAKE_EXPORT (file contents), FAKE_STDERR.
+    const bin = join(root, "fake-bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "infisical"), [
+      "#!/bin/sh",
+      'echo "$*" >> "$FAKE_LOG"',
+      'for a in "$@"; do case "$a" in --output-file=*) out="${a#--output-file=}";; esac; done',
+      '[ -n "$out" ] && printf \'%s\' "$FAKE_EXPORT" > "$out"',
+      'echo "$FAKE_STDERR" >&2',
+      'echo "$FAKE_STDERR"',
+      'exit "${FAKE_EXIT:-0}"',
+    ].join("\n") + "\n", { mode: 0o755 });
+    const log = join(root, "fake-argv.log");
+    const pull = (fake: Record<string, string>, script = ["run", "secrets:pull"]) => {
+      const r = Bun.spawnSync([process.execPath, ...script], {
+        cwd: app, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, ...fake },
+      });
+      return { code: r.exitCode, out: r.stdout.toString() + r.stderr.toString() };
+    };
+    const envFile = join(app, ".env"), tmp = join(app, ".env.pull-tmp"), yaml = join(app, ".infisical.yaml");
+    const check = (ok: boolean, what: string) => { if (!ok) throw new Error(`secrets:pull ${what}`); };
+
+    for (const f of [".env", ".env.pull-tmp"])
+      check(Bun.spawnSync(["git", "check-ignore", "-q", f], { cwd: app }).exitCode === 0, `${f} is not gitignored`);
+
+    const before = readFileSync(envFile);
+    // No link file: refuse with the link guidance.
+    let r = pull({ FAKE_EXPORT: "X=1\n" });
+    check(r.code === 1 && r.out.includes("secret-sync") && r.out.includes("infisical init --project-id"), `without a link file exited ${r.code} without the guidance: ${r.out}`);
+    check(readFileSync(envFile).equals(before) && !existsSync(tmp) && !existsSync(log), "without a link file touched .env, left a temp file or ran infisical");
+
+    writeFileSync(yaml, "workspaceId: gate\n");
+    // Export lacks a key the current .env has.
+    r = pull({ FAKE_EXPORT: "BETTER_AUTH_SECRET=other\n" });
+    check(r.code === 1 && r.out.includes("BETTER_AUTH_URL") && !r.out.includes("other"), `with a missing key exited ${r.code}, output: ${r.out}`);
+    check(readFileSync(envFile).equals(before) && !existsSync(tmp), "with a missing key changed .env or left a temp file");
+    // Infisical fails with a secret-looking string on both streams: never printed.
+    r = pull({ FAKE_EXPORT: "BETTER_AUTH_SECRET=other\n", FAKE_EXIT: "3", FAKE_STDERR: "LEAKED-sk_live_abc123" });
+    check(r.code === 1 && r.out.includes("infisical exited 3") && !r.out.includes("LEAKED") && !r.out.includes("other"), `on a failing infisical exited ${r.code}, output: ${r.out}`);
+    check(readFileSync(envFile).equals(before) && !existsSync(tmp), "on a failing infisical changed .env or left a temp file");
+    // Success: contents replaced verbatim (${X} intact), mode 0600, the expected argv; the legacy link file works too.
+    const exported = "BETTER_AUTH_SECRET=pulled\nBETTER_AUTH_URL=http://localhost:5173\nEXTRA=pre${X}post\n";
+    rmSync(yaml);
+    writeFileSync(join(app, ".infisical.json"), "{}\n");
+    r = pull({ FAKE_EXPORT: exported });
+    check(r.code === 0, `ok run exited ${r.code}: ${r.out}`);
+    check(readFileSync(envFile, "utf8") === exported, ".env is not the export verbatim");
+    check((statSync(envFile).mode & 0o777) === 0o600 && !existsSync(tmp), "left .env not 0600 or left a temp file");
+    check(readFileSync(log, "utf8").includes("export --env=dev --format=dotenv --expand=false --silent"), `ran infisical with ${readFileSync(log, "utf8")}`);
+    // The script itself rejects an unknown subcommand.
+    r = pull({}, ["scripts/secrets.ts", "bogus"]);
+    check(r.code === 1 && r.out.includes("Usage"), `unknown subcommand exited ${r.code}`);
+    console.log("gate: secrets:pull refuses without a link / on a missing key / on an infisical failure (.env untouched, nothing leaked); ok pull is verbatim 0600");
   }
 } catch (e) {
   console.error(`gate failed: ${(e as Error).message}`);

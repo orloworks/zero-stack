@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { FEATURE_LIST, validateFlags } from "../../src/flags";
+import { argv, FEATURE_LIST, parseFeature, validateFlags } from "../../src/flags";
 
-const base = { tailwind: false, shadcn: false, zodRpc: false, auth: false, accountDeletion: false, email: false, turnstile: false, storage: false };
+const base = { tailwind: false, shadcn: false, zodRpc: false, auth: false, accountDeletion: false, email: false, turnstile: false, storage: false, secrets: false };
 
 test("defaults: react, every installer off, no notes", () => {
   expect(validateFlags({ name: "my-app" })).toEqual({
@@ -79,4 +79,41 @@ test("--storage is accepted with any framework and implies auth", () => {
 test("every feature has a unique flag and key", () => {
   expect(new Set(FEATURE_LIST.map((f) => f.flag)).size).toBe(FEATURE_LIST.length);
   expect(new Set(FEATURE_LIST.map((f) => f.key)).size).toBe(FEATURE_LIST.length);
+});
+
+test("--secrets is accepted with any framework and implies auth, saying so", () => {
+  for (const framework of ["react", "vue", "svelte", "solid"]) {
+    const r = validateFlags({ name: "x", framework, secrets: true });
+    expect(r.config).toMatchObject({ secrets: true, auth: true });
+    expect(r.notes).toEqual(["--secrets implies --auth; enabling auth."]);
+  }
+});
+
+const secrets = FEATURE_LIST.find((f) => f.flag === "secrets")!;
+const rawArgs = (...a: string[]) => Bun.spawnSync([process.execPath, "src/index.ts", ...a]);
+
+test("argv() derives the valued flag from the table", () => {
+  expect(argv(secrets)).toEqual(["--secrets", "infisical"]);
+  expect(argv(FEATURE_LIST.find((f) => f.flag === "auth")!)).toEqual(["--auth"]);
+});
+
+test("a valued feature accepts only its value", () => {
+  expect(parseFeature(secrets, "infisical")).toBe(true);
+  expect(parseFeature(secrets, undefined)).toBeUndefined();
+  expect(() => parseFeature(secrets, "vault")).toThrow('--secrets accepts only "infisical" (got "vault").');
+  expect(parseFeature(FEATURE_LIST.find((f) => f.flag === "auth")!, true)).toBe(true);
+});
+
+test("the CLI rejects --secrets vault and a bare --secrets before doing anything", () => {
+  const vault = rawArgs("/nonexistent/zs-app", "--secrets", "vault");
+  expect(vault.exitCode).toBe(1);
+  expect(vault.stderr.toString()).toContain('--secrets accepts only "infisical" (got "vault").');
+  const bare = rawArgs("/nonexistent/zs-app", "--secrets");
+  expect(bare.exitCode).toBe(1);
+  expect(bare.stderr.toString()).toContain("--secrets");
+});
+
+test("usage text shows the valued flag from argv()", () => {
+  const r = rawArgs("a", "b");
+  expect(r.stderr.toString()).toContain("[--secrets infisical]");
 });
