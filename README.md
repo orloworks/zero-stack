@@ -65,8 +65,10 @@ from `.env`; overwrites Infisical values; prints only a key count) and `bun run 
 (replaces `.env` from `dev`). Link the folder first (`secret-sync` skill or `infisical init
 --project-id <id>`). `push` refuses names that break the key naming convention (upper snake
 case, no `VITE_` name containing SECRET/PASSWORD/TOKEN/PRIVATE, never `VOID_`/`__VOID_`).
-Infisical output is never printed. The generated `AGENTS.md` documents the production route
-(`void secret sync` for server keys, `infisical run --env=prod -- void deploy` for client keys).
+It also refuses multi-line values and `export ` lines, as does `pull` for the export. Infisical
+output is never printed. The generated `AGENTS.md` documents the production route (`void secret
+sync` for server keys, which needs an `env.ts` declaring every synced key and skips `VITE_` and
+`BETTER_AUTH_` lines; `infisical run --env=prod -- void deploy` for client keys).
 
 Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its
 first sync overwrites Worker secrets), production or preview scripts, other secret managers,

@@ -145,8 +145,14 @@ dependency-free `scripts/secrets.ts` (`node:` APIs only) and adds `secrets:pull`
   contain SECRET, PASSWORD, TOKEN or PRIVATE; never `__VOID_` or `VOID_`; `env.ts` lists every
   app key except Void-owned `BETTER_AUTH_*`.
 - Production (documentation in AGENTS.md, no script): server keys via `infisical export
-  --env=prod` minus `VITE_` lines into a private `mktemp` file, then `void secret sync "$f" --yes`;
-  client keys via `infisical run --env=prod -- void deploy`.
+  --env=prod` minus `VITE_` and `BETTER_AUTH_` lines (Void creates `BETTER_AUTH_SECRET` on deploy)
+  into a private `mktemp` file, then `void secret sync "$f" --yes`, skipped when the filtered file
+  is empty; every step exits 1 on failure so a failed export never deploys; client keys via
+  `infisical run --env=prod -- void deploy`. `void secret sync` needs an `env.ts` declaring
+  every synced key (AGENTS.md says so).
+- Push and pull refuse multi-line values and `export ` lines (naming the key only). Names are read
+  with `parseEnv` from `node:util`; a name is printed only if it matches `^[A-Za-z0-9_.-]{1,64}$`,
+  otherwise `line <n>`.
 - Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its
   first sync overwrites Worker secrets), production or preview scripts, other secret managers,
   writing `.infisical.yaml` or creating Infisical projects, `infisical run` for dev.
