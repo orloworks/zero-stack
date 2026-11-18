@@ -51,3 +51,14 @@ create-void@1.8.0 writes `"vite-plus": "^1.6.0"` and `"vite": "npm:@voidzero-dev
 can't resolve, so `vp build` fails with "Expected @voidzero-dev/vite-plus-core@8.3.8000, but found 1.6.0".
 Reproduced on a plain react scaffold; adding `"vite-plus": "1.6.0"` to `overrides` and reinstalling builds
 again. Carried in `OVERRIDES` (`src/versions.ts`); drop it with the next void pin (see #16).
+
+## Local D1 enforces foreign keys and `onDelete: "cascade"` (2026-11-18)
+
+Scaffolded `--framework svelte --account-deletion`, added `note(id, user_id NOT NULL REFERENCES user(id) ON DELETE cascade)`
+(`void db generate` emitted `FOREIGN KEY ... ON DELETE cascade`), `void db reset`, `vp dev`. Signed up, inserted one `note`
+for the user through a route, then `POST /api/auth/delete-user` with the password: `{"success":true,"message":"User deleted"}`,
+and the `note` count went 1 -> 0. Better Auth deletes only its own tables (session, account), so the child row went because
+the database cascaded. Deployed D1 is the same engine; the AGENTS.md cascade rule for user-owned tables (account-deletion)
+rests on this. App tables are not created by `vp dev` alone: they need `void db generate` and `void db reset`/migrate.
+Importing `@auth-schema` from `db/schema.ts` failed at dev start ("Cannot find module '@auth-schema'"); the probe used
+`../.void/better-auth-schema`. Docs show `@auth-schema`; unresolved here, so check it before telling users to use it.

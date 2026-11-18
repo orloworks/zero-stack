@@ -275,3 +275,29 @@ test("svelte --auth ships /settings with its loader, a plain composed auth.ts an
   expect(readFileSync(join(dir, "pages/settings.svelte"), "utf8")).toContain("<!-- zero-stack:account-deletion -->");
   expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain("`/settings`");
 });
+
+test("svelte --account-deletion adds the Delete account section, deleteUser in auth.ts and the AGENTS.md rules; absent without the flag", async () => {
+  const off = authApp("svelte");
+  await off.run();
+  expect(readFileSync(join(off.dir, "pages/settings.svelte"), "utf8")).not.toContain("Delete account");
+  expect(readFileSync(join(off.dir, "auth.ts"), "utf8")).not.toContain("deleteUser");
+  expect(readFileSync(join(off.dir, "AGENTS.md"), "utf8")).not.toContain("onDelete");
+
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  await scaffold({ ...cfg, framework: "svelte", auth: true, accountDeletion: true }, dir, exec);
+  const page = readFileSync(join(dir, "pages/settings.svelte"), "utf8");
+  for (const s of ["Delete account permanently", "It can't be undone.", "Incorrect password.", "Account deleted", "Back to home", "Deleting account…"])
+    expect(page).toContain(s);
+  expect(page).not.toContain("uploaded files");
+  expect(page).not.toContain("zero-stack:account-deletion");
+  expect(readFileSync(join(dir, "auth.ts"), "utf8")).toContain("deleteUser: { enabled: true }");
+  const agents = readFileSync(join(dir, "AGENTS.md"), "utf8");
+  expect(agents).toContain('onDelete: "cascade"');
+  expect(agents).toContain("social-only");
+});

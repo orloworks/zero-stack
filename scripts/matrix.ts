@@ -8,6 +8,7 @@ export const MATRIX: { name: string; args: string[] }[] = [
   { name: "bare", args: [] },
   { name: "auth", args: ["--auth"] },
   { name: "svelte-auth", args: ["--framework", "svelte", "--auth"] },
+  { name: "svelte-account-deletion", args: ["--framework", "svelte", "--account-deletion"] },
   { name: "tailwind", args: ["--tailwind"] },
   { name: "zod-rpc", args: ["--zod-rpc"] },
 ];

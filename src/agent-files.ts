@@ -13,7 +13,10 @@ export function writeAgentFiles(targetDir: string, config?: Config): void {
   const account = config?.auth && config.framework === "svelte"
     ? `\n\n## Account page\n\nThe Account page is \`/settings\` (\`pages/settings.svelte\`, user from \`pages/settings.server.ts\`). Link it from your nav; it has no home-page link.`
     : "";
-  const block = `${OPEN}\n${readFileSync(ROUTING, "utf8").trimEnd()}${account}\n${CLOSE}`;
+  const deletion = config?.accountDeletion
+    ? `\n\nThe Account page deletes the account with the user's current password (Better Auth \`deleteUser\`, enabled in \`auth.ts\`). Every table you add that holds user-owned rows must reference \`user.id\` with \`onDelete: "cascade"\` (for example \`.references(() => user.id, { onDelete: "cascade" })\`) so deleting the account removes its data; a row without the cascade is left orphaned or blocks the deletion. Known limit: a social-only account has no password, so it cannot delete itself from this page (Better Auth answers CREDENTIAL_ACCOUNT_NOT_FOUND).`
+    : "";
+  const block = `${OPEN}\n${readFileSync(ROUTING, "utf8").trimEnd()}${account}${deletion}\n${CLOSE}`;
   const text = readFileSync(agents, "utf8");
   const start = text.indexOf(OPEN);
   const end = text.indexOf(CLOSE);

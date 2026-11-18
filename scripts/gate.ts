@@ -174,6 +174,25 @@ try {
       const fresh = await post("/api/auth/sign-in/email", { email, password: next });
       if (!fresh.ok) throw new Error("sign-in with the new password failed");
       console.log("gate: /settings signed in/out, change-password wrong rejected, right accepted, other session revoked");
+      if (!config.accountDeletion) {
+        if (signedIn.includes("Delete account")) throw new Error("/settings has a Delete account section without --account-deletion");
+      } else {
+        // Runs after change-password: the password is now `next`, and the live session cookie comes from the change-password response.
+        if (!signedIn.includes("Delete account permanently")) throw new Error("/settings lacks the Delete account section");
+        // change-password with revokeOtherSessions rotates the current session: its new cookie is on the `right` response.
+        const live = right.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+        if ((await sessionOf(live))?.user?.email !== email) throw new Error("no live session after change-password");
+        const del = (pw: string) => post("/api/auth/delete-user", { password: pw }, live);
+        const wrongDel = await del("not-the-password");
+        if (wrongDel.ok) throw new Error("delete-user accepted a wrong password");
+        if (!(await post("/api/auth/sign-in/email", { email, password: next })).ok) throw new Error("account stopped signing in after a rejected deletion");
+        if ((await sessionOf(live))?.user?.email !== email) throw new Error("session lost after a rejected deletion");
+        const rightDel = await del(next);
+        if (!rightDel.ok) throw new Error(`delete-user with the right password -> ${rightDel.status}`);
+        if ((await sessionOf(live))?.user) throw new Error("session survived account deletion");
+        if ((await post("/api/auth/sign-in/email", { email, password: next })).ok) throw new Error("deleted account still signs in");
+        console.log("gate: delete-user wrong password rejected (account still signs in), right password deletes the account");
+      }
     }
     const migrations = readdirSync(join(app, "db/migrations")).filter((f) => f.endsWith(".sql"));
     const sql = migrations.map((f) => readFileSync(join(app, "db/migrations", f), "utf8")).join("\n");

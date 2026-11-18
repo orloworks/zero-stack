@@ -6,6 +6,7 @@ import { editFile, replaceAnchor } from "../anchor";
 import { addPaths } from "./shared";
 import type { Config } from "../flags";
 import { composeAuthTs } from "./auth-ts";
+import { installAccountDeletion } from "./account-deletion";
 
 // Runs after installShadcn. Pages are copied; `void db generate` runs later in the pipeline (needs deps).
 export function installAuth(dir: string, config: Config): void {
@@ -20,6 +21,7 @@ export function installAuth(dir: string, config: Config): void {
   if (framework === "svelte") writeFileSync(join(dir, "auth.ts"), composeAuthTs(config));
 
   cpSync(join(slice, "pages"), join(dir, "pages"), { recursive: true });
+  if (config.accountDeletion) installAccountDeletion(dir, config);
 
   const gi = join(dir, ".gitignore");
   const lines = existsSync(gi) ? readFileSync(gi, "utf8").split("\n") : [];
