@@ -36,6 +36,17 @@ it("token() follows the widget; reset() and expiry clear it", async () => {
   expect(onToken).toHaveBeenLastCalledWith(null);
 });
 
+it("a challenge error resets the widget to retry and does not call onError", async () => {
+  const { ts, onToken, onError } = await mount();
+  await vi.waitFor(() => expect(fake.render).toHaveBeenCalled());
+  opts.callback("tok");
+  opts["error-callback"]();
+  expect(ts.token()).toBeNull();
+  expect(onToken).toHaveBeenLastCalledWith(null);
+  expect(fake.reset).toHaveBeenCalledWith("w1");
+  expect(onError).not.toHaveBeenCalled();
+});
+
 // The script never arrives: a fake document captures the <script> so the test controls onload/onerror.
 const fakeScript = () => {
   delete (globalThis as any).window.turnstile;

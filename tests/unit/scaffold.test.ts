@@ -395,14 +395,6 @@ const storageApp = (config: Record<string, unknown>) => {
   return { dir, run: () => scaffold({ ...cfg, ...config } as any, dir, exec) };
 };
 
-test("--storage without --auth ships the helper and its test but no HTTP route", async () => {
-  const { dir, run } = storageApp({ storage: true });
-  await run();
-  for (const f of ["src/storage.ts", "tests/storage.test.ts"]) expect(existsSync(join(dir, f))).toBe(true);
-  expect(existsSync(join(dir, "routes/api/files"))).toBe(false);
-  expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain("No HTTP route ships without auth");
-});
-
 test("--storage with --auth adds requireAuth routes on any framework and leaves the pages alone", async () => {
   for (const framework of ["react", "vue", "solid"] as const) {
     const { dir, run } = storageApp({ framework, auth: true, storage: true });

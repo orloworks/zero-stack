@@ -56,7 +56,7 @@ A `create-void` app (vite-plus toolchain, sqlite starter, git) plus your chosen 
   as `noreply@example.com`); without a mail domain sends fail and are logged.
 - Set `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` for the deployed origin.
 
-Not included: data export, grace-period deletion, Stripe, orgs/admin/2FA (later waves).
+Not included: data export, grace-period deletion, Stripe, orgs/admin/2FA (later waves), #17 referrals, #18 affiliate app, #26 Infisical secrets.
 
 ## Cloudflare routing
 

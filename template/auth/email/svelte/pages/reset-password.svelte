@@ -8,6 +8,7 @@
   let password = $state("");
   let pending = $state(false);
   let error = $state("");
+  let invalid = $state(false); // aria-invalid only for server-rejected input, not network failures
   let headingEl: HTMLElement | undefined = $state();
   let alertEl: HTMLElement | undefined = $state();
 
@@ -25,6 +26,7 @@
     e.preventDefault();
     pending = true;
     error = "";
+    invalid = false;
     try {
       const res = await auth.resetPassword({ newPassword: password, token });
       if (!res.error) {
@@ -32,7 +34,7 @@
         return;
       }
       if (res.error.code === "INVALID_TOKEN") view = "invalid";
-      else error = res.error.message || "Couldn't update the password.";
+      else (error = res.error.message || "Couldn't update the password."), (invalid = true);
     } catch {
       error = "Something went wrong. Check your connection and try again.";
     }
@@ -55,7 +57,7 @@
     <h1 tabindex="-1" bind:this={headingEl}>Choose a new password</h1>
     <form onsubmit={submit}>
       <label for="new-password">New password</label>
-      <input id="new-password" bind:value={password} name="newPassword" type="password" autocomplete="new-password" minlength="8" required aria-invalid={error ? "true" : undefined} aria-describedby={error ? "password-hint form-error" : "password-hint"} />
+      <input id="new-password" bind:value={password} name="newPassword" type="password" autocomplete="new-password" minlength="8" required aria-invalid={invalid || undefined} aria-describedby={error ? "password-hint form-error" : "password-hint"} />
       <p id="password-hint">At least 8 characters</p>
       <button type="submit" disabled={pending}>{pending ? "Updating password…" : "Update password"}</button>
       {#if error}<p id="form-error" role="alert" tabindex="-1" bind:this={alertEl}>{error}</p>{/if}

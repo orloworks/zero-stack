@@ -65,3 +65,10 @@ test("an add-on flag implies auth, so auth is not asked", async () => {
   expect(t.asked).not.toContain("Add auth?");
   expect(t.asked).not.toContain("Add email?");
 });
+
+test("shadcn is asked even when Tailwind was declined, and choosing it implies Tailwind", async () => {
+  const t = ui({ ...yesAll, "Add Tailwind?": false });
+  const config = validateFlags(await fillPrompts({ name: "x", framework: "react" }, t.ui)).config;
+  expect(t.asked).toContain("Add shadcn/ui?");
+  expect(config).toMatchObject({ shadcn: true, tailwind: true });
+});

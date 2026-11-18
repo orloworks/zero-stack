@@ -1,5 +1,6 @@
 // The one owner of the Turnstile widget: script load, render, expiry, load failure and dispose.
 // onToken gets the token when one is issued and null when it is gone (expiry, reset, widget error).
+// onError is for a script that never loads; a challenge error resets the widget so it retries.
 type Widget = { render(el: HTMLElement, o: Record<string, unknown>): string; reset(id: string): void; remove(id: string): void };
 declare global {
   interface Window { turnstile?: Widget }
@@ -34,7 +35,7 @@ export function mountTurnstile(el: HTMLElement, { onToken, onError }: { onToken:
       sitekey: env.VITE_TURNSTILE_SITE_KEY,
       callback: (t: string) => !disposed && set(t),
       "expired-callback": () => !disposed && set(null),
-      "error-callback": () => { if (disposed) return; set(null); onError(); },
+      "error-callback": () => { if (disposed) return; set(null); window.turnstile?.reset(id!); },
     });
   }).catch(() => { if (!disposed) onError(); });
   return {

@@ -77,7 +77,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     if (config.zodRpc) installZodRpc(targetDir);
     if (config.shadcn) installShadcn(targetDir);
     if (config.auth) installAuth(targetDir, config);
-    if (config.storage) installStorage(targetDir, config);
+    if (config.storage) installStorage(targetDir);
     addAppScripts(targetDir);
     await exec([process.execPath, "install"], targetDir);
     // Leaves the auth migration generated, not applied to any database.

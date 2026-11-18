@@ -20,6 +20,8 @@ let dev: ReturnType<typeof Bun.spawn> | undefined;
 // SIGINT/SIGTERM: every child (steps, dev server) is killed and awaited, then the temp dir goes; exit 130/143.
 onTerminate(() => rmSync(root, { recursive: true, force: true }), 10_000);
 
+// Request cookie header from a response's Set-Cookie headers.
+const cookieOf = (r: Response) => r.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
 const step = (args: string[]) => run([vp, ...args], app);
 const sqliteFiles = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
@@ -128,14 +130,14 @@ try {
   }
   if (config.auth) {
     const base = `http://localhost:${port}`;
+    // The always-pass test secret accepts Cloudflare's documented dummy token; without the header the captcha plugin must refuse.
+    const DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX";
     const post = (path: string, body: object, cookie?: string) =>
       fetch(base + path, {
         method: "POST",
         headers: { "content-type": "application/json", origin: base, ...(cookie && { cookie }), ...(config.turnstile && { "x-captcha-response": DUMMY_TOKEN }) },
         body: JSON.stringify(body),
       });
-    // The always-pass test secret accepts Cloudflare's documented dummy token; without the header the captcha plugin must refuse.
-    const DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX";
     const bare = (path: string, body: object) =>
       fetch(base + path, { method: "POST", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify(body) });
     const email = `gate-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
@@ -151,16 +153,26 @@ try {
     const up = await post("/api/auth/sign-up/email", { name: "Gate", email, password });
     if (!up.ok) throw new Error(`auth sign-up -> ${up.status}`);
     const inn = await post("/api/auth/sign-in/email", { email, password });
-    const cookie = inn.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+    const cookie = cookieOf(inn);
     if (!inn.ok || !cookie) throw new Error(`auth sign-in -> ${inn.status}, cookie ${cookie ? "set" : "missing"}`);
     const session = await fetch(`${base}/api/auth/get-session`, { headers: { cookie } }).then((r) => r.json() as Promise<any>);
     if (session?.user?.email !== email) throw new Error("auth get-session did not return the signed-in user");
     console.log("gate: auth sign-up -> sign-in -> session ok");
     // --storage: routes are auth-gated and per-user. Keys are read back from the local R2 state (miniflare's _mf_objects) to prove what is stored.
-    const r2Keys = () => sqliteFiles(join(app, ".void")).flatMap((f) => {
-      const d = new Database(f, { readonly: true });
-      try { return (d.query("SELECT key FROM _mf_objects").all() as { key: string }[]).map((r) => r.key); } catch { return []; } finally { d.close(); }
-    });
+    // Only the sqlite files with an _mf_objects table are R2's; any read error on one of them fails the gate.
+    const r2Keys = () => {
+      let found = false;
+      const keys = sqliteFiles(join(app, ".void")).flatMap((f) => {
+        const d = new Database(f, { readonly: true });
+        try {
+          if (!d.query("SELECT 1 FROM sqlite_master WHERE name = '_mf_objects'").get()) return [];
+          found = true;
+          return (d.query("SELECT key FROM _mf_objects").all() as { key: string }[]).map((r) => r.key);
+        } catch (e) { throw new Error(`cannot read R2 keys from ${f}: ${(e as Error).message}`); } finally { d.close(); }
+      });
+      if (!found) throw new Error("no local R2 database (_mf_objects) found under .void");
+      return keys;
+    };
     const file = (name: string, init: RequestInit = {}) => fetch(`${base}/api/files/${name}`, { redirect: "manual", ...init });
     const storageUser = config.storage ? ((await fetch(`${base}/api/auth/get-session`, { headers: { cookie } }).then((r) => r.json() as Promise<any>)).user.id as string) : "";
     if (config.storage) {
@@ -205,12 +217,12 @@ try {
       if (signedOut.includes("Change password") || !signedOut.includes("Sign in to manage your account"))
         throw new Error("/settings signed out lacks the sign-in line");
       // A second session, created before the change, must be revoked by it.
-      const second = (await post("/api/auth/sign-in/email", { email, password })).headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+      const second = cookieOf(await post("/api/auth/sign-in/email", { email, password }));
       const sessionOf = (c: string) => fetch(`${base}/api/auth/get-session`, { headers: { cookie: c } }).then((r) => r.json() as Promise<any>);
       if ((await sessionOf(second))?.user?.email !== email) throw new Error("second session did not start");
       let next = "gate-password-456";
       const wrong = await post("/api/auth/change-password", { currentPassword: "not-the-password", newPassword: next, revokeOtherSessions: true }, cookie);
-      if (wrong.ok) throw new Error("change-password accepted a wrong current password");
+      if (wrong.ok || (await wrong.json() as any)?.code !== "INVALID_PASSWORD") throw new Error(`change-password with a wrong current password -> ${wrong.status}, expected INVALID_PASSWORD`);
       const right = await post("/api/auth/change-password", { currentPassword: password, newPassword: next, revokeOtherSessions: true }, cookie);
       if (!right.ok) throw new Error(`change-password with the right password -> ${right.status}`);
       if ((await sessionOf(second))?.user) throw new Error("second session survived change-password");
@@ -218,7 +230,7 @@ try {
       if (!fresh.ok) throw new Error("sign-in with the new password failed");
       console.log("gate: /settings signed in/out, change-password wrong rejected, right accepted, other session revoked");
       // change-password with revokeOtherSessions rotates the current session: its new cookie is on the `right` response.
-      let live = right.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+      let live = cookieOf(right);
       if ((await sessionOf(live))?.user?.email !== email) throw new Error("no live session after change-password");
       if (config.email) {
         const signIn = await fetch(`${base}/sign-in`).then((r) => r.text());
@@ -249,7 +261,7 @@ try {
         if (good.pathname !== "/reset-password" || !resetToken) throw new Error(`reset link landed on ${good}`);
         const reset = await fetch(`${base}/reset-password`).then((r) => r.text());
         if (!reset.includes("Loading…") || !reset.includes('name="referrer"')) throw new Error("/reset-password lacks the loading state or no-referrer meta");
-        const before = (await post("/api/auth/sign-in/email", { email, password: next })).headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+        const before = cookieOf(await post("/api/auth/sign-in/email", { email, password: next }));
         if ((await sessionOf(before))?.user?.email !== email) throw new Error("pre-reset session did not start");
         const after = "gate-password-789";
         const done = await post("/api/auth/reset-password", { newPassword: after, token: resetToken });
@@ -260,7 +272,7 @@ try {
         const again = await post("/api/auth/sign-in/email", { email, password: after });
         if (!again.ok) throw new Error("sign-in with the reset password failed");
         next = after;
-        live = again.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+        live = cookieOf(again);
         console.log("gate: reset mail in dev inbox -> link -> new password signs in, bad/used token rejected, earlier sessions revoked");
       }
       if (!config.accountDeletion) {
@@ -270,7 +282,7 @@ try {
         if (!signedIn.includes("Delete account permanently")) throw new Error("/settings lacks the Delete account section");
         const del = (pw: string) => post("/api/auth/delete-user", { password: pw }, live);
         const wrongDel = await del("not-the-password");
-        if (wrongDel.ok) throw new Error("delete-user accepted a wrong password");
+        if (wrongDel.ok || (await wrongDel.json() as any)?.code !== "INVALID_PASSWORD") throw new Error(`delete-user with a wrong password -> ${wrongDel.status}, expected INVALID_PASSWORD`);
         if (!(await post("/api/auth/sign-in/email", { email, password: next })).ok) throw new Error("account stopped signing in after a rejected deletion");
         if ((await sessionOf(live))?.user?.email !== email) throw new Error("session lost after a rejected deletion");
         const rightDel = await del(next);
@@ -300,5 +312,5 @@ try {
   process.exitCode = 1;
 } finally {
   await killChildren(); // the dev server and anything still running
-  rmSync(root, { recursive: true, force: true });
+  try { rmSync(root, { recursive: true, force: true }); } catch (e) { console.warn(`gate: could not remove ${root}: ${(e as Error).message}`); }
 }

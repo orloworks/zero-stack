@@ -13,7 +13,7 @@ const TAIL = "    }\n    pending = false;\n";
 // --turnstile on svelte: env.ts, the helper, the startup guard and their tests, plus the widget at each page's marker.
 // Runs after installEmail, which also edits sign-in's import and state lines (both anchors stay unique).
 export function installTurnstile(dir: string, config: Config): void {
-  cpSync(here, dir, { recursive: true });
+  cpSync(here, dir, { recursive: true, force: false, errorOnExist: true }); // never overwrite a file the app already has
   const pages: [string, string, string][] = [
     ["pages/sign-in.svelte", "auth.signIn.email({ email, password })", "auth.signIn.email({ email, password }, captcha())"],
     ["pages/sign-up.svelte", "auth.signUp.email({ name, email, password })", "auth.signUp.email({ name, email, password }, captcha())"],

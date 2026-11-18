@@ -4,6 +4,7 @@
   let email = $state("");
   let pending = $state(false);
   let error = $state("");
+  let invalid = $state(false); // aria-invalid only for server-rejected input, not network failures
   let sent = $state(false);
   let alertEl: HTMLElement | undefined = $state();
   let sentEl: HTMLElement | undefined = $state();
@@ -12,10 +13,11 @@
     e.preventDefault();
     pending = true;
     error = "";
+    invalid = false;
     try {
       const res = await auth.requestPasswordReset({ email, redirectTo: "/reset-password" });
       // Neutral copy only when the request was accepted; a rejection (captcha, rate limit) keeps the form.
-      if (res.error) error = res.error.message || "Couldn't send the reset link. Try again.";
+      if (res.error) (error = res.error.message || "Couldn't send the reset link. Try again."), (invalid = true);
       else sent = true;
     } catch {
       error = "Something went wrong. Check your connection and try again.";
@@ -32,7 +34,7 @@
   {:else}
     <form onsubmit={submit}>
       <label for="email">Email</label>
-      <input id="email" bind:value={email} name="email" type="email" autocomplete="email" required aria-invalid={error ? "true" : undefined} aria-describedby={error ? "form-error" : undefined} />
+      <input id="email" bind:value={email} name="email" type="email" autocomplete="email" required aria-invalid={invalid || undefined} aria-describedby={error ? "form-error" : undefined} />
       <!-- zero-stack:turnstile -->
       <button type="submit" disabled={pending}>{pending ? "Sending link…" : "Send reset link"}</button>
       {#if error}<p id="form-error" role="alert" tabindex="-1" bind:this={alertEl}>{error}</p>{/if}

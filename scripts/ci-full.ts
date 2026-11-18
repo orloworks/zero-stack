@@ -75,7 +75,11 @@ if (import.meta.main) {
       status[p.name] = `passed (${secs}s)`;
     } else {
       status[p.name] = `FAILED (${secs}s)`;
-      console.error(`--- ${p.name} output (tail) ---\n${(out + err).split("\n").slice(-40).join("\n")}`);
+      const why = `${out}\n${err}`.split("\n").find((l) => l.startsWith("gate failed:"));
+      const killed = child.signalCode ? ` (killed by ${child.signalCode})` : "";
+      console.error(`--- ${p.name} failed${killed}: ${why ?? "no 'gate failed:' line"} ---`);
+      const tail = (label: string, t: string) => `[${label}]\n${t.split("\n").slice(-40).join("\n")}`;
+      console.error(`${tail("stdout", out)}\n${tail("stderr", err)}`);
     }
     console.log(`${p.name}: ${status[p.name]}`);
     return code === 0;
