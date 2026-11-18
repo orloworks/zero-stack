@@ -281,6 +281,12 @@ try {
         // Runs after change-password and any reset: `next` is the current password and `live` a current session.
         if (!signedIn.includes("Delete account permanently")) throw new Error("/settings lacks the Delete account section");
         const del = (pw: string) => post("/api/auth/delete-user", { password: pw }, live);
+        // Better Auth skips the password check for a session under freshAge, so a missing or empty password must still be refused.
+        for (const body of [{}, { password: "" }]) {
+          const r = await post("/api/auth/delete-user", body, live);
+          if (r.status !== 400) throw new Error(`delete-user with body ${JSON.stringify(body)} -> ${r.status}, expected 400`);
+        }
+        if (!(await post("/api/auth/sign-in/email", { email, password: next })).ok) throw new Error("account stopped signing in after a passwordless deletion attempt");
         const wrongDel = await del("not-the-password");
         if (wrongDel.ok || (await wrongDel.json() as any)?.code !== "INVALID_PASSWORD") throw new Error(`delete-user with a wrong password -> ${wrongDel.status}, expected INVALID_PASSWORD`);
         if (!(await post("/api/auth/sign-in/email", { email, password: next })).ok) throw new Error("account stopped signing in after a rejected deletion");

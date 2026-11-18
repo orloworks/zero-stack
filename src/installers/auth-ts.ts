@@ -37,6 +37,14 @@ const STORAGE_DELETE_USER = `  user: {
     },
   },`;
 
+const DELETE_PASSWORD_HOOK = `  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path === "/delete-user" && !(typeof ctx.body?.password === "string" && ctx.body.password.length > 0)) {
+        throw new APIError("BAD_REQUEST", { message: "Password required" });
+      }
+    }),
+  },`;
+
 // The root auth.ts, written whole from the enabled features (one owner; add-ons contribute parts here, never patch the file).
 // Svelte only: react, vue and solid --auth keep v0.1 output (no auth.ts).
 export function composeAuthTs(config: Config): string {
@@ -60,12 +68,13 @@ export function composeAuthTs(config: Config): string {
     ...(config.turnstile
       ? ['  plugins: [captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })],']
       : []),
-    // Better Auth verifies the password sent to deleteUser; the Account page always sends it (D6).
-    ...(config.accountDeletion ? [config.storage ? STORAGE_DELETE_USER : "  user: { deleteUser: { enabled: true } },"] : []),
+    // Better Auth skips the password for sessions under freshAge, so this hook requires it.
+    ...(config.accountDeletion ? [config.storage ? STORAGE_DELETE_USER : "  user: { deleteUser: { enabled: true } },", DELETE_PASSWORD_HOOK] : []),
   ];
   const del = config.accountDeletion && config.storage;
+  const ba = config.accountDeletion ? 'import { APIError, createAuthMiddleware } from "better-auth/api";\n' : "";
   return `import { defineAuth } from "void/auth";
-${del ? 'import { APIError } from "better-auth/api";\n' : ""}${config.turnstile ? 'import { captcha } from "better-auth/plugins";\n' : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}
+${ba}${config.turnstile ? 'import { captcha } from "better-auth/plugins";\n' : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}
 export default defineAuth(({ defaults${config.turnstile ? ", env" : ""} }) => ({
   ...defaults,
 ${options.map((o) => o + "\n").join("")}}));

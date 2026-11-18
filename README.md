@@ -28,7 +28,7 @@ empty; on any failure it is deleted. The CLI writes only inside that directory.
 | `--shadcn` | bool | React only, implies `--tailwind` |
 | `--zod-rpc` | bool | Void `defineHandler.withValidator` with a zod body schema and a typed `void/client` call |
 | `--auth` | bool | Void built-in Better Auth wiring, sign-in/up pages, migration, `.env` with a random secret |
-| `--account-deletion` | bool | Svelte only, implies `--auth`. Delete-account section on the Account page, confirmed with the password |
+| `--account-deletion` | bool | Svelte only, implies `--auth`. Delete-account section on the Account page, confirmed with the password (always required server-side) |
 | `--email` | bool | Svelte only, implies `--auth`. Password reset and sign-up verification mail, dev inbox locally |
 | `--turnstile` | bool | Svelte only, implies `--auth`. Cloudflare Turnstile on sign-up, sign-in and password reset |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes (`/api/files/:name`) behind sign-in, purged on account deletion |

@@ -296,7 +296,9 @@ test("svelte --account-deletion adds the Delete account section, deleteUser in a
     expect(page).toContain(s);
   expect(page).not.toContain("uploaded files");
   expect(page).not.toContain("zero-stack:account-deletion");
-  expect(readFileSync(join(dir, "auth.ts"), "utf8")).toContain("deleteUser: { enabled: true }");
+  const authTs = readFileSync(join(dir, "auth.ts"), "utf8");
+  expect(authTs).toContain("deleteUser: { enabled: true }");
+  for (const s of ['import { APIError, createAuthMiddleware } from "better-auth/api";', 'ctx.path === "/delete-user"', 'new APIError("BAD_REQUEST"']) expect(authTs).toContain(s);
   const agents = readFileSync(join(dir, "AGENTS.md"), "utf8");
   expect(agents).toContain('onDelete: "cascade"');
   expect(agents).toContain("social-only");

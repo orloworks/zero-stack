@@ -84,7 +84,8 @@ marker is a hard error like any anchor. Each add-on also appends a section to th
 in `AGENTS.md`.
 
 - `--account-deletion` (svelte): Delete-account section on `/settings`, confirmed with the
-  current password. `auth.ts` enables Better Auth `deleteUser`. `AGENTS.md` tells agents that
+  current password; the server always requires it (an `auth.ts` `before` hook returns 400 without
+  one, since Better Auth skips the password for fresh sessions). `auth.ts` enables Better Auth `deleteUser`. `AGENTS.md` tells agents that
   every user-owned table must reference `user.id` with `onDelete: "cascade"`. Known limit: a
   social-only account has no password and cannot delete itself there.
 - `--email` (svelte): `/forgot-password` and `/reset-password` pages, a "Forgot password?" link
@@ -162,7 +163,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   revoked, migration present, `.env` gitignored; `--email` reset mail in the dev inbox, link,
   new password signs in, bad or used token rejected, earlier sessions revoked;
   `--turnstile` sign-up, sign-in (and reset) refused without a token, accepted with the dummy
-  token; `--account-deletion` wrong password rejected, right password deletes; `--storage` 401
+  token; `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
   without a session, upload and download under `users/<id>/`, escaping names rejected (keys
   read back from the local R2 state), object gone after account deletion. The
   `STORAGE_PURGE_FAILED` path is covered by string tests only, not over HTTP.
