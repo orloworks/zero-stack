@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { validateFlags } from "../../src/flags";
+import { FEATURE_LIST, validateFlags } from "../../src/flags";
 
-const base = { tailwind: false, shadcn: false, zodRpc: false, auth: false };
+const base = { tailwind: false, shadcn: false, zodRpc: false, auth: false, accountDeletion: false, email: false, turnstile: false, storage: false };
 
 test("defaults: react, every installer off, no notes", () => {
   expect(validateFlags({ name: "my-app" })).toEqual({
@@ -17,7 +17,7 @@ test("every framework is accepted", () => {
 
 test("installer flags are recorded", () => {
   expect(validateFlags({ name: "x", tailwind: true, zodRpc: true, auth: true }).config).toEqual({
-    name: "x", framework: "react", tailwind: true, shadcn: false, zodRpc: true, auth: true,
+    name: "x", framework: "react", ...base, tailwind: true, zodRpc: true, auth: true,
   });
 });
 
@@ -54,4 +54,29 @@ test("rejects an unknown framework", () => {
   expect(() => validateFlags({ name: "x", framework: "angular" })).toThrow(
     "--framework must be one of: react, vue, svelte, solid.",
   );
+});
+
+test("svelte-only add-ons imply auth and say so", () => {
+  const r = validateFlags({ name: "x", framework: "svelte", email: true });
+  expect(r.config).toMatchObject({ email: true, auth: true });
+  expect(r.notes).toEqual(["--email implies --auth; enabling auth."]);
+  expect(validateFlags({ name: "x", framework: "svelte", email: true, auth: true }).notes).toEqual([]);
+});
+
+test("svelte-only add-ons are rejected on other frameworks, naming svelte", () => {
+  for (const [flag, key] of [["account-deletion", "accountDeletion"], ["email", "email"], ["turnstile", "turnstile"]])
+    for (const framework of ["react", "vue", "solid"])
+      expect(() => validateFlags({ name: "x", framework, [key]: true })).toThrow(
+        `--${flag} requires --framework svelte (got ${framework}); drop --${flag} or use --framework svelte.`,
+      );
+});
+
+test("--storage is accepted with any framework and implies auth", () => {
+  for (const framework of ["react", "vue", "svelte", "solid"])
+    expect(validateFlags({ name: "x", framework, storage: true }).config).toMatchObject({ storage: true, auth: true });
+});
+
+test("every feature has a unique flag and key", () => {
+  expect(new Set(FEATURE_LIST.map((f) => f.flag)).size).toBe(FEATURE_LIST.length);
+  expect(new Set(FEATURE_LIST.map((f) => f.key)).size).toBe(FEATURE_LIST.length);
 });

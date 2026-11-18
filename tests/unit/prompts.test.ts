@@ -12,13 +12,13 @@ const ui = (answers: Record<string, string | boolean>) => {
   return { asked, ui: { text: get, confirm: get } as Ui };
 };
 
-const yesAll = { "Project name": "my-app", "Add Tailwind?": true, "Add shadcn/ui?": true, "Add typed zod RPC?": true, "Add auth?": true };
+const yesAll = { "Project name": "my-app", "Add Tailwind?": true, "Add shadcn/ui?": true, "Add typed zod RPC?": true, "Add auth?": true, "Add account deletion?": true, "Add email?": true, "Add Turnstile?": true, "Add storage?": true };
 
 test("interactive and flag-only runs produce identical configs", async () => {
   const t = ui(yesAll);
   const filled = await fillPrompts({ framework: "react" }, t.ui);
   expect(validateFlags(filled).config).toEqual(
-    validateFlags({ name: "my-app", framework: "react", tailwind: true, shadcn: true, zodRpc: true, auth: true }).config,
+    validateFlags({ name: "my-app", framework: "react", tailwind: true, shadcn: true, zodRpc: true, auth: true, storage: true }).config,
   );
 });
 
@@ -30,7 +30,7 @@ test("a declined prompt equals an omitted flag", async () => {
 test("flags already given are never asked", async () => {
   const t = ui(yesAll);
   await fillPrompts({ name: "x", tailwind: true, auth: true }, t.ui);
-  expect(t.asked).toEqual(["Add shadcn/ui?", "Add typed zod RPC?"]);
+  expect(t.asked).toEqual(["Add shadcn/ui?", "Add typed zod RPC?", "Add storage?"]);
 });
 
 test("shadcn is not offered for a non-React framework", async () => {
@@ -43,4 +43,25 @@ test("shadcn flag skips the tailwind prompt", async () => {
   const t = ui(yesAll);
   await fillPrompts({ name: "x", shadcn: true }, t.ui);
   expect(t.asked).not.toContain("Add Tailwind?");
+});
+
+test("add-ons are asked only after auth is yes, and only those valid for the framework", async () => {
+  const no = ui({ ...yesAll, "Add auth?": false });
+  await fillPrompts({ name: "x", framework: "svelte" }, no.ui);
+  expect(no.asked).not.toContain("Add email?");
+  expect(no.asked).not.toContain("Add storage?");
+  const yes = ui(yesAll);
+  await fillPrompts({ name: "x", framework: "svelte" }, yes.ui);
+  expect(yes.asked.slice(-4)).toEqual(["Add account deletion?", "Add email?", "Add Turnstile?", "Add storage?"]);
+  const vue = ui(yesAll);
+  await fillPrompts({ name: "x", framework: "vue" }, vue.ui);
+  expect(vue.asked.slice(-1)).toEqual(["Add storage?"]);
+  expect(vue.asked).not.toContain("Add email?");
+});
+
+test("an add-on flag implies auth, so auth is not asked", async () => {
+  const t = ui(yesAll);
+  await fillPrompts({ name: "x", framework: "svelte", email: true }, t.ui);
+  expect(t.asked).not.toContain("Add auth?");
+  expect(t.asked).not.toContain("Add email?");
 });

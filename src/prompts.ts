@@ -1,5 +1,5 @@
 import { cancel, confirm, isCancel, text } from "@clack/prompts";
-import type { FlagInput } from "./flags";
+import { FEATURE_LIST, type FlagInput } from "./flags";
 
 export type Ui = {
   text(message: string): Promise<string>;
@@ -26,9 +26,12 @@ export async function fillPrompts(
 ): Promise<FlagInput> {
   const out = { ...input };
   out.name ??= await ui.text("Project name");
-  if (out.tailwind === undefined && !out.shadcn) out.tailwind = await ui.confirm("Add Tailwind?");
-  if (out.shadcn === undefined && (out.framework ?? "react") === "react") out.shadcn = await ui.confirm("Add shadcn/ui?");
-  out.zodRpc ??= await ui.confirm("Add typed zod RPC?");
-  out.auth ??= await ui.confirm("Add auth?");
+  for (const f of FEATURE_LIST) {
+    // Skipped when a feature already on implies this one, when the framework excludes it, or when what it requires is not on.
+    const implied = FEATURE_LIST.some((g) => g.requires === f.key && out[g.key]);
+    const allowed = !f.frameworks || f.frameworks.includes(out.framework ?? "react");
+    if (out[f.key] === undefined && !implied && allowed && (!f.requires || out[f.requires as keyof FlagInput]))
+      (out as Record<string, unknown>)[f.key] = await ui.confirm(f.prompt);
+  }
   return out as FlagInput;
 }
