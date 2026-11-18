@@ -4,9 +4,13 @@ import type { Config } from "../flags";
 const PAGE = "pages/settings.svelte";
 
 // Adds the Delete account section to the svelte Account page (marker left by installAuth). Svelte only (D33).
-// The copy is built from `files` so --storage can add its clause; #34 extends the error mapping at the "Incorrect password." line.
+// The copy is built from `files` so --storage can add its clause; --storage maps its partial-purge code to the D14 copy.
 export function installAccountDeletion(dir: string, config: Config): void {
   const files = config.storage ? " and uploaded files" : "";
+  // The purge runs before the user is deleted and aborts on any error, so some files may be gone while the account remains (D7, D14).
+  const partial = config.storage
+    ? ' : res.error.code === "STORAGE_PURGE_FAILED" ? "Your account was not deleted, but some of your files may already have been removed. Try again to finish deleting your account."'
+    : "";
   editFile(dir, PAGE, (s) => {
     s = replaceAnchor(s, "  let done = $state(false);\n", `  let done = $state(false);
 
@@ -27,7 +31,7 @@ export function installAccountDeletion(dir: string, config: Config): void {
       const res = await auth.deleteUser({ password: deletePassword });
       if (res.error) {
         wrongPassword = res.error.code === "INVALID_PASSWORD";
-        deleteError = wrongPassword ? "Incorrect password." : (res.error.message ?? "Couldn't delete the account.");
+        deleteError = wrongPassword ? "Incorrect password."${partial} : (res.error.message ?? "Couldn't delete the account.");
       } else {
         deleted = true;
       }

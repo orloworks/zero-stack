@@ -14,6 +14,29 @@ export const MAIL_TS = `export async function send(to: string, subject: string, 
 }
 `;
 
+// deleteUser with --storage (D7, D13): purge before deleting the user, and fail closed (the error aborts the deletion before any row is removed);
+// sweep again after, for an upload that raced the deletion. The thrown code is what the Account page maps to its partial-purge copy.
+const STORAGE_DELETE_USER = `  user: {
+    deleteUser: {
+      enabled: true,
+      beforeDelete: async (user) => {
+        try {
+          await purgeUserFiles(user.id);
+        } catch (e) {
+          console.error(\`storage purge failed for \${user.id}\`, e);
+          throw APIError.from("INTERNAL_SERVER_ERROR", { code: "STORAGE_PURGE_FAILED", message: "Could not delete the account's files." });
+        }
+      },
+      afterDelete: async (user) => {
+        try {
+          await purgeUserFiles(user.id);
+        } catch (e) {
+          console.error(\`storage resweep failed for \${user.id}\`, e);
+        }
+      },
+    },
+  },`;
+
 // The root auth.ts, written whole from the enabled features (one owner; add-ons contribute parts here, never patch the file).
 // Svelte only: react, vue and solid --auth keep v0.1 output (no auth.ts).
 export function composeAuthTs(config: Config): string {
@@ -38,10 +61,11 @@ export function composeAuthTs(config: Config): string {
       ? ['  plugins: [captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })],']
       : []),
     // Better Auth verifies the password sent to deleteUser; the Account page always sends it (D6).
-    ...(config.accountDeletion ? ["  user: { deleteUser: { enabled: true } },"] : []),
+    ...(config.accountDeletion ? [config.storage ? STORAGE_DELETE_USER : "  user: { deleteUser: { enabled: true } },"] : []),
   ];
+  const del = config.accountDeletion && config.storage;
   return `import { defineAuth } from "void/auth";
-${config.turnstile ? 'import { captcha } from "better-auth/plugins";\n' : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}
+${del ? 'import { APIError } from "better-auth/api";\n' : ""}${config.turnstile ? 'import { captcha } from "better-auth/plugins";\n' : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}
 export default defineAuth(({ defaults${config.turnstile ? ", env" : ""} }) => ({
   ...defaults,
 ${options.map((o) => o + "\n").join("")}}));

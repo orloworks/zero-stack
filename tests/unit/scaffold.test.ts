@@ -383,3 +383,52 @@ test("svelte --turnstile wires captcha in auth.ts, the helper, the guard, widget
   }
   expect(read("AGENTS.md")).toContain("void secret put TURNSTILE_SECRET_KEY");
 });
+
+const storageApp = (config: Record<string, unknown>) => {
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  return { dir, run: () => scaffold({ ...cfg, ...config } as any, dir, exec) };
+};
+
+test("--storage without --auth ships the helper and its test but no HTTP route", async () => {
+  const { dir, run } = storageApp({ storage: true });
+  await run();
+  for (const f of ["src/storage.ts", "tests/storage.test.ts"]) expect(existsSync(join(dir, f))).toBe(true);
+  expect(existsSync(join(dir, "routes/api/files"))).toBe(false);
+  expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain("No HTTP route ships without auth");
+});
+
+test("--storage with --auth adds requireAuth routes on any framework and leaves the pages alone", async () => {
+  for (const framework of ["react", "vue", "solid"] as const) {
+    const { dir, run } = storageApp({ framework, auth: true, storage: true });
+    await run();
+    const route = readFileSync(join(dir, "routes/api/files/[name].ts"), "utf8");
+    expect(route.match(/requireAuth\(c\)/g)).toHaveLength(3);
+    for (const m of ["PUT", "GET", "DELETE"]) expect(route).toContain(`export const ${m} =`);
+    expect(existsSync(join(dir, "auth.ts"))).toBe(false);
+    expect(readdirSync(join(dir, "pages")).sort()).toEqual(readdirSync(join(import.meta.dir, "../../template/auth", framework, "pages")).sort());
+  }
+});
+
+test("svelte --storage --account-deletion purges before and after deletion and mentions uploaded files; neither without --storage", async () => {
+  const on = storageApp({ framework: "svelte", auth: true, accountDeletion: true, storage: true });
+  await on.run();
+  const auth = readFileSync(join(on.dir, "auth.ts"), "utf8");
+  for (const t of ['import { purgeUserFiles } from "./src/storage"', "beforeDelete:", "afterDelete:", 'code: "STORAGE_PURGE_FAILED"']) expect(auth).toContain(t);
+  expect(auth.match(/user: \{/g)).toHaveLength(1);
+  const page = readFileSync(join(on.dir, "pages/settings.svelte"), "utf8");
+  for (const t of ["all its data and uploaded files.", "data and uploaded files have been", 'code === "STORAGE_PURGE_FAILED"', "Your account was not deleted, but some of your files may already have been removed. Try again to finish deleting your account."])
+    expect(page).toContain(t);
+
+  const off = storageApp({ framework: "svelte", auth: true, accountDeletion: true });
+  await off.run();
+  expect(readFileSync(join(off.dir, "auth.ts"), "utf8")).not.toMatch(/purgeUserFiles|beforeDelete/);
+  const offPage = readFileSync(join(off.dir, "pages/settings.svelte"), "utf8");
+  expect(offPage).not.toMatch(/uploaded files|STORAGE_PURGE_FAILED/);
+  expect(existsSync(join(off.dir, "src/storage.ts"))).toBe(false);
+});

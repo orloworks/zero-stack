@@ -156,6 +156,29 @@ try {
     const session = await fetch(`${base}/api/auth/get-session`, { headers: { cookie } }).then((r) => r.json() as Promise<any>);
     if (session?.user?.email !== email) throw new Error("auth get-session did not return the signed-in user");
     console.log("gate: auth sign-up -> sign-in -> session ok");
+    // --storage: routes are auth-gated and per-user. Keys are read back from the local R2 state (miniflare's _mf_objects) to prove what is stored.
+    const r2Keys = () => sqliteFiles(join(app, ".void")).flatMap((f) => {
+      const d = new Database(f, { readonly: true });
+      try { return (d.query("SELECT key FROM _mf_objects").all() as { key: string }[]).map((r) => r.key); } catch { return []; } finally { d.close(); }
+    });
+    const file = (name: string, init: RequestInit = {}) => fetch(`${base}/api/files/${name}`, { redirect: "manual", ...init });
+    const storageUser = config.storage ? ((await fetch(`${base}/api/auth/get-session`, { headers: { cookie } }).then((r) => r.json() as Promise<any>)).user.id as string) : "";
+    if (config.storage) {
+      if ((await file("a.txt", { method: "PUT", body: "nope" })).status !== 401) throw new Error("unauthenticated upload was not 401");
+      for (const m of ["GET", "DELETE"]) if ((await file("a.txt", { method: m })).status !== 401) throw new Error(`unauthenticated ${m} was not 401`);
+      const put = await file("a.txt", { method: "PUT", body: "hello storage", headers: { cookie, "content-type": "text/plain" } });
+      if (put.status !== 201) throw new Error(`upload -> ${put.status}`);
+      const got = await file("a.txt", { headers: { cookie } });
+      if ((await got.text()) !== "hello storage" || got.headers.get("content-disposition") !== "attachment" || got.headers.get("x-content-type-options") !== "nosniff")
+        throw new Error("download lost the body or the attachment/nosniff headers");
+      for (const bad of ["..", "%2e%2e", "a%2Fb", "%2e%2e%2Fusers%2Fother%2Fa.txt"]) {
+        const r = await file(bad, { method: "PUT", body: "x", headers: { cookie } });
+        if (r.status < 400 || r.status >= 500) throw new Error(`PUT ${bad} -> ${r.status}, expected a 4xx`);
+      }
+      const keys = r2Keys();
+      if (keys.join() !== `users/${storageUser}/a.txt`) throw new Error(`R2 holds ${JSON.stringify(keys)}, expected only users/${storageUser}/a.txt`);
+      console.log("gate: storage routes 401 without a session; upload/download under users/<id>/; escaping names rejected");
+    }
     // Route pages for the enabled features; the loader is a file, not a route, so it is checked separately.
     const routes = ["sign-in", "sign-up", ...(config.framework === "svelte" ? ["settings"] : []), ...(config.email ? ["forgot-password", "reset-password"] : [])];
     const pageNames = readdirSync(join(app, "pages")).filter((f) => !f.includes(".server.")).map((f) => f.replace(/\.[^.]+$/, ""));
@@ -255,6 +278,10 @@ try {
         if ((await sessionOf(live))?.user) throw new Error("session survived account deletion");
         if ((await post("/api/auth/sign-in/email", { email, password: next })).ok) throw new Error("deleted account still signs in");
         console.log("gate: delete-user wrong password rejected (account still signs in), right password deletes the account");
+        if (config.storage) {
+          if (r2Keys().length) throw new Error(`account deleted but R2 still holds ${JSON.stringify(r2Keys())}`);
+          console.log("gate: uploaded object gone after account deletion");
+        }
       }
     }
     const migrations = readdirSync(join(app, "db/migrations")).filter((f) => f.endsWith(".sql"));

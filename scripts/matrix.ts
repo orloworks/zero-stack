@@ -11,6 +11,8 @@ export const MATRIX: { name: string; args: string[] }[] = [
   { name: "svelte-account-deletion", args: ["--framework", "svelte", "--account-deletion"] },
   { name: "svelte-email", args: ["--framework", "svelte", "--auth", "--email"] },
   { name: "svelte-turnstile", args: ["--framework", "svelte", "--auth", "--turnstile"] },
+  { name: "storage", args: ["--storage"] },
+  { name: "svelte-storage-deletion", args: ["--framework", "svelte", "--storage", "--account-deletion"] },
   { name: "tailwind", args: ["--tailwind"] },
   { name: "zod-rpc", args: ["--zod-rpc"] },
 ];

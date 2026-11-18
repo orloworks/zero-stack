@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles } from "./agent-files";
 import type { Config } from "./flags";
 import { installAuth } from "./installers/auth";
+import { installStorage } from "./installers/storage";
 import { installShadcn } from "./installers/shadcn";
 import { installTailwind } from "./installers/tailwind";
 import { installZodRpc } from "./installers/zod-rpc";
@@ -76,6 +77,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     if (config.zodRpc) installZodRpc(targetDir);
     if (config.shadcn) installShadcn(targetDir);
     if (config.auth) installAuth(targetDir, config);
+    if (config.storage) installStorage(targetDir, config);
     addAppScripts(targetDir);
     await exec([process.execPath, "install"], targetDir);
     // Leaves the auth migration generated, not applied to any database.
