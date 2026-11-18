@@ -19,7 +19,9 @@ export type Feature = { flag: string; key: FeatureKey; label: string; prompt: st
 export type FeatureKey = (typeof FEATURES)[number]["key"];
 export const FEATURE_LIST: readonly Feature[] = FEATURES;
 
-export type Config = { name: string; framework: Framework } & Record<FeatureKey, boolean>;
+// Add-on keys are optional so hand-built configs (test fixtures) need not list them; validateFlags always sets every key.
+type AddOnKey = "accountDeletion" | "email" | "turnstile" | "storage";
+export type Config = { name: string; framework: Framework } & Record<Exclude<FeatureKey, AddOnKey>, boolean> & Partial<Record<AddOnKey, boolean>>;
 export type FlagInput = Partial<Omit<Config, "framework">> & { name: string; framework?: string };
 
 export function validateFlags(input: FlagInput): { config: Config; notes: string[] } {

@@ -22,7 +22,7 @@ try {
   let input: Partial<FlagInput> = {
     name: positionals[0] && basename(resolve(positionals[0])),
     framework: values.framework,
-    ...Object.fromEntries(FEATURE_LIST.map((f) => [f.key, values[f.flag]])),
+    ...Object.fromEntries(FEATURE_LIST.map((f) => [f.key, (values as Record<string, boolean | undefined>)[f.flag]])),
   };
   // shortcut: bad flags are only reported after the prompts finish; validate-first if that annoys.
   if (interactive) input = await fillPrompts(input, clackUi);
