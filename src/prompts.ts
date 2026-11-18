@@ -26,12 +26,13 @@ export async function fillPrompts(
 ): Promise<FlagInput> {
   const out = { ...input };
   out.name ??= await ui.text("Project name");
+  const impliedOn = (key: string) => FEATURE_LIST.some((g) => g.requires === key && out[g.key]);
   for (const f of FEATURE_LIST) {
     // Skipped when a feature already on implies this one, when the framework excludes it, or when auth (add-ons) is off.
     // shadcn is asked even when Tailwind was declined; choosing it implies Tailwind (validateFlags).
-    const implied = FEATURE_LIST.some((g) => g.requires === f.key && out[g.key]);
+    const implied = impliedOn(f.key);
     const allowed = !f.frameworks || f.frameworks.includes(out.framework ?? "react");
-    if (out[f.key] === undefined && !implied && allowed && (f.requires !== "auth" || out.auth))
+    if (out[f.key] === undefined && !implied && allowed && (f.requires !== "auth" || out.auth || impliedOn("auth")))
       (out as Record<string, unknown>)[f.key] = await ui.confirm(f.prompt);
   }
   return out as FlagInput;
