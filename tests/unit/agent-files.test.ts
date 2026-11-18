@@ -72,7 +72,7 @@ test("--secrets AGENTS.md documents push as a one-time seed, the naming conventi
     "^[A-Z][A-Z0-9_]*$", "__VOID_", "_PREVIOUS", "env.ts",
     "umask 077", "mktemp", "trap 'rm -f \"$f\"' EXIT",
     "infisical export --env=prod --format=dotenv --expand=false --silent | grep -v '^VITE_' > \"$f\"",
-    "void secret sync \"$f\" --yes", "infisical run --env=prod -- void deploy", "Workers sync",
+    "void secret sync \"$f\" --yes", "\n) && infisical run --env=prod -- void deploy", "Workers sync",
   ])
     expect(agents).toContain(s);
 });
