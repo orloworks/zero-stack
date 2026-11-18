@@ -12,4 +12,6 @@ export const TRUSTED_DEPENDENCIES = ["esbuild", "workerd", "sharp"];
 
 // void@1.8.0's `^2.0.0-beta.v.15` range picks @cloudflare/vite-plugin@2.0.0-rc.0 (2026-11-16), which writes
 // Build Output v1 while void's build-output-utils@0.9 reads v0, so `vp build` fails. Drop on the next void pin.
-export const OVERRIDES = { "@cloudflare/vite-plugin": "2.0.0-beta.v.17" };
+// vite-plus@1.7.0 (2026-11-17) expects @voidzero-dev/vite-plus-core@8.3.8000, but create-void's
+// `vite: npm:@voidzero-dev/vite-plus-core@^1.6.0` can't reach it, so `vp build` fails. Drop on the next void pin.
+export const OVERRIDES = { "@cloudflare/vite-plugin": "2.0.0-beta.v.17", "vite-plus": "1.6.0" };

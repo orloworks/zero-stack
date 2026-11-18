@@ -3,8 +3,10 @@
 // --force ignores that cache (prepublishOnly: publishing never trusts it).
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { onTerminate, spawnTracked } from "../src/children";
+import { CREATE_VOID } from "../src/versions";
 import { MATRIX } from "./matrix";
 
 export const MAX_PARALLEL = 2;
@@ -51,6 +53,9 @@ if (import.meta.main) {
   const green: Record<string, string> = existsSync(greenFile) ? JSON.parse(readFileSync(greenFile, "utf8")) : {};
   onTerminate(() => {}, 20_000); // each gate cleans up on SIGTERM; wait for them before exiting
   const node = nodeVersion(); // once per run; every permutation shares the same PATH
+  // Install create-void into bun's shared cache once: two cold `bun x` runs in parallel race on the link (EEXIST).
+  // Exit code ignored: without a project name it exits 1 after installing.
+  Bun.spawnSync([process.execPath, "x", `create-void@${CREATE_VOID}`, "--help"], { cwd: tmpdir(), stdin: "ignore", stdout: "ignore", stderr: "ignore" });
   const t0 = Date.now();
   const status: Record<string, string> = {};
 
@@ -70,7 +75,11 @@ if (import.meta.main) {
       status[p.name] = `passed (${secs}s)`;
     } else {
       status[p.name] = `FAILED (${secs}s)`;
-      console.error(`--- ${p.name} output (tail) ---\n${(out + err).split("\n").slice(-40).join("\n")}`);
+      const why = `${out}\n${err}`.split("\n").find((l) => l.startsWith("gate failed:"));
+      const killed = child.signalCode ? ` (killed by ${child.signalCode})` : "";
+      console.error(`--- ${p.name} failed${killed}: ${why ?? "no 'gate failed:' line"} ---`);
+      const tail = (label: string, t: string) => `[${label}]\n${t.split("\n").slice(-40).join("\n")}`;
+      console.error(`${tail("stdout", out)}\n${tail("stderr", err)}`);
     }
     console.log(`${p.name}: ${status[p.name]}`);
     return code === 0;

@@ -64,6 +64,7 @@ export const graceMs = () => Math.max(5000, ...graces.values());
 const onSignal = (sig: keyof typeof handlers) => async () => {
   if (down) return;
   down = true;
+  console.error(`received ${sig}, stopping children and cleaning up`);
   await killChildren(graceMs());
   for (const c of cleanups) try { c(); } catch {}
   process.exit(handlers[sig]);

@@ -240,3 +240,189 @@ test("zod-rpc refuses to overwrite an existing routes/api/echo.ts", async () => 
   await expect(scaffold({ ...cfg, zodRpc: true }, dir, withEcho)).rejects.toThrow(/echo\.ts" already exists.*create-void@\d/);
   expect(existsSync(dir)).toBe(false);
 });
+
+const authApp = (framework: "react" | "vue" | "svelte" | "solid") => {
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  return { dir, run: () => scaffold({ ...cfg, framework, auth: true }, dir, exec) };
+};
+
+test("react, vue and solid --auth keep v0.1 output: sign-in/up only, no auth.ts, no Account note", async () => {
+  const want: Record<string, string[]> = { react: ["sign-in.tsx", "sign-up.tsx"], vue: ["sign-in.vue", "sign-up.vue"], solid: ["sign-in.tsx", "sign-up.tsx"] };
+  for (const fw of ["react", "vue", "solid"] as const) {
+    const { dir, run } = authApp(fw);
+    await run();
+    expect(readdirSync(join(dir, "pages")).sort()).toEqual(want[fw]!);
+    for (const f of want[fw]!)
+      expect(readFileSync(join(dir, "pages", f), "utf8")).toBe(readFileSync(join(import.meta.dir, "../../template/auth", fw, "pages", f), "utf8"));
+    expect(existsSync(join(dir, "auth.ts"))).toBe(false);
+    expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).not.toContain("/settings");
+  }
+});
+
+test("svelte --auth ships /settings with its loader, a plain composed auth.ts and the AGENTS.md note", async () => {
+  const { dir, run } = authApp("svelte");
+  await run();
+  expect(readdirSync(join(dir, "pages")).sort()).toEqual(["settings.server.ts", "settings.svelte", "sign-in.svelte", "sign-up.svelte"]);
+  expect(readFileSync(join(dir, "auth.ts"), "utf8")).toBe(
+    'import { defineAuth } from "void/auth";\n\nexport default defineAuth(({ defaults }) => ({\n  ...defaults,\n}));\n',
+  );
+  expect(readFileSync(join(dir, "pages/settings.svelte"), "utf8")).toContain("<!-- zero-stack:account-deletion -->");
+  expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain("`/settings`");
+});
+
+test("svelte --account-deletion adds the Delete account section, deleteUser in auth.ts and the AGENTS.md rules; absent without the flag", async () => {
+  const off = authApp("svelte");
+  await off.run();
+  expect(readFileSync(join(off.dir, "pages/settings.svelte"), "utf8")).not.toContain("Delete account");
+  expect(readFileSync(join(off.dir, "auth.ts"), "utf8")).not.toContain("deleteUser");
+  expect(readFileSync(join(off.dir, "AGENTS.md"), "utf8")).not.toContain("onDelete");
+
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  await scaffold({ ...cfg, framework: "svelte", auth: true, accountDeletion: true }, dir, exec);
+  const page = readFileSync(join(dir, "pages/settings.svelte"), "utf8");
+  for (const s of ["Delete account permanently", "It can't be undone.", "Incorrect password.", "Account deleted", "Back to home", "Deleting account…"])
+    expect(page).toContain(s);
+  expect(page).not.toContain("uploaded files");
+  expect(page).not.toContain("zero-stack:account-deletion");
+  const authTs = readFileSync(join(dir, "auth.ts"), "utf8");
+  expect(authTs).toContain("deleteUser: { enabled: true }");
+  for (const s of ['import { APIError, createAuthMiddleware } from "better-auth/api";', 'ctx.path === "/delete-user"', 'new APIError("BAD_REQUEST"']) expect(authTs).toContain(s);
+  const agents = readFileSync(join(dir, "AGENTS.md"), "utf8");
+  expect(agents).toContain('onDelete: "cascade"');
+  expect(agents).toContain("social-only");
+});
+
+test("svelte sign-in/up keep the D28 contract and carry one anchor per later add-on part", async () => {
+  const { dir, run } = authApp("svelte");
+  await run();
+  const read = (f: string) => readFileSync(join(dir, "pages", f), "utf8");
+  const count = (s: string, m: string) => s.split(`<!-- zero-stack:${m} -->`).length - 1;
+  const [inn, up] = [read("sign-in.svelte"), read("sign-up.svelte")];
+  for (const m of ["sign-in-notice", "sign-in-forgot-link", "turnstile"]) expect(count(inn, m)).toBe(1);
+  expect(count(up, "turnstile")).toBe(1);
+  expect(inn.indexOf("sign-in-forgot-link")).toBeGreaterThan(inn.indexOf('id="password"'));
+  expect(inn.indexOf("zero-stack:turnstile")).toBeLessThan(inn.indexOf('type="submit"'));
+  for (const [s, fail, busy] of [[inn, "Sign in failed", "Signing in…"], [up, "Sign up failed", "Creating account…"]] as const) {
+    for (const t of ['location.href = "/"', fail, busy, 'role="alert"', "Something went wrong. Check your connection and try again."]) expect(s).toContain(t);
+    expect(s).not.toContain("placeholder");
+  }
+  expect(up).toContain('minlength="8"');
+  expect(inn).toContain('href="/sign-up"');
+  expect(up).toContain('href="/sign-in"');
+});
+
+test("svelte --email adds forgot/reset pages, sign-in edits, send() in auth.ts, the harness test and the AGENTS.md note; absent without the flag", async () => {
+  const off = authApp("svelte");
+  await off.run();
+  expect(readdirSync(join(off.dir, "pages"))).not.toContain("forgot-password.svelte");
+  expect(readFileSync(join(off.dir, "auth.ts"), "utf8")).not.toContain("sendResetPassword");
+  expect(readFileSync(join(off.dir, "AGENTS.md"), "utf8")).not.toContain("mail domain");
+
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  await scaffold({ ...cfg, framework: "svelte", auth: true, email: true }, dir, exec);
+  const read = (f: string) => readFileSync(join(dir, f), "utf8");
+  expect(readdirSync(join(dir, "pages"))).toEqual(expect.arrayContaining(["forgot-password.svelte", "reset-password.svelte"]));
+  const forgot = read("pages/forgot-password.svelte");
+  for (const t of ["requestPasswordReset", 'redirectTo: "/reset-password"', "If an account exists for that email", "Couldn't send the reset link. Try again.", "Sending link…", "Back to sign in"]) expect(forgot).toContain(t);
+  expect(forgot.indexOf("<!-- zero-stack:turnstile -->")).toBeLessThan(forgot.indexOf('type="submit"'));
+  const reset = read("pages/reset-password.svelte");
+  for (const t of ["history.replaceState", 'content="no-referrer"', "INVALID_TOKEN", "This reset link has expired or was already used.", "Request a new link", "Choose a new password", "/sign-in?reset=1"]) expect(reset).toContain(t);
+  const inn = read("pages/sign-in.svelte");
+  for (const t of ["Forgot password?", "Password updated. Sign in with your new password."]) expect(inn).toContain(t);
+  expect(inn).not.toMatch(/zero-stack:sign-in-(notice|forgot-link)/);
+  expect(inn).toContain("<!-- zero-stack:turnstile -->");
+  const auth = read("auth.ts");
+  for (const t of ["sendResetPassword", "sendVerificationEmail", "sendOnSignUp: true", "revokeSessionsOnPasswordReset: true", 'from "./src/mail"']) expect(auth).toContain(t);
+  for (const t of ["result.deliveries", "result.error", "console.error", "throw new Error"]) expect(read("src/mail.ts")).toContain(t);
+  expect(auth).not.toContain("requireEmailVerification");
+  expect(read("tests/auth-email.test.ts")).toContain("createEmailTestHarness");
+  expect(read("AGENTS.md")).toContain("mail domain");
+});
+
+test("svelte --turnstile wires captcha in auth.ts, the helper, the guard, widget pages, the test secret and the AGENTS.md note; absent without the flag", async () => {
+  const off = authApp("svelte");
+  await off.run();
+  expect(readFileSync(join(off.dir, "auth.ts"), "utf8")).not.toContain("captcha");
+  expect(existsSync(join(off.dir, "src/lib/turnstile.ts"))).toBe(false);
+
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  await scaffold({ ...cfg, framework: "svelte", auth: true, email: true, turnstile: true }, dir, exec);
+  const read = (f: string) => readFileSync(join(dir, f), "utf8");
+  const auth = read("auth.ts");
+  for (const t of ['from "better-auth/plugins"', 'provider: "cloudflare-turnstile"', "turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL)", "{ defaults, env }"]) expect(auth).toContain(t);
+  expect(read("env.ts")).toContain('VITE_TURNSTILE_SITE_KEY: string().default("1x00000000000000000000AA")');
+  expect(read(".env")).toContain("TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA");
+  for (const f of ["src/lib/turnstile.ts", "src/turnstile-guard.ts", "tests/turnstile.test.ts", "tests/turnstile-guard.test.ts"]) expect(existsSync(join(dir, f))).toBe(true);
+  for (const page of ["sign-in", "sign-up", "forgot-password"]) {
+    const p = read(`pages/${page}.svelte`);
+    expect(p).not.toContain("zero-stack:turnstile");
+    for (const t of ["mountTurnstile", "x-captcha-response", "turnstile?.reset()", "t.dispose()", "Completing a quick check…", "Couldn't load the verification check. Reload the page to try again.", "disabled={pending || !token}"]) expect(p).toContain(t);
+    expect(p.indexOf("bind:this={turnstileEl}")).toBeLessThan(p.indexOf('type="submit"'));
+  }
+  expect(read("AGENTS.md")).toContain("void secret put TURNSTILE_SECRET_KEY");
+});
+
+const storageApp = (config: Record<string, unknown>) => {
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  return { dir, run: () => scaffold({ ...cfg, ...config } as any, dir, exec) };
+};
+
+test("--storage with --auth adds requireAuth routes on any framework and leaves the pages alone", async () => {
+  for (const framework of ["react", "vue", "solid"] as const) {
+    const { dir, run } = storageApp({ framework, auth: true, storage: true });
+    await run();
+    const route = readFileSync(join(dir, "routes/api/files/[name].ts"), "utf8");
+    expect(route.match(/requireAuth\(c\)/g)).toHaveLength(3);
+    for (const m of ["PUT", "GET", "DELETE"]) expect(route).toContain(`export const ${m} =`);
+    expect(existsSync(join(dir, "auth.ts"))).toBe(false);
+    expect(readdirSync(join(dir, "pages")).sort()).toEqual(readdirSync(join(import.meta.dir, "../../template/auth", framework, "pages")).sort());
+  }
+});
+
+test("svelte --storage --account-deletion purges before and after deletion and mentions uploaded files; neither without --storage", async () => {
+  const on = storageApp({ framework: "svelte", auth: true, accountDeletion: true, storage: true });
+  await on.run();
+  const auth = readFileSync(join(on.dir, "auth.ts"), "utf8");
+  for (const t of ['import { purgeUserFiles } from "./src/storage"', "beforeDelete:", "afterDelete:", 'code: "STORAGE_PURGE_FAILED"']) expect(auth).toContain(t);
+  expect(auth.match(/user: \{/g)).toHaveLength(1);
+  const page = readFileSync(join(on.dir, "pages/settings.svelte"), "utf8");
+  for (const t of ["all its data and uploaded files.", "data and uploaded files have been", 'code === "STORAGE_PURGE_FAILED"', "Your account was not deleted, but some of your files may already have been removed. Try again to finish deleting your account."])
+    expect(page).toContain(t);
+
+  const off = storageApp({ framework: "svelte", auth: true, accountDeletion: true });
+  await off.run();
+  expect(readFileSync(join(off.dir, "auth.ts"), "utf8")).not.toMatch(/purgeUserFiles|beforeDelete/);
+  const offPage = readFileSync(join(off.dir, "pages/settings.svelte"), "utf8");
+  expect(offPage).not.toMatch(/uploaded files|STORAGE_PURGE_FAILED/);
+  expect(existsSync(join(off.dir, "src/storage.ts"))).toBe(false);
+});

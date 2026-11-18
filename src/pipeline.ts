@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { writeAgentFiles } from "./agent-files";
 import type { Config } from "./flags";
 import { installAuth } from "./installers/auth";
+import { installStorage } from "./installers/storage";
 import { installShadcn } from "./installers/shadcn";
 import { installTailwind } from "./installers/tailwind";
 import { installZodRpc } from "./installers/zod-rpc";
@@ -75,12 +76,13 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     if (config.tailwind) installTailwind(targetDir);
     if (config.zodRpc) installZodRpc(targetDir);
     if (config.shadcn) installShadcn(targetDir);
-    if (config.auth) installAuth(targetDir, config.framework);
+    if (config.auth) installAuth(targetDir, config);
+    if (config.storage) installStorage(targetDir);
     addAppScripts(targetDir);
     await exec([process.execPath, "install"], targetDir);
     // Leaves the auth migration generated, not applied to any database.
     if (config.auth) await exec([join(targetDir, "node_modules/.bin/void"), "db", "generate"], targetDir);
-    writeAgentFiles(targetDir); // before vp check so the block gets formatted too
+    writeAgentFiles(targetDir, config); // before vp check so the block gets formatted too
     // create-void 1.8.0 output fails its own `vp check` on formatting (docs/facts.md).
     await exec([join(targetDir, "node_modules/.bin/vp"), "check", "--fix"], targetDir);
   } catch (e) {
