@@ -125,6 +125,32 @@ Void imports `void/email` and `void/storage` lazily in generated helpers: its pl
   fail, are logged, and the user gets no mail.
 - Always: `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` for the deployed origin.
 
+## `--secrets infisical`
+
+Implies `--auth`. The scaffold never calls Infisical and works offline. It copies a
+dependency-free `scripts/secrets.ts` (`node:` APIs only) and adds `secrets:pull` and
+`secrets:push`; `.env` and `.env.pull-tmp` are gitignored. Both commands need a link file
+(`.infisical.yaml`, or legacy `.infisical.json`), which the owner's `secret-sync` skill or
+`infisical init --project-id <id>` creates; the scaffold writes neither.
+
+- `secrets:push`: `infisical secrets set --file .env --env=dev --silent`, a one-time seed that
+  overwrites Infisical values. Prints only the key count, on exit 0. Refuses before calling
+  Infisical when a `.env` name breaks key naming rule 1, 5 or 6. On failure: exit 1,
+  `infisical exited <code>`, a note that some keys may already be set, and the command to rerun.
+- `secrets:pull`: replaces `.env` with the `dev` environment, verbatim, mode 0600; refuses an
+  export lacking any key the current `.env` has.
+- Infisical's stdout and stderr are captured and never printed.
+- Key naming convention: upper snake case `^[A-Z][A-Z0-9_]*$`; one name in `env.ts`, `.env`,
+  every environment and the Worker; provider prefix first; `VITE_` names are public and never
+  contain SECRET, PASSWORD, TOKEN or PRIVATE; never `__VOID_` or `VOID_`; `env.ts` lists every
+  app key except Void-owned `BETTER_AUTH_*`.
+- Production (documentation in AGENTS.md, no script): server keys via `infisical export
+  --env=prod` minus `VITE_` lines into a private `mktemp` file, then `void secret sync "$f" --yes`;
+  client keys via `infisical run --env=prod -- void deploy`.
+- Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its
+  first sync overwrites Worker secrets), production or preview scripts, other secret managers,
+  writing `.infisical.yaml` or creating Infisical projects, `infisical run` for dev.
+
 ## Generated app
 
 Scripts: `verify` (`void prepare && vp check && tsc --noEmit && vp build && vp test`), `test`,
@@ -190,7 +216,7 @@ pnpm/npm support, Playwright, magicast, rollback tracker, `void-stack.json`.
 
 Data export, grace-period (soft) deletion, Stripe/billing, add-ons for react/vue/solid (D33:
 only `--storage` is framework-agnostic), social providers, and the rest of the roadmap: wave 2
-(orgs, admin, 2FA), #17 referrals, #18 affiliate, #26 Infisical secrets.
+(orgs, admin, 2FA), #17 referrals, #18 affiliate.
 
 ## Open facts to verify during build
 

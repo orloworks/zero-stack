@@ -434,10 +434,12 @@ test("secrets adds scripts/secrets.ts, the secrets:pull script and the .env.pull
   const on = seeded("<!--/injected-by-void-->\n");
   await scaffold({ ...cfg, secrets: true }, on.dir, on.exec);
   expect(JSON.parse(readFileSync(join(on.dir, "package.json"), "utf8")).scripts["secrets:pull"]).toBe("bun scripts/secrets.ts pull");
+  expect(JSON.parse(readFileSync(join(on.dir, "package.json"), "utf8")).scripts["secrets:push"]).toBe("bun scripts/secrets.ts push");
   expect(existsSync(join(on.dir, "scripts/secrets.ts"))).toBe(true);
   expect(readFileSync(join(on.dir, ".gitignore"), "utf8").split("\n")).toContain(".env.pull-tmp");
   const off = seeded("<!--/injected-by-void-->\n");
   await scaffold(cfg, off.dir, off.exec);
   expect(JSON.parse(readFileSync(join(off.dir, "package.json"), "utf8")).scripts["secrets:pull"]).toBeUndefined();
+  expect(JSON.parse(readFileSync(join(off.dir, "package.json"), "utf8")).scripts["secrets:push"]).toBeUndefined();
   expect(existsSync(join(off.dir, "scripts/secrets.ts"))).toBe(false);
 });

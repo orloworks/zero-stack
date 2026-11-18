@@ -56,7 +56,20 @@ A `create-void` app (vite-plus toolchain, sqlite starter, git) plus your chosen 
   as `noreply@example.com`); without a mail domain sends fail and are logged.
 - Set `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` for the deployed origin.
 
-Not included: data export, grace-period deletion, Stripe, orgs/admin/2FA (later waves), #17 referrals, #18 affiliate app, #26 Infisical secrets.
+Not included: data export, grace-period deletion, Stripe, orgs/admin/2FA (later waves), #17 referrals, #18 affiliate app.
+
+## `--secrets infisical`
+
+Implies `--auth`. Adds `bun run secrets:push` (one-time seed of the Infisical `dev` environment
+from `.env`; overwrites Infisical values; prints only a key count) and `bun run secrets:pull`
+(replaces `.env` from `dev`). Link the folder first (`secret-sync` skill or `infisical init
+--project-id <id>`). `push` refuses names that break the key naming convention (upper snake
+case, no `VITE_` name containing SECRET/PASSWORD/TOKEN/PRIVATE, never `VOID_`/`__VOID_`).
+Infisical output is never printed. The generated `AGENTS.md` documents the production route
+(`void secret sync` for server keys, `infisical run --env=prod -- void deploy` for client keys).
+
+Out of scope: network calls from the scaffold, Infisical's Cloudflare Workers sync (overwrites
+Worker secrets), production scripts, other secret managers, creating Infisical projects.
 
 ## Cloudflare routing
 

@@ -46,3 +46,9 @@ test("every key declared in a template env.ts follows the naming convention", ()
     for (const k of keys) expect([f, k, broken(k)]).toEqual([f, k, []]);
   }
 });
+
+test("the template push script enforces the same three rules as the checker above", () => {
+  const src = readFileSync(join(templates, "secrets/scripts/secrets.ts"), "utf8");
+  for (const re of ["/^[A-Z][A-Z0-9_]*$/", "/^VITE_/", "/SECRET|PASSWORD|TOKEN|PRIVATE/", "/^(__VOID_|VOID_)/"])
+    expect(src).toContain(re);
+});

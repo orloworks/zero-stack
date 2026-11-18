@@ -367,6 +367,28 @@ try {
     // The script itself rejects an unknown subcommand.
     r = pull({}, ["scripts/secrets.ts", "bogus"]);
     check(r.code === 1 && r.out.includes("Usage"), `unknown subcommand exited ${r.code}`);
+    // secrets:push. .env is now the pulled export (3 keys); the fake prints a value on both streams.
+    const pushed = readFileSync(envFile);
+    rmSync(log, { force: true });
+    r = pull({ FAKE_STDERR: "LEAKED-sk_live_abc123" }, ["run", "secrets:push"]);
+    check(r.code === 0 && /Pushed 3 keys/.test(r.out) && !r.out.includes("LEAKED") && !r.out.includes("pulled"), `push ok exited ${r.code}, output: ${r.out}`);
+    check(readFileSync(log, "utf8").trim() === "secrets set --file .env --env=dev --silent", `push ran infisical with ${readFileSync(log, "utf8")}`);
+    rmSync(log);
+    r = pull({ FAKE_STDERR: "LEAKED-sk_live_abc123", FAKE_EXIT: "4" }, ["run", "secrets:push"]);
+    check(r.code === 1 && r.out.includes("infisical exited 4") && r.out.includes("may already have been set") && r.out.includes("Rerun by hand")
+      && !/Pushed/.test(r.out) && !r.out.includes("LEAKED") && !r.out.includes("pulled"), `failing push exited ${r.code}, output: ${r.out}`);
+    // Bad names: refused before infisical runs; names listed, values not.
+    rmSync(log);
+    writeFileSync(envFile, "lower_case=VALUE-ONE\nVITE_API_TOKEN=VALUE-TWO\nVOID_X=VALUE-THREE\nGOOD_KEY=VALUE-FOUR\n");
+    r = pull({}, ["run", "secrets:push"]);
+    check(r.code === 1 && ["lower_case", "VITE_API_TOKEN", "VOID_X"].every((n) => r.out.includes(n)) && !r.out.includes("GOOD_KEY") && !r.out.includes("VALUE-"), `bad names exited ${r.code}, output: ${r.out}`);
+    check(!existsSync(log), "push with bad names still ran infisical");
+    writeFileSync(envFile, pushed);
+    // No link file.
+    rmSync(join(app, ".infisical.json"));
+    r = pull({}, ["run", "secrets:push"]);
+    check(r.code === 1 && r.out.includes("secret-sync") && r.out.includes("infisical init --project-id") && !existsSync(log), `push without a link file exited ${r.code}, output: ${r.out}`);
+    console.log("gate: secrets:push sends the exact argv and prints only the key count; refuses bad names, no link and an infisical failure without leaking a value");
     console.log("gate: secrets:pull refuses without a link / on a missing key / on an infisical failure (.env untouched, nothing leaked); ok pull is verbatim 0600");
   }
 } catch (e) {

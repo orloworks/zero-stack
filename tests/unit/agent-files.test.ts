@@ -62,3 +62,17 @@ test("--secrets adds an AGENTS.md section on linking, what pull does and what it
   await scaffold({ name: "app", framework: "react", tailwind: false, shadcn: false, zodRpc: false, auth: false }, off, fake(off));
   expect(readFileSync(join(off, "AGENTS.md"), "utf8")).not.toContain("## Secrets");
 });
+
+test("--secrets AGENTS.md documents push as a one-time seed, the naming convention and the production route", async () => {
+  const on = join(tmp(), "app");
+  await scaffold({ name: "app", framework: "react", tailwind: false, shadcn: false, zodRpc: false, auth: false, secrets: true }, on, fake(on));
+  const agents = readFileSync(join(on, "AGENTS.md"), "utf8");
+  for (const s of [
+    "bun run secrets:push", "one-time seed", "overwrites", "some keys may already have been set",
+    "^[A-Z][A-Z0-9_]*$", "__VOID_", "_PREVIOUS", "env.ts",
+    "umask 077", "mktemp", "trap 'rm -f \"$f\"' EXIT",
+    "infisical export --env=prod --format=dotenv --expand=false --silent | grep -v '^VITE_' > \"$f\"",
+    "void secret sync \"$f\" --yes", "infisical run --env=prod -- void deploy", "Workers sync",
+  ])
+    expect(agents).toContain(s);
+});
