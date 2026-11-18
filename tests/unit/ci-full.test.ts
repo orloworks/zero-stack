@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hash, isGreen, nodeVersion, runPool } from "../../scripts/ci-full";
 import { MATRIX } from "../../scripts/matrix";
-import { FEATURE_LIST, validateFlags } from "../../src/flags";
+import { argv, FEATURE_LIST, validateFlags } from "../../src/flags";
 
 test("never more than 2 in flight", async () => {
   let live = 0, peak = 0;
@@ -31,7 +31,7 @@ test("a failure stops new work but lets in-flight finish", async () => {
 test("every matrix entry is a valid flag set", () => {
   for (const p of MATRIX) {
     const a = p.args, i = a.indexOf("--framework");
-    const on = Object.fromEntries(FEATURE_LIST.map((f) => [f.key, a.includes(`--${f.flag}`)]));
+    const on = Object.fromEntries(FEATURE_LIST.map((f) => [f.key, a.join(" ").includes(argv(f).join(" "))]));
     expect(() => validateFlags({ name: "x", framework: i >= 0 ? a[i + 1] : undefined, ...on })).not.toThrow();
   }
 });
@@ -39,6 +39,12 @@ test("every matrix entry is a valid flag set", () => {
 test("every feature in the table appears in the matrix", () => {
   const used = new Set(MATRIX.flatMap((p) => p.args));
   for (const f of FEATURE_LIST) expect(used.has(`--${f.flag}`)).toBe(true);
+});
+
+test("the matrix has svelte-secrets, with the argv() form of the valued flag", () => {
+  expect(MATRIX.find((p) => p.name === "svelte-secrets")?.args).toEqual(["--framework", "svelte", "--secrets", "infisical"]);
+  for (const fw of ["react", "vue", "svelte", "solid"])
+    expect(MATRIX.find((p) => p.name === `${fw}-all`)!.args.join(" ")).toContain("--secrets infisical");
 });
 
 test("hash is stable and tracks gate.ts and the routing doc", () => {

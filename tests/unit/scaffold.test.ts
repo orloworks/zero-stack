@@ -429,3 +429,31 @@ test("svelte --storage --account-deletion purges before and after deletion and m
   expect(offPage).not.toMatch(/uploaded files|STORAGE_PURGE_FAILED/);
   expect(existsSync(join(off.dir, "src/storage.ts"))).toBe(false);
 });
+
+// create-void's tsconfig.json (svelte, 1.8.0): `include` lists directories, not scripts/.
+const REAL_TSCONFIG = JSON.stringify({ extends: "./.void/tsconfig.json", compilerOptions: { strict: true }, include: ["src", "pages", "routes", "middleware", "crons", "queues", "db"] }, null, 2);
+const withTsconfig = (s: ReturnType<typeof seeded>, body = REAL_TSCONFIG) => async (cmd: string[]) => {
+  await s.exec(cmd);
+  if (cmd[1] === "x") writeFileSync(join(s.dir, "tsconfig.json"), body);
+};
+
+test("secrets adds scripts/secrets.ts, the secrets:pull script and the .env.pull-tmp ignore; without it, none of them", async () => {
+  const on = seeded("<!--/injected-by-void-->\n");
+  await scaffold({ ...cfg, secrets: true }, on.dir, withTsconfig(on));
+  expect(JSON.parse(readFileSync(join(on.dir, "package.json"), "utf8")).scripts["secrets:pull"]).toBe("bun scripts/secrets.ts pull");
+  expect(JSON.parse(readFileSync(join(on.dir, "package.json"), "utf8")).scripts["secrets:push"]).toBe("bun scripts/secrets.ts push");
+  expect(existsSync(join(on.dir, "scripts/secrets.ts"))).toBe(true);
+  expect(readFileSync(join(on.dir, ".gitignore"), "utf8").split("\n")).toContain(".env.pull-tmp");
+  expect(JSON.parse(readFileSync(join(on.dir, "tsconfig.json"), "utf8")).include).toEqual(["src", "pages", "routes", "middleware", "crons", "queues", "db", "scripts"]);
+  const off = seeded("<!--/injected-by-void-->\n");
+  await scaffold(cfg, off.dir, withTsconfig(off));
+  expect(JSON.parse(readFileSync(join(off.dir, "package.json"), "utf8")).scripts["secrets:pull"]).toBeUndefined();
+  expect(JSON.parse(readFileSync(join(off.dir, "package.json"), "utf8")).scripts["secrets:push"]).toBeUndefined();
+  expect(existsSync(join(off.dir, "scripts/secrets.ts"))).toBe(false);
+  expect(JSON.parse(readFileSync(join(off.dir, "tsconfig.json"), "utf8")).include).not.toContain("scripts");
+});
+
+test("secrets with a tsconfig that has no include is the anchor error", async () => {
+  const on = seeded("<!--/injected-by-void-->\n");
+  await expect(scaffold({ ...cfg, secrets: true }, on.dir, withTsconfig(on, "{}"))).rejects.toThrow(/Anchor "include" not found in tsconfig\.json \(create-void@\d/);
+});
