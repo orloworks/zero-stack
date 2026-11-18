@@ -357,7 +357,9 @@ try {
     check(r.code === 1 && r.out.includes("infisical exited 3") && !r.out.includes("LEAKED") && !r.out.includes("other"), `on a failing infisical exited ${r.code}, output: ${r.out}`);
     check(readFileSync(envFile).equals(before) && !existsSync(tmp), "on a failing infisical changed .env or left a temp file");
     // Success: contents replaced verbatim (${X} intact), mode 0600, the expected argv; the legacy link file works too.
-    const exported = "BETTER_AUTH_SECRET=pulled\nBETTER_AUTH_URL=http://localhost:5173\nEXTRA=pre${X}post\n";
+    // Built from the scaffold's own .env so every key it has (Turnstile, ...) is present.
+    const exported = readFileSync(envFile, "utf8").replace(/^BETTER_AUTH_SECRET=.*$/m, "BETTER_AUTH_SECRET=pulled") + "EXTRA=pre${X}post\n";
+    const exportedKeys = exported.trim().split("\n").length;
     rmSync(yaml);
     writeFileSync(join(app, ".infisical.json"), "{}\n");
     r = runScript({ FAKE_EXPORT: exported });
@@ -368,11 +370,11 @@ try {
     // The script itself rejects an unknown subcommand.
     r = runScript({}, ["scripts/secrets.ts", "bogus"]);
     check(r.code === 1 && r.out.includes("Usage"), `unknown subcommand exited ${r.code}`);
-    // secrets:push. .env is now the pulled export (3 keys); the fake prints a value on both streams.
+    // secrets:push. .env is now the pulled export; the fake prints a value on both streams.
     const pushed = readFileSync(envFile);
     rmSync(log, { force: true });
     r = runScript({ FAKE_STDERR: "LEAKED-sk_live_abc123" }, ["run", "secrets:push"]);
-    checkPush(r.code === 0 && /Pushed 3 keys/.test(r.out) && !r.out.includes("LEAKED") && !r.out.includes("pulled"), `push ok exited ${r.code}, output: ${r.out}`);
+    checkPush(r.code === 0 && r.out.includes(`Pushed ${exportedKeys} keys`) && !r.out.includes("LEAKED") && !r.out.includes("pulled"), `push ok exited ${r.code}, output: ${r.out}`);
     checkPush(readFileSync(log, "utf8").trim() === "secrets set --file .env --env=dev --silent", `push ran infisical with ${readFileSync(log, "utf8")}`);
     rmSync(log);
     r = runScript({ FAKE_STDERR: "LEAKED-sk_live_abc123", FAKE_EXIT: "4" }, ["run", "secrets:push"]);
