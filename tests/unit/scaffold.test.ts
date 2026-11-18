@@ -415,6 +415,9 @@ test("svelte --storage --account-deletion purges before and after deletion and m
   const auth = readFileSync(join(on.dir, "auth.ts"), "utf8");
   for (const t of ['import { purgeUserFiles } from "./src/storage"', "beforeDelete:", "afterDelete:", 'code: "STORAGE_PURGE_FAILED"']) expect(auth).toContain(t);
   expect(auth.match(/user: \{/g)).toHaveLength(1);
+  const agents = readFileSync(join(on.dir, "AGENTS.md"), "utf8");
+  expect(agents).toContain("purges a user's files. `routes/api/files/[name].ts`");
+  expect(agents).toContain("so account deletion can purge it. Deleting an account first");
   const page = readFileSync(join(on.dir, "pages/settings.svelte"), "utf8");
   for (const t of ["all its data and uploaded files.", "data and uploaded files have been", 'code === "STORAGE_PURGE_FAILED"', "Your account was not deleted, but some of your files may already have been removed. Try again to finish deleting your account."])
     expect(page).toContain(t);
