@@ -275,3 +275,22 @@ test("svelte --auth ships /settings with its loader, a plain composed auth.ts an
   expect(readFileSync(join(dir, "pages/settings.svelte"), "utf8")).toContain("<!-- zero-stack:account-deletion -->");
   expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain("`/settings`");
 });
+
+test("svelte sign-in/up keep the D28 contract and carry one anchor per later add-on part", async () => {
+  const { dir, run } = authApp("svelte");
+  await run();
+  const read = (f: string) => readFileSync(join(dir, "pages", f), "utf8");
+  const count = (s: string, m: string) => s.split(`<!-- zero-stack:${m} -->`).length - 1;
+  const [inn, up] = [read("sign-in.svelte"), read("sign-up.svelte")];
+  for (const m of ["sign-in-notice", "sign-in-forgot-link", "turnstile"]) expect(count(inn, m)).toBe(1);
+  expect(count(up, "turnstile")).toBe(1);
+  expect(inn.indexOf("sign-in-forgot-link")).toBeGreaterThan(inn.indexOf('id="password"'));
+  expect(inn.indexOf("zero-stack:turnstile")).toBeLessThan(inn.indexOf('type="submit"'));
+  for (const [s, fail, busy] of [[inn, "Sign in failed", "Signing in…"], [up, "Sign up failed", "Creating account…"]] as const) {
+    for (const t of ['location.href = "/"', fail, busy, 'role="alert"', "Something went wrong. Check your connection and try again."]) expect(s).toContain(t);
+    expect(s).not.toContain("placeholder");
+  }
+  expect(up).toContain('minlength="8"');
+  expect(inn).toContain('href="/sign-up"');
+  expect(up).toContain('href="/sign-in"');
+});
