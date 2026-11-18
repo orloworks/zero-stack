@@ -68,8 +68,9 @@ case, no `VITE_` name containing SECRET/PASSWORD/TOKEN/PRIVATE, never `VOID_`/`_
 Infisical output is never printed. The generated `AGENTS.md` documents the production route
 (`void secret sync` for server keys, `infisical run --env=prod -- void deploy` for client keys).
 
-Out of scope: network calls from the scaffold, Infisical's Cloudflare Workers sync (overwrites
-Worker secrets), production scripts, other secret managers, creating Infisical projects.
+Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its
+first sync overwrites Worker secrets), production or preview scripts, other secret managers,
+writing `.infisical.yaml` or creating Infisical projects, `infisical run` for dev.
 
 ## Cloudflare routing
 

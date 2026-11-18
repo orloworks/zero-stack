@@ -110,7 +110,7 @@ test("the CLI rejects --secrets vault and a bare --secrets before doing anything
   expect(vault.stderr.toString()).toContain('--secrets accepts only "infisical" (got "vault").');
   const bare = rawArgs("/nonexistent/zs-app", "--secrets");
   expect(bare.exitCode).toBe(1);
-  expect(bare.stderr.toString()).toContain("--secrets");
+  expect(bare.stderr.toString()).toContain("--secrets <value>' argument missing");
 });
 
 test("usage text shows the valued flag from argv()", () => {

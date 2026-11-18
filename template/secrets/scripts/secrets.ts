@@ -9,9 +9,33 @@ const LINK_FILES = [".infisical.yaml", ".infisical.json"]; // .json is the legac
 
 class Refuse extends Error {}
 
-// Key names only, never values. shortcut: line-based, so a continuation line of a multi-line value that looks like KEY= is read as a key.
-const keysOf = (text: string): string[] =>
-  text.split("\n").flatMap((l) => /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(l)?.[1] ?? []);
+// Never r.error.message: it can carry the command line. Code only.
+const failed = (r: ReturnType<typeof spawnSync>): string =>
+  r.error
+    ? (r.error as NodeJS.ErrnoException).code === "ENOENT"
+      ? "the Infisical CLI was not found on PATH"
+      : `could not run infisical (${(r.error as NodeJS.ErrnoException).code})`
+    : `infisical exited ${r.status ?? r.signal}`;
+
+// Key names only, never values. Dotenv-aware: skips comments, blanks and the continuation lines of a multi-line quoted value ("", '' or ``).
+// Loose on purpose so names like `my-key` or `1ABC` are seen and refused rather than skipped.
+const namesOf = (text: string): string[] => {
+  const out: string[] = [];
+  let open = "";
+  const closes = (t: string, q: string) => (q === '"' ? /(?<!\\)"/ : new RegExp(q)).test(t);
+  for (const l of text.split("\n")) {
+    if (open) {
+      if (closes(l, open)) open = "";
+      continue;
+    }
+    const m = /^\s*(?:export\s+)?([^\s=#][^=]*?)\s*=\s*(.*)$/.exec(l);
+    if (!m) continue;
+    out.push(m[1]!);
+    const q = /^["'`]/.exec(m[2]!)?.[0];
+    if (q && !closes(m[2]!.slice(1), q)) open = q;
+  }
+  return out;
+};
 
 function requireLink(): void {
   if (!LINK_FILES.some((f) => existsSync(f)))
@@ -24,10 +48,6 @@ function requireLink(): void {
 // Spec key naming rules 1, 5 and 6 (kept in step with tests/unit/key-names.test.ts in the scaffolder). Names only, never values.
 const badName = (k: string): boolean =>
   !/^[A-Z][A-Z0-9_]*$/.test(k) || (/^VITE_/.test(k) && /SECRET|PASSWORD|TOKEN|PRIVATE/.test(k)) || /^(__VOID_|VOID_)/.test(k);
-
-// Looser than keysOf so names like `my-key` or `1ABC` are seen and refused rather than skipped.
-const namesOf = (text: string): string[] =>
-  text.split("\n").flatMap((l) => (/^\s*(?:export\s+)?([^\s=#][^=]*?)\s*=/.exec(l)?.[1] ?? []));
 
 function push(): void {
   requireLink();
@@ -44,7 +64,7 @@ function push(): void {
   const r = spawnSync("infisical", args, { stdio: ["ignore", "pipe", "pipe"] }); // both streams captured, never printed
   if (r.error || r.status !== 0)
     throw new Refuse(
-      `infisical exited ${r.error ? "without running (is the Infisical CLI installed?)" : (r.status ?? r.signal)}.\n` +
+      `${failed(r)}.\n` +
         `Some keys may already have been set in Infisical. Rerun by hand: infisical ${args.join(" ")}`,
     );
   console.log(`Pushed ${names.length} keys from ${ENV} to the Infisical dev environment.`);
@@ -53,19 +73,25 @@ function push(): void {
 function pull(): void {
   requireLink();
   const args = ["export", "--env=dev", "--format=dotenv", "--expand=false", "--silent", `--output-file=${TMP}`];
+  // spawnSync blocks handlers until the child exits; the child gets the signal too, so this runs right after.
+  for (const sig of ["SIGINT", "SIGTERM"] as const)
+    process.on(sig, () => {
+      rmSync(TMP, { force: true });
+      process.exit(1);
+    });
   try {
     rmSync(TMP, { force: true });
     writeFileSync(TMP, "", { mode: 0o600 }); // exists at 0600 before Infisical writes into it
     const r = spawnSync("infisical", args, { stdio: ["ignore", "pipe", "pipe"] }); // both streams captured, never printed
     if (r.error || r.status !== 0)
       throw new Refuse(
-        `infisical exited ${r.error ? "without running (is the Infisical CLI installed?)" : (r.status ?? r.signal)}.\n` +
+        `${failed(r)}.\n` +
           `${ENV} was not changed. Rerun by hand: infisical ${args.join(" ")}`,
       );
     chmodSync(TMP, 0o600);
     if (existsSync(ENV)) {
-      const have = new Set(keysOf(readFileSync(TMP, "utf8")));
-      const missing = keysOf(readFileSync(ENV, "utf8")).filter((k) => !have.has(k));
+      const have = new Set(namesOf(readFileSync(TMP, "utf8")));
+      const missing = namesOf(readFileSync(ENV, "utf8")).filter((k) => !have.has(k));
       if (missing.length)
         throw new Refuse(
           `The Infisical dev export lacks keys your ${ENV} has: ${[...new Set(missing)].join(", ")}.\n` +
