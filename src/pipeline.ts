@@ -56,6 +56,11 @@ function addAppScripts(targetDir: string, config: Config): void {
   cpSync(join(template, "tests"), join(targetDir, "tests"), { recursive: true });
   if (config.secrets) {
     cpSync(join(template, "secrets/scripts"), join(targetDir, "scripts"), { recursive: true });
+    // create-void's tsconfig `include` lists directories, so `tsc --noEmit` (verify) skips scripts/ unless it is added.
+    editJson(targetDir, "tsconfig.json", (ts) => {
+      if (!Array.isArray(ts.include)) throw anchorError("include", "tsconfig.json");
+      ts.include.push("scripts");
+    });
     // The pull's temp file sits beside .env; .env itself is ignored by installAuth (secrets implies auth).
     const gi = join(targetDir, ".gitignore");
     const lines = existsSync(gi) ? readFileSync(gi, "utf8").split("\n") : [];

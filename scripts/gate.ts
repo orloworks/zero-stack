@@ -12,7 +12,8 @@ import { TRUSTED_DEPENDENCIES } from "../src/versions";
 const root = mkdtempSync(join(tmpdir(), "zs-gate-"));
 const argv = process.argv.slice(2);
 const arg = (flag: string) => { const i = argv.indexOf(flag); return i >= 0 ? argv[i + 1] : undefined; };
-const hasSeq = (seq: string[]) => argv.some((_, i) => seq.every((t, j) => argv[i + j] === t));
+// Matches `--secrets infisical` and `--secrets=infisical` alike (the CLI accepts both).
+const hasSeq = (seq: string[]) => argv.includes(seq.join("=")) || argv.some((_, i) => seq.every((t, j) => argv[i + j] === t));
 const name = arg("--name") ?? "gate-app";
 const app = join(root, name);
 const vp = join(app, "node_modules/.bin/vp");
@@ -387,15 +388,31 @@ try {
     checkPush(r.code === 1 && ["lower_case", "VITE_API_TOKEN", "VOID_X"].every((n) => r.out.includes(n)) && !r.out.includes("GOOD_KEY") && !r.out.includes("VALUE-"), `bad names exited ${r.code}, output: ${r.out}`);
     checkPush(!existsSync(log), "push with bad names still ran infisical");
     writeFileSync(envFile, pushed);
-    // A multi-line quoted value (PEM-style body lines with = and lowercase) is never read as key names: push and pull both stay quiet about it.
-    const pem = 'GOOD_KEY=1\nPRIVATE_PEM="-----BEGIN KEY-----\nabcDEF=ghi\nlower_body=xyz\n-----END KEY-----"\n';
+    // Multi-line values and `export ` lines: push refuses before infisical runs (the real CLI reads --file one line at a time), naming the key only.
     writeFileSync(join(app, ".infisical.json"), "{}\n");
-    writeFileSync(envFile, pem);
-    r = runScript({ FAKE_EXPORT: pem }, ["run", "secrets:push"]);
-    checkPush(r.code === 0 && /Pushed 2 keys/.test(r.out) && !r.out.includes("abcDEF") && !r.out.includes("lower_body"), `push with a PEM value exited ${r.code}, output: ${r.out}`);
-    r = runScript({ FAKE_EXPORT: pem });
-    check(r.code === 0 && !r.out.includes("abcDEF") && !r.out.includes("lower_body"), `pull with a PEM value exited ${r.code}, output: ${r.out}`);
+    const pem = 'GOOD_KEY=1\nPRIVATE_PEM="-----BEGIN KEY-----\nabcDEF=ghi\nlower_body=xyz\n-----END KEY-----"\n';
+    for (const [bad, key] of [[pem, "PRIVATE_PEM"], ["GOOD_KEY=1\nexport C=1\n", "C"]] as const) {
+      rmSync(log, { force: true });
+      writeFileSync(envFile, bad);
+      r = runScript({}, ["run", "secrets:push"]);
+      checkPush(r.code === 1 && r.out.includes(key) && !r.out.includes("abcDEF") && !r.out.includes("lower_body") && !existsSync(log), `push with ${key} exited ${r.code}, output: ${r.out}`);
+    }
+    // Pull refuses the same in the export, leaving .env as it was.
     writeFileSync(envFile, pushed);
+    r = runScript({ FAKE_EXPORT: pem });
+    check(r.code === 1 && r.out.includes("PRIVATE_PEM") && !r.out.includes("abcDEF") && !r.out.includes("lower_body") && readFileSync(envFile).equals(pushed) && !existsSync(tmp), `pull with a PEM export exited ${r.code}, output: ${r.out}`);
+    // A value ending in an escaped backslash must not hide the keys after it.
+    writeFileSync(envFile, 'WIN_DIR="C:\\\\temp\\\\"\nSTRIPE_SECRET_KEY=sk_test_1\nVITE_ADMIN_TOKEN=tok\n');
+    rmSync(log, { force: true });
+    r = runScript({}, ["run", "secrets:push"]);
+    checkPush(r.code === 1 && r.out.includes("VITE_ADMIN_TOKEN") && !existsSync(log), `push after an escaped backslash exited ${r.code}, output: ${r.out}`);
+    writeFileSync(envFile, pushed);
+    // The generated tsconfig covers scripts/: a type error there fails tsc.
+    const script = join(app, "scripts/secrets.ts"), scriptSrc = readFileSync(script);
+    writeFileSync(script, Buffer.concat([scriptSrc, Buffer.from('\nconst n: number = "x";\n')]));
+    const tsc = Bun.spawnSync([join(app, "node_modules/.bin/tsc"), "--noEmit"], { cwd: app });
+    writeFileSync(script, scriptSrc);
+    checkPush(tsc.exitCode !== 0 && /scripts\/secrets\.ts/.test(tsc.stdout.toString()), `tsc did not report a type error in scripts/secrets.ts (exit ${tsc.exitCode}): ${tsc.stdout.toString().slice(0, 300)}`);
     // No link file.
     rmSync(join(app, ".infisical.json"));
     rmSync(log, { force: true });
