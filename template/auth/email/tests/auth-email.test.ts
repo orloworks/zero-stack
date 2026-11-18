@@ -10,7 +10,7 @@ it("a failed send is logged with its code and thrown", async () => {
   const inbox = createEmailTestHarness();
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
   const { default: define } = (await import("../auth")) as any;
-  const { emailAndPassword } = define({ defaults: { emailAndPassword: { enabled: true } } });
+  const { emailAndPassword } = define({ defaults: { emailAndPassword: { enabled: true } }, env: {} });
   await expect(
     emailAndPassword.sendResetPassword({ user: { email: "ada@example.com" }, url: "http://localhost/reset/abc", token: "abc" }),
   ).rejects.toThrow("email send failed");

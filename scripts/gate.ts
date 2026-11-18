@@ -131,11 +131,23 @@ try {
     const post = (path: string, body: object, cookie?: string) =>
       fetch(base + path, {
         method: "POST",
-        headers: { "content-type": "application/json", origin: base, ...(cookie && { cookie }) },
+        headers: { "content-type": "application/json", origin: base, ...(cookie && { cookie }), ...(config.turnstile && { "x-captcha-response": DUMMY_TOKEN }) },
         body: JSON.stringify(body),
       });
+    // The always-pass test secret accepts Cloudflare's documented dummy token; without the header the captcha plugin must refuse.
+    const DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX";
+    const bare = (path: string, body: object) =>
+      fetch(base + path, { method: "POST", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify(body) });
     const email = `gate-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
     const password = "gate-password-123";
+    if (config.turnstile) {
+      const guarded = [["/api/auth/sign-up/email", { name: "Gate", email, password }], ["/api/auth/sign-in/email", { email, password }], ...(config.email ? [["/api/auth/request-password-reset", { email, redirectTo: "/reset-password" }]] : [])] as [string, object][];
+      for (const [path, body] of guarded) {
+        const r = await bare(path, body);
+        if (r.status !== 400) throw new Error(`${path} without x-captcha-response -> ${r.status}, expected 400`);
+      }
+      console.log("gate: turnstile rejects sign-up, sign-in" + (config.email ? " and request-password-reset" : "") + " without a token");
+    }
     const up = await post("/api/auth/sign-up/email", { name: "Gate", email, password });
     if (!up.ok) throw new Error(`auth sign-up -> ${up.status}`);
     const inn = await post("/api/auth/sign-in/email", { email, password });
@@ -152,6 +164,12 @@ try {
     for (const p of routes) {
       const r = await fetch(`${base}/${p}`);
       if (r.status !== 200) throw new Error(`GET /${p} -> ${r.status}`);
+    }
+    if (config.turnstile) {
+      for (const p of ["sign-in", "sign-up", ...(config.email ? ["forgot-password"] : [])]) {
+        const html = await fetch(`${base}/${p}`).then((r) => r.text());
+        if (!html.includes("Completing a quick check")) throw new Error(`/${p} lacks the Turnstile check line`);
+      }
     }
     if (config.framework === "svelte") {
       const signIn = await fetch(`${base}/sign-in`).then((r) => r.text());

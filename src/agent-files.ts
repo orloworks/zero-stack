@@ -19,7 +19,10 @@ export function writeAgentFiles(targetDir: string, config?: Config): void {
   const email = config?.email
     ? `\n\n## Email\n\nPassword reset and sign-up verification mail go through \`send()\` in \`src/mail.ts\` (wired in \`auth.ts\`; Void \`sendEmail\`); locally they land in the dev inbox at \`/__void/inbox\` (token in \`.void/dev-trigger-token\`, sent as the \`x-void-dev-trigger\` header). Set \`email.from\` in \`void.config.ts\` (scaffolded as \`noreply@example.com\`) to an address on your mail domain. Production delivery needs a mail domain (or Workers Paid on your own Cloudflare account); without one the send fails, is logged, and the user never gets the mail. Verification mail is sent on sign-up but not required to sign in.`
     : "";
-  const block = `${OPEN}\n${readFileSync(ROUTING, "utf8").trimEnd()}${account}${deletion}${email}\n${CLOSE}`;
+  const turnstile = config?.turnstile
+    ? `\n\n## Turnstile\n\nSign-up, sign-in and password-reset requests need a Turnstile token (Better Auth \`captcha\` plugin in \`auth.ts\`; widget helper \`src/lib/turnstile.ts\`). Local dev uses Cloudflare's always-pass test keys. Before deploy set both real keys: \`void secret put TURNSTILE_SECRET_KEY\`, and \`VITE_TURNSTILE_SITE_KEY\` in the build shell (\`VITE_TURNSTILE_SITE_KEY=... void deploy\`; builds ignore \`.env\`). The default site key is the test key, and \`auth.ts\` refuses to start with a test secret when \`BETTER_AUTH_URL\` is not localhost.`
+    : "";
+  const block = `${OPEN}\n${readFileSync(ROUTING, "utf8").trimEnd()}${account}${deletion}${email}${turnstile}\n${CLOSE}`;
   const text = readFileSync(agents, "utf8");
   const start = text.indexOf(OPEN);
   const end = text.indexOf(CLOSE);

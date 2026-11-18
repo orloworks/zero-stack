@@ -354,3 +354,32 @@ test("svelte --email adds forgot/reset pages, sign-in edits, send() in auth.ts, 
   expect(read("tests/auth-email.test.ts")).toContain("createEmailTestHarness");
   expect(read("AGENTS.md")).toContain("mail domain");
 });
+
+test("svelte --turnstile wires captcha in auth.ts, the helper, the guard, widget pages, the test secret and the AGENTS.md note; absent without the flag", async () => {
+  const off = authApp("svelte");
+  await off.run();
+  expect(readFileSync(join(off.dir, "auth.ts"), "utf8")).not.toContain("captcha");
+  expect(existsSync(join(off.dir, "src/lib/turnstile.ts"))).toBe(false);
+
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  await scaffold({ ...cfg, framework: "svelte", auth: true, email: true, turnstile: true }, dir, exec);
+  const read = (f: string) => readFileSync(join(dir, f), "utf8");
+  const auth = read("auth.ts");
+  for (const t of ['from "better-auth/plugins"', 'provider: "cloudflare-turnstile"', "turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL)", "{ defaults, env }"]) expect(auth).toContain(t);
+  expect(read("env.ts")).toContain('VITE_TURNSTILE_SITE_KEY: string().default("1x00000000000000000000AA")');
+  expect(read(".env")).toContain("TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA");
+  for (const f of ["src/lib/turnstile.ts", "src/turnstile-guard.ts", "tests/turnstile.test.ts", "tests/turnstile-guard.test.ts"]) expect(existsSync(join(dir, f))).toBe(true);
+  for (const page of ["sign-in", "sign-up", "forgot-password"]) {
+    const p = read(`pages/${page}.svelte`);
+    expect(p).not.toContain("zero-stack:turnstile");
+    for (const t of ["mountTurnstile", "x-captcha-response", "turnstile?.reset()", "t.dispose()", "Completing a quick check…", "Couldn't load the verification check. Reload the page to try again.", "disabled={pending || !token}"]) expect(p).toContain(t);
+    expect(p.indexOf("bind:this={turnstileEl}")).toBeLessThan(p.indexOf('type="submit"'));
+  }
+  expect(read("AGENTS.md")).toContain("void secret put TURNSTILE_SECRET_KEY");
+});

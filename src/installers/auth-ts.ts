@@ -33,12 +33,16 @@ export function composeAuthTs(config: Config): string {
   },`,
         ]
       : []),
+    // Better Auth's captcha plugin guards its default endpoints (sign-up, sign-in, request-password-reset); the guard refuses a test secret off localhost (D14).
+    ...(config.turnstile
+      ? ['  plugins: [captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })],']
+      : []),
     // Better Auth verifies the password sent to deleteUser; the Account page always sends it (D6).
     ...(config.accountDeletion ? ["  user: { deleteUser: { enabled: true } },"] : []),
   ];
   return `import { defineAuth } from "void/auth";
-${config.email ? 'import { send } from "./src/mail";\n' : ""}
-export default defineAuth(({ defaults }) => ({
+${config.turnstile ? 'import { captcha } from "better-auth/plugins";\n' : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}
+export default defineAuth(({ defaults${config.turnstile ? ", env" : ""} }) => ({
   ...defaults,
 ${options.map((o) => o + "\n").join("")}}));
 `;
