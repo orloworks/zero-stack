@@ -65,7 +65,7 @@ test("an add-on flag implies auth, so auth is not asked", async () => {
   await fillPrompts({ name: "x", framework: "svelte", email: true }, t.ui);
   expect(t.asked).not.toContain("Add auth?");
   expect(t.asked).not.toContain("Add email?");
-  expect(t.asked.slice(-3)).toEqual(["Add account deletion?", "Add Turnstile?", "Add storage?"]);
+  expect(t.asked.slice(-4)).toEqual(["Add account deletion?", "Add Turnstile?", "Add storage?", "Sync secrets with Infisical?"]);
 });
 
 test("shadcn is asked even when Tailwind was declined, and choosing it implies Tailwind", async () => {
