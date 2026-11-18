@@ -320,3 +320,37 @@ test("svelte sign-in/up keep the D28 contract and carry one anchor per later add
   expect(inn).toContain('href="/sign-up"');
   expect(up).toContain('href="/sign-in"');
 });
+
+test("svelte --email adds forgot/reset pages, sign-in edits, send() in auth.ts, the harness test and the AGENTS.md note; absent without the flag", async () => {
+  const off = authApp("svelte");
+  await off.run();
+  expect(readdirSync(join(off.dir, "pages"))).not.toContain("forgot-password.svelte");
+  expect(readFileSync(join(off.dir, "auth.ts"), "utf8")).not.toContain("sendResetPassword");
+  expect(readFileSync(join(off.dir, "AGENTS.md"), "utf8")).not.toContain("mail domain");
+
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  await scaffold({ ...cfg, framework: "svelte", auth: true, email: true }, dir, exec);
+  const read = (f: string) => readFileSync(join(dir, f), "utf8");
+  expect(readdirSync(join(dir, "pages"))).toEqual(expect.arrayContaining(["forgot-password.svelte", "reset-password.svelte"]));
+  const forgot = read("pages/forgot-password.svelte");
+  for (const t of ["requestPasswordReset", 'redirectTo: "/reset-password"', "If an account exists for that email", "Couldn't send the reset link. Try again.", "Sending link…", "Back to sign in"]) expect(forgot).toContain(t);
+  expect(forgot.indexOf("<!-- zero-stack:turnstile -->")).toBeLessThan(forgot.indexOf('type="submit"'));
+  const reset = read("pages/reset-password.svelte");
+  for (const t of ["history.replaceState", 'content="no-referrer"', "INVALID_TOKEN", "This reset link has expired or was already used.", "Request a new link", "Choose a new password", "/sign-in?reset=1"]) expect(reset).toContain(t);
+  const inn = read("pages/sign-in.svelte");
+  for (const t of ["Forgot password?", "Password updated. Sign in with your new password."]) expect(inn).toContain(t);
+  expect(inn).not.toMatch(/zero-stack:sign-in-(notice|forgot-link)/);
+  expect(inn).toContain("<!-- zero-stack:turnstile -->");
+  const auth = read("auth.ts");
+  for (const t of ["sendResetPassword", "sendVerificationEmail", "sendOnSignUp: true", "revokeSessionsOnPasswordReset: true", 'from "./src/mail"']) expect(auth).toContain(t);
+  for (const t of ["result.deliveries", "result.error", "console.error", "throw new Error"]) expect(read("src/mail.ts")).toContain(t);
+  expect(auth).not.toContain("requireEmailVerification");
+  expect(read("tests/auth-email.test.ts")).toContain("createEmailTestHarness");
+  expect(read("AGENTS.md")).toContain("mail domain");
+});

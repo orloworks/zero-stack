@@ -145,9 +145,9 @@ try {
     if (session?.user?.email !== email) throw new Error("auth get-session did not return the signed-in user");
     console.log("gate: auth sign-up -> sign-in -> session ok");
     // Route pages for the enabled features; the loader is a file, not a route, so it is checked separately.
-    const routes = ["sign-in", "sign-up", ...(config.framework === "svelte" ? ["settings"] : [])];
+    const routes = ["sign-in", "sign-up", ...(config.framework === "svelte" ? ["settings"] : []), ...(config.email ? ["forgot-password", "reset-password"] : [])];
     const pageNames = readdirSync(join(app, "pages")).filter((f) => !f.includes(".server.")).map((f) => f.replace(/\.[^.]+$/, ""));
-    for (const r of ["sign-in", "sign-up", "settings"])
+    for (const r of ["sign-in", "sign-up", "settings", "forgot-password", "reset-password"])
       if (pageNames.includes(r) !== routes.includes(r)) throw new Error(`pages/${r} ${routes.includes(r) ? "missing" : "unexpected"} for ${config.framework}`);
     for (const p of routes) {
       const r = await fetch(`${base}/${p}`);
@@ -167,7 +167,7 @@ try {
       const second = (await post("/api/auth/sign-in/email", { email, password })).headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
       const sessionOf = (c: string) => fetch(`${base}/api/auth/get-session`, { headers: { cookie: c } }).then((r) => r.json() as Promise<any>);
       if ((await sessionOf(second))?.user?.email !== email) throw new Error("second session did not start");
-      const next = "gate-password-456";
+      let next = "gate-password-456";
       const wrong = await post("/api/auth/change-password", { currentPassword: "not-the-password", newPassword: next, revokeOtherSessions: true }, cookie);
       if (wrong.ok) throw new Error("change-password accepted a wrong current password");
       const right = await post("/api/auth/change-password", { currentPassword: password, newPassword: next, revokeOtherSessions: true }, cookie);
@@ -176,14 +176,57 @@ try {
       const fresh = await post("/api/auth/sign-in/email", { email, password: next });
       if (!fresh.ok) throw new Error("sign-in with the new password failed");
       console.log("gate: /settings signed in/out, change-password wrong rejected, right accepted, other session revoked");
+      // change-password with revokeOtherSessions rotates the current session: its new cookie is on the `right` response.
+      let live = right.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+      if ((await sessionOf(live))?.user?.email !== email) throw new Error("no live session after change-password");
+      if (config.email) {
+        const signIn = await fetch(`${base}/sign-in`).then((r) => r.text());
+        if (!signIn.includes('href="/forgot-password"')) throw new Error("/sign-in lacks the Forgot password? link");
+        const forgot = await fetch(`${base}/forgot-password`).then((r) => r.text());
+        if (!forgot.includes("Reset your password") || !forgot.includes("Send reset link")) throw new Error("/forgot-password lacks its form");
+        // Dev inbox: list rows carry subject, recipient and a detail link; the detail page shows the text body escaped.
+        const token = readFileSync(join(app, ".void/dev-trigger-token"), "utf8").trim();
+        const inbox = (path: string) => fetch(`${base}/__void/inbox${path}`, { headers: { "x-void-dev-trigger": token } }).then((r) => r.text());
+        const mailLink = async (subject: string) => {
+          const row = (await inbox("")).split("<tr>").find((r) => r.includes(`>${subject}</a>`) && r.includes(email));
+          const id = row?.match(/href="\/__void\/inbox\/([^/?"]+)\?/)?.[1];
+          if (!id) throw new Error(`no "${subject}" mail for ${email} in the dev inbox`);
+          const url = (await inbox(`/${id}`)).match(/https?:\/\/[^\s<]+/)?.[0]?.replaceAll("&amp;", "&");
+          if (!url) throw new Error(`"${subject}" mail has no link`);
+          return new URL(url);
+        };
+        await mailLink("Verify your email"); // sent on sign-up, never required to sign in
+        const request = await post("/api/auth/request-password-reset", { email, redirectTo: "/reset-password" });
+        if (!request.ok) throw new Error(`request-password-reset -> ${request.status}`);
+        const link = await mailLink("Reset your password");
+        // The link redirects to /reset-password?token=...; a bad token redirects to ?error=INVALID_TOKEN.
+        const follow = (u: URL) => fetch(base + u.pathname + u.search, { redirect: "manual" }).then((r) => new URL(r.headers.get("location") ?? "", base));
+        const bad = await follow(new URL(link.pathname.replace(/[^/]+$/, "not-a-token") + link.search, base));
+        if (bad.pathname !== "/reset-password" || bad.searchParams.get("error") !== "INVALID_TOKEN") throw new Error(`bad reset token landed on ${bad}`);
+        const good = await follow(link);
+        const resetToken = good.searchParams.get("token");
+        if (good.pathname !== "/reset-password" || !resetToken) throw new Error(`reset link landed on ${good}`);
+        const reset = await fetch(`${base}/reset-password`).then((r) => r.text());
+        if (!reset.includes("Loading…") || !reset.includes('name="referrer"')) throw new Error("/reset-password lacks the loading state or no-referrer meta");
+        const before = (await post("/api/auth/sign-in/email", { email, password: next })).headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+        if ((await sessionOf(before))?.user?.email !== email) throw new Error("pre-reset session did not start");
+        const after = "gate-password-789";
+        const done = await post("/api/auth/reset-password", { newPassword: after, token: resetToken });
+        if (!done.ok) throw new Error(`reset-password -> ${done.status}`);
+        if ((await post("/api/auth/reset-password", { newPassword: "gate-password-000", token: resetToken })).ok) throw new Error("reset token worked twice");
+        if ((await sessionOf(before))?.user || (await sessionOf(live))?.user) throw new Error("a session created before the reset survived it");
+        if ((await post("/api/auth/sign-in/email", { email, password: next })).ok) throw new Error("old password still signs in after reset");
+        const again = await post("/api/auth/sign-in/email", { email, password: after });
+        if (!again.ok) throw new Error("sign-in with the reset password failed");
+        next = after;
+        live = again.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+        console.log("gate: reset mail in dev inbox -> link -> new password signs in, bad/used token rejected, earlier sessions revoked");
+      }
       if (!config.accountDeletion) {
         if (signedIn.includes("Delete account")) throw new Error("/settings has a Delete account section without --account-deletion");
       } else {
-        // Runs after change-password: the password is now `next`, and the live session cookie comes from the change-password response.
+        // Runs after change-password and any reset: `next` is the current password and `live` a current session.
         if (!signedIn.includes("Delete account permanently")) throw new Error("/settings lacks the Delete account section");
-        // change-password with revokeOtherSessions rotates the current session: its new cookie is on the `right` response.
-        const live = right.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
-        if ((await sessionOf(live))?.user?.email !== email) throw new Error("no live session after change-password");
         const del = (pw: string) => post("/api/auth/delete-user", { password: pw }, live);
         const wrongDel = await del("not-the-password");
         if (wrongDel.ok) throw new Error("delete-user accepted a wrong password");

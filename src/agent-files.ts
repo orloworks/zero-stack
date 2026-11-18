@@ -16,7 +16,10 @@ export function writeAgentFiles(targetDir: string, config?: Config): void {
   const deletion = config?.accountDeletion
     ? `\n\nThe Account page deletes the account with the user's current password (Better Auth \`deleteUser\`, enabled in \`auth.ts\`). Every table you add that holds user-owned rows must reference \`user.id\` with \`onDelete: "cascade"\` (for example \`.references(() => user.id, { onDelete: "cascade" })\`) so deleting the account removes its data; a row without the cascade is left orphaned or blocks the deletion. Known limit: a social-only account has no password, so it cannot delete itself from this page (Better Auth answers CREDENTIAL_ACCOUNT_NOT_FOUND).`
     : "";
-  const block = `${OPEN}\n${readFileSync(ROUTING, "utf8").trimEnd()}${account}${deletion}\n${CLOSE}`;
+  const email = config?.email
+    ? `\n\n## Email\n\nPassword reset and sign-up verification mail go through \`send()\` in \`src/mail.ts\` (wired in \`auth.ts\`; Void \`sendEmail\`); locally they land in the dev inbox at \`/__void/inbox\` (token in \`.void/dev-trigger-token\`, sent as the \`x-void-dev-trigger\` header). Set \`email.from\` in \`void.config.ts\` (scaffolded as \`noreply@example.com\`) to an address on your mail domain. Production delivery needs a mail domain (or Workers Paid on your own Cloudflare account); without one the send fails, is logged, and the user never gets the mail. Verification mail is sent on sign-up but not required to sign in.`
+    : "";
+  const block = `${OPEN}\n${readFileSync(ROUTING, "utf8").trimEnd()}${account}${deletion}${email}\n${CLOSE}`;
   const text = readFileSync(agents, "utf8");
   const start = text.indexOf(OPEN);
   const end = text.indexOf(CLOSE);

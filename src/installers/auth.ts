@@ -7,6 +7,7 @@ import { addPaths } from "./shared";
 import type { Config } from "../flags";
 import { composeAuthTs } from "./auth-ts";
 import { installAccountDeletion } from "./account-deletion";
+import { installEmail } from "./email";
 
 // Runs after installShadcn. Pages are copied; `void db generate` runs later in the pipeline (needs deps).
 export function installAuth(dir: string, config: Config): void {
@@ -22,6 +23,7 @@ export function installAuth(dir: string, config: Config): void {
 
   cpSync(join(slice, "pages"), join(dir, "pages"), { recursive: true });
   if (config.accountDeletion) installAccountDeletion(dir, config);
+  if (config.email) installEmail(dir);
 
   const gi = join(dir, ".gitignore");
   const lines = existsSync(gi) ? readFileSync(gi, "utf8").split("\n") : [];
