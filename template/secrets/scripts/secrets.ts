@@ -2,6 +2,7 @@
 // Infisical's own output is never printed (it can carry values); failures say the exit code and the command to rerun by hand.
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { parseEnv } from "node:util";
 
 const ENV = ".env";
 const TMP = ".env.pull-tmp";
@@ -17,24 +18,30 @@ const failed = (r: ReturnType<typeof spawnSync>): string =>
       : `could not run infisical (${(r.error as NodeJS.ErrnoException).code})`
     : `infisical exited ${r.status ?? r.signal}`;
 
-// Key names only, never values. Dotenv-aware: skips comments, blanks and the continuation lines of a multi-line quoted value ("", '' or ``).
-// Loose on purpose so names like `my-key` or `1ABC` are seen and refused rather than skipped.
-const namesOf = (text: string): string[] => {
-  const out: string[] = [];
+// Key names only, never values. Names come from parseEnv (what Void reads .env with); a line scan adds only what parseEnv
+// skips (names outside [\w.]+, which Infisical would still receive) and finds multi-line values and `export ` lines, which
+// `infisical secrets set --file` cannot take. A name is printed only when it is plain; anything else is reported as `line <n>`.
+const SAFE = /^[A-Za-z0-9_.-]{1,64}$/;
+const ENTRY = /^\s*(export\s+)?([^\s=#][^=]*?)\s*=\s*(.*)$/;
+const ONE_LINE = /^(?:'(?:\\'|[^'])*'|"(?:\\"|[^"])*"|`(?:\\`|[^`])*`)\s*(?:#.*)?$/; // a quoted value closed on its own line
+type Entry = { name: string; label: string };
+const scan = (text: string): { names: Entry[]; unsupported: string[] } => {
+  const lines = text.split(/\r?\n/);
+  const label = (name: string, i: number) => (SAFE.test(name) ? name : `line ${i + 1}`);
+  const unsupported: string[] = [];
+  const names: Entry[] = Object.keys(parseEnv(text)).map((name) => ({ name, label: label(name, lines.findIndex((l) => l.includes(name))) }));
   let open = "";
-  const closes = (t: string, q: string) => (q === '"' ? /(?<!\\)"/ : new RegExp(q)).test(t);
-  for (const l of text.split("\n")) {
-    if (open) {
-      if (closes(l, open)) open = "";
-      continue;
-    }
-    const m = /^\s*(?:export\s+)?([^\s=#][^=]*?)\s*=\s*(.*)$/.exec(l);
-    if (!m) continue;
-    out.push(m[1]!);
-    const q = /^["'`]/.exec(m[2]!)?.[0];
-    if (q && !closes(m[2]!.slice(1), q)) open = q;
-  }
-  return out;
+  lines.forEach((l, i) => {
+    if (open) { if (l.includes(open)) open = ""; return; }
+    const m = ENTRY.exec(l);
+    if (!m) return;
+    const [, ex, name, v] = m as unknown as [string, string | undefined, string, string];
+    const quoted = /^['"`]/.test(v);
+    if (ex || (quoted && !ONE_LINE.test(v))) unsupported.push(label(name, i));
+    if (quoted && !v.slice(1).includes(v[0]!)) open = v[0]!;
+    if (!/^[\w.]+$/.test(name)) names.push({ name, label: label(name, i) });
+  });
+  return { names, unsupported };
 };
 
 function requireLink(): void {
@@ -52,12 +59,18 @@ const badName = (k: string): boolean =>
 function push(): void {
   requireLink();
   if (!existsSync(ENV)) throw new Refuse(`No ${ENV} to push. Nothing was sent.`);
-  const names = [...new Set(namesOf(readFileSync(ENV, "utf8")))];
+  const { names: entries, unsupported } = scan(readFileSync(ENV, "utf8"));
+  if (unsupported.length)
+    throw new Refuse(
+      `Refusing to push: multi-line values and "export " lines are not supported (Infisical reads ${ENV} one line at a time): ${[...new Set(unsupported)].join(", ")}.\n` +
+        "Nothing was sent. Put each value on one line without `export`, then rerun.",
+    );
+  const names = [...new Set(entries.map((e) => e.name))];
   if (!names.length) throw new Refuse(`${ENV} has no keys. Nothing was sent.`);
-  const bad = names.filter(badName);
+  const bad = entries.filter((e) => badName(e.name)).map((e) => e.label);
   if (bad.length)
     throw new Refuse(
-      `Refusing to push: these names break the key naming convention (UPPER_SNAKE_CASE; a VITE_ name never contains SECRET, PASSWORD, TOKEN or PRIVATE; never __VOID_ or VOID_): ${bad.join(", ")}.\n` +
+      `Refusing to push: these names break the key naming convention (UPPER_SNAKE_CASE; a VITE_ name never contains SECRET, PASSWORD, TOKEN or PRIVATE; never __VOID_ or VOID_): ${[...new Set(bad)].join(", ")}.\n` +
         "Nothing was sent. Rename them in .env and env.ts, then rerun.",
     );
   const args = ["secrets", "set", "--file", ENV, "--env=dev", "--silent"];
@@ -74,7 +87,7 @@ function pull(): void {
   requireLink();
   const args = ["export", "--env=dev", "--format=dotenv", "--expand=false", "--silent", `--output-file=${TMP}`];
   // spawnSync blocks handlers until the child exits; the child gets the signal too, so this runs right after.
-  for (const sig of ["SIGINT", "SIGTERM"] as const)
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
     process.on(sig, () => {
       rmSync(TMP, { force: true });
       process.exit(1);
@@ -89,9 +102,15 @@ function pull(): void {
           `${ENV} was not changed. Rerun by hand: infisical ${args.join(" ")}`,
       );
     chmodSync(TMP, 0o600);
+    const exp = scan(readFileSync(TMP, "utf8"));
+    if (exp.unsupported.length)
+      throw new Refuse(
+        `The Infisical dev export has multi-line values or "export " lines, which this script cannot round-trip: ${[...new Set(exp.unsupported)].join(", ")}.\n` +
+          `${ENV} was not changed. Store each value on one line in Infisical.`,
+      );
     if (existsSync(ENV)) {
-      const have = new Set(namesOf(readFileSync(TMP, "utf8")));
-      const missing = namesOf(readFileSync(ENV, "utf8")).filter((k) => !have.has(k));
+      const have = new Set(exp.names.map((e) => e.name));
+      const missing = scan(readFileSync(ENV, "utf8")).names.filter((e) => !have.has(e.name)).map((e) => e.label);
       if (missing.length)
         throw new Refuse(
           `The Infisical dev export lacks keys your ${ENV} has: ${[...new Set(missing)].join(", ")}.\n` +
