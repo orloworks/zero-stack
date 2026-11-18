@@ -154,6 +154,8 @@ try {
       if (r.status !== 200) throw new Error(`GET /${p} -> ${r.status}`);
     }
     if (config.framework === "svelte") {
+      const signIn = await fetch(`${base}/sign-in`).then((r) => r.text());
+      if (!/<label[^>]*for="password"/.test(signIn) || /placeholder=/.test(signIn)) throw new Error("/sign-in lacks labels or still uses placeholders");
       if (!statSync(join(app, "pages/settings.server.ts")).isFile()) throw new Error("settings.server.ts missing");
       const html = (c?: string) => fetch(`${base}/settings`, { headers: c ? { cookie: c } : {} }).then((r) => r.text());
       const [signedIn, signedOut] = [await html(cookie), await html()];
