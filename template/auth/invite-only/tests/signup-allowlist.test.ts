@@ -21,7 +21,7 @@ it("a domain entry matches exactly that domain", () => {
 
 it("an entry without @ is an exact email, never a domain", () => {
   expect(signupAllowed("x.com", "a@x.com")).toBe(false);
-  expect(signupAllowed("x.com", "x.com")).toBe(true); // not an email Better Auth would accept; still no domain match
+  expect(signupAllowed("x.com", "x.com")).toBe(false); // no @, so never an email
   expect(signupAllowed("@", "a@")).toBe(false);
 });
 
@@ -30,4 +30,15 @@ it("an empty, blank or missing list refuses everyone", () => {
     expect(signupAllowed(list, "a@x.com")).toBe(false);
     expect(signupAllowed(list, "")).toBe(false);
   }
+});
+
+it("refuses any email without exactly one @, and any non-ASCII email, even when a listed entry would match", () => {
+  expect(signupAllowed("@x.com, a@x.com", "a@b@x.com")).toBe(false);
+  expect(signupAllowed("@x.com", "a@@x.com")).toBe(false);
+  expect(signupAllowed("@x.com", "x.com")).toBe(false);
+  expect(signupAllowed("x.com", "x.com")).toBe(false);
+  expect(signupAllowed("@x.com", "ünï@x.com")).toBe(false);
+  expect(signupAllowed("@x.com", "a@x.com\u0430")).toBe(false); // Cyrillic a
+  expect(signupAllowed("ünï@x.com", "ünï@x.com")).toBe(false);
+  expect(signupAllowed("@x.com", "a@x.com")).toBe(true);
 });

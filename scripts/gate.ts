@@ -134,7 +134,7 @@ try {
     console.log(`gate: POST /api/echo invalid -> ${bad}, valid -> ${good}`);
     if (bad < 400 || bad >= 500 || good !== 200) throw new Error("zod-rpc route did not validate");
   }
-  // --invite-only helpers: a POST to the auth API at `b`, and the refusal check (403, code, copy, then no user to sign in).
+  // --invite-only helpers. The gate checks a proven email, so an invited sign-up makes no session and sends a verification mail whose link signs the user in.
   const kept = `kept-${Date.now()}@example.com`;
   const gatePw = "gate-password-123";
   const authPost = (b: string, path: string, body: object) =>
@@ -143,12 +143,45 @@ try {
       headers: { "content-type": "application/json", origin: b, ...(config.turnstile && { "x-captcha-response": "XXXX.DUMMY.TOKEN.XXXX" }) },
       body: JSON.stringify(body),
     });
+  // Dev inbox: list rows carry subject, recipient and a detail link; the detail page shows the text body escaped. The token is read fresh (a restart may change it).
+  const mailUrl = async (b: string, subject: string, to: string) => {
+    const token = readFileSync(join(app, ".void/dev-trigger-token"), "utf8").trim();
+    const inbox = (path: string) => fetch(`${b}/__void/inbox${path}`, { headers: { "x-void-dev-trigger": token } }).then((r) => r.text());
+    const row = (await inbox("")).split("<tr>").find((r) => r.includes(`>${subject}</a>`) && r.toLowerCase().includes(to.toLowerCase()));
+    const id = row?.match(/href="\/__void\/inbox\/([^/?"]+)\?/)?.[1];
+    if (!id) return null;
+    const url = (await inbox(`/${id}`)).match(/https?:\/\/[^\s<]+/)?.[0]?.replaceAll("&amp;", "&");
+    return url ? new URL(url) : null;
+  };
+  const userRow = (address: string) =>
+    sqliteFiles(join(app, ".void")).some((f) => {
+      const d = new Database(f, { readonly: true });
+      try {
+        return !!d.query("SELECT 1 FROM sqlite_master WHERE name = 'user'").get() && !!d.query("SELECT 1 FROM user WHERE lower(email) = ?").get(address.toLowerCase());
+      } finally { d.close(); }
+    });
+  // Invited: the sign-up succeeds with no session cookie, sign-in is refused until the mailed link is followed, and the link signs the user in (session cookie).
+  const signUpVerified = async (b: string, address: string, password = gatePw) => {
+    const up = await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: address, password });
+    if (!up.ok) throw new Error(`invited sign-up for ${address} -> ${up.status}`);
+    if (cookieOf(up)) throw new Error(`sign-up for ${address} set a cookie before the email was verified`);
+    const early = await authPost(b, "/api/auth/sign-in/email", { email: address, password });
+    if (early.status !== 403 || ((await early.json().catch(() => ({}))) as any)?.code !== "EMAIL_NOT_VERIFIED") throw new Error(`sign-in before verifying -> ${early.status}, expected 403 EMAIL_NOT_VERIFIED`);
+    const link = await mailUrl(b, "Verify your email", address);
+    if (!link) throw new Error(`no verification mail for ${address} in the dev inbox`);
+    const done = await fetch(b + link.pathname + link.search, { redirect: "manual" });
+    const cookie = cookieOf(done);
+    if (!/session_token=/.test(cookie)) throw new Error(`verification link -> ${done.status}, no session cookie`);
+    return cookie;
+  };
+  // Refused: no session, no user row, no mail. Status: a 200 (with verification on, Better Auth answers a refused sign-up with a placeholder user) or a 4xx (a malformed address is rejected before the hook).
   const inviteRefused = async (b: string, address: string) => {
     const r = await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: address, password: gatePw });
-    const j = (await r.json().catch(() => ({}))) as any;
-    if (r.status !== 403 || j?.code !== "SIGNUP_INVITE_ONLY" || j?.message !== "Signups are invite-only right now.")
-      throw new Error(`sign-up for ${address} -> ${r.status} ${JSON.stringify(j)}, expected 403 SIGNUP_INVITE_ONLY with the copy`);
-    if ((await authPost(b, "/api/auth/sign-in/email", { email: address, password: gatePw })).ok) throw new Error(`${address} was refused but can sign in (a user row exists)`);
+    if (r.status !== 200 && (r.status < 400 || r.status >= 500)) throw new Error(`refused sign-up for ${address} -> ${r.status}`);
+    if (cookieOf(r)) throw new Error(`refused sign-up for ${address} set a cookie`);
+    if (userRow(address)) throw new Error(`${address} was refused but has a user row`);
+    if (await mailUrl(b, "Verify your email", address)) throw new Error(`${address} was refused but got a verification mail`);
+    if ((await authPost(b, "/api/auth/sign-in/email", { email: address, password: gatePw })).ok) throw new Error(`${address} was refused but can sign in`);
   };
   if (config.auth) {
     const base = `http://localhost:${port}`;
@@ -174,6 +207,15 @@ try {
     }
     const up = await post("/api/auth/sign-up/email", { name: "Gate", email, password });
     if (!up.ok) throw new Error(`auth sign-up -> ${up.status}`);
+    if (config.inviteOnly) {
+      // Sign-up made no session; the sign-in below only works after the mailed link is followed (the sign-up above is not repeated: same user).
+      if (cookieOf(up)) throw new Error("invite-only sign-up set a cookie before the email was verified");
+      const early = await post("/api/auth/sign-in/email", { email, password });
+      if (early.status !== 403) throw new Error(`sign-in before verifying -> ${early.status}, expected 403`);
+      const link = await mailUrl(base, "Verify your email", email);
+      if (!link) throw new Error("no verification mail in the dev inbox");
+      if (!/session_token=/.test(cookieOf(await fetch(base + link.pathname + link.search, { redirect: "manual" })))) throw new Error("verification link did not sign the user in");
+    }
     const inn = await post("/api/auth/sign-in/email", { email, password });
     const cookie = cookieOf(inn);
     if (!inn.ok || !cookie) throw new Error(`auth sign-in -> ${inn.status}, cookie ${cookie ? "set" : "missing"}`);
@@ -182,16 +224,12 @@ try {
     console.log("gate: auth sign-up -> sign-in -> session ok");
     // --invite-only: the create hook refuses before any row or mail. The scaffold's list is @example.com; `kept` is an existing user for the restarts below.
     if (config.inviteOnly) {
-      if (!(await authPost(base, "/api/auth/sign-up/email", { name: "Gate", email: kept, password: gatePw })).ok) throw new Error("sign-up for an @example.com address was refused");
-      const refused = [`nobody-${Date.now()}@evilexample.com`, `nobody-${Date.now()}@sub.example.com`, `NOBODY-${Date.now()}@EVILEXAMPLE.COM`];
+      await signUpVerified(base, kept);
+      const refused = [`nobody-${Date.now()}@evilexample.com`, `nobody-${Date.now()}@sub.example.com`, `NOBODY-${Date.now()}@EVILEXAMPLE.COM`, `a@b@example.com`, `nobody-${Date.now()}@exаmple.com`];
       for (const a of refused) await inviteRefused(base, a);
-      if (!(await post("/api/auth/sign-up/email", { name: "Gate", email: `Upper-${Date.now()}@EXAMPLE.COM`, password })).ok) throw new Error("a domain entry did not admit an upper-case match");
-      if (config.email) {
-        const token = readFileSync(join(app, ".void/dev-trigger-token"), "utf8").trim();
-        const inbox = await fetch(`${base}/__void/inbox`, { headers: { "x-void-dev-trigger": token } }).then((r) => r.text());
-        if (inbox.toLowerCase().includes("evilexample.com") || inbox.toLowerCase().includes("sub.example.com")) throw new Error("a refused sign-up still sent mail");
-      }
-      console.log("gate: invite-only admits @example.com (any case); a lookalike domain and a subdomain get 403 SIGNUP_INVITE_ONLY, no user row, no mail");
+      await signUpVerified(base, `Upper-${Date.now()}@EXAMPLE.COM`); // a domain entry admits an upper-case match
+      if (!(await authPost(base, "/api/auth/sign-in/email", { email: kept, password: gatePw })).ok) throw new Error("a verified user could not sign in");
+      console.log("gate: invite-only admits @example.com (any case) with no session until the mailed link signs in; lookalike, subdomain, two-@ and non-ASCII addresses get no session, no user row, no mail; a verified user signs in");
     }
     // --storage: routes are auth-gated and per-user. Keys are read back from the local R2 state (miniflare's _mf_objects) to prove what is stored.
     // Only the sqlite files with an _mf_objects table are R2's; any read error on one of them fails the gate.
@@ -272,18 +310,12 @@ try {
         if (!signIn.includes('href="/forgot-password"')) throw new Error("/sign-in lacks the Forgot password? link");
         const forgot = await fetch(`${base}/forgot-password`).then((r) => r.text());
         if (!forgot.includes("Reset your password") || !forgot.includes("Send reset link")) throw new Error("/forgot-password lacks its form");
-        // Dev inbox: list rows carry subject, recipient and a detail link; the detail page shows the text body escaped.
-        const token = readFileSync(join(app, ".void/dev-trigger-token"), "utf8").trim();
-        const inbox = (path: string) => fetch(`${base}/__void/inbox${path}`, { headers: { "x-void-dev-trigger": token } }).then((r) => r.text());
         const mailLink = async (subject: string) => {
-          const row = (await inbox("")).split("<tr>").find((r) => r.includes(`>${subject}</a>`) && r.includes(email));
-          const id = row?.match(/href="\/__void\/inbox\/([^/?"]+)\?/)?.[1];
-          if (!id) throw new Error(`no "${subject}" mail for ${email} in the dev inbox`);
-          const url = (await inbox(`/${id}`)).match(/https?:\/\/[^\s<]+/)?.[0]?.replaceAll("&amp;", "&");
-          if (!url) throw new Error(`"${subject}" mail has no link`);
-          return new URL(url);
+          const url = await mailUrl(base, subject, email);
+          if (!url) throw new Error(`no "${subject}" mail for ${email} in the dev inbox`);
+          return url;
         };
-        await mailLink("Verify your email"); // sent on sign-up, never required to sign in
+        await mailLink("Verify your email"); // sent on sign-up; required to sign in only with --invite-only
         const request = await post("/api/auth/request-password-reset", { email, redirectTo: "/reset-password" });
         if (!request.ok) throw new Error(`request-password-reset -> ${request.status}`);
         const link = await mailLink("Reset your password");
@@ -360,7 +392,7 @@ try {
       const exact = `exact-${Date.now()}@partner.test`;
       let { port: p } = await withList(`${exact.toUpperCase()},other@partner.test`);
       let b = `http://localhost:${p}`;
-      if (!(await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: exact, password: gatePw })).ok) throw new Error("an exact list entry did not admit its email (any case)");
+      await signUpVerified(b, exact); // an exact list entry admits its email (any case)
       await inviteRefused(b, `other2-${Date.now()}@partner.test`); // a different address on the same domain is not a domain entry
       await inviteRefused(b, `nobody-${Date.now()}@example.com`); // the list no longer holds @example.com
       if (!(await authPost(b, "/api/auth/sign-in/email", { email: kept, password: gatePw })).ok) throw new Error("an existing user could not sign in after the list changed");

@@ -10,7 +10,7 @@ const IMPORT = '  import { auth } from "void/client";\n';
 const STATE = "  let alertEl: HTMLElement | undefined = $state();\n";
 const TAIL = "    }\n    pending = false;\n";
 
-// --turnstile on svelte: env.ts, the helper, the startup guard and their tests, plus the widget at each page's marker.
+// --turnstile on svelte: the helper, the startup guard and their tests (env.ts comes from the composer), plus the widget at each page's marker.
 // Runs after installEmail, which also edits sign-in's import and state lines (both anchors stay unique).
 export function installTurnstile(dir: string, config: Config): void {
   cpSync(here, dir, { recursive: true, force: false, errorOnExist: true }); // never overwrite a file the app already has

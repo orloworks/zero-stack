@@ -29,7 +29,8 @@ tests/
 2. Target dir must be new or empty. On any failure, delete a directory zero-stack created; a pre-existing empty target is emptied, not removed.
 3. Validate flags, fail fast with a one-line fix. Implied flags are declared once in
    `FEATURES` (`src/flags.ts`) and each is announced: `--shadcn` enables `--tailwind`;
-   `--account-deletion`, `--email`, `--turnstile`, `--invite-only`, `--storage` and `--secrets` enable `--auth`.
+   `--account-deletion`, `--email`, `--turnstile`, `--storage` and `--secrets` enable `--auth`;
+   `--invite-only` enables `--email` (and so `--auth`).
    `--shadcn` requires `--framework react`; `--account-deletion`, `--email`,
    `--turnstile` and `--invite-only` require `--framework svelte` (D33).
 4. Run pinned `bunx create-void@<pin> <name> --toolchain vite-plus --framework <fw>
@@ -56,7 +57,7 @@ tests/
 | `--account-deletion` | bool | Svelte only, implies `--auth`. Delete-account section on the Account page |
 | `--email` | bool | Svelte only, implies `--auth`. Password reset and sign-up verification mail |
 | `--turnstile` | bool | Svelte only, implies `--auth`. Cloudflare Turnstile on sign-up, sign-in and password reset |
-| `--invite-only` | bool | Svelte only, implies `--auth`. Sign-up limited to the `SIGNUP_ALLOWLIST` secret |
+| `--invite-only` | bool | Svelte only, implies `--email` and `--auth`. Sign-up limited to the `SIGNUP_ALLOWLIST` secret, with a verified email |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes and helper |
 | `--secrets` | `infisical` (the only value) | Any framework, implies `--auth`. `secrets:pull` / `secrets:push` against Infisical `dev`, see below |
 
@@ -110,7 +111,16 @@ in `AGENTS.md`.
   that throws `APIError("FORBIDDEN", { code: "SIGNUP_INVITE_ONLY", message: "Signups are
   invite-only right now." })` unless `signupAllowed(env.SIGNUP_ALLOWLIST, user.email)`. The
   page, the raw API and any later sign-in method are all gated; a refused sign-up creates no
-  user and sends no mail; existing users sign in as before. `SIGNUP_ALLOWLIST` is a required
+  user and sends no mail; existing users sign in as before. The gate checks a proven email, so
+  it implies `--email` and sets `emailAndPassword.requireEmailVerification: true` and
+  `emailVerification.autoSignInAfterVerification: true`: sign-up creates no session, an
+  unverified user cannot sign in, and the verification link signs the user in. This overrides
+  D8 (sign-in never waits on mail) for invite-only apps only; others are unchanged. The sign-up
+  page shows "Check your inbox to finish signing up." after an invited sign-up and after a
+  refused one, so it never reveals who is on the list (with verification on, Better Auth answers
+  a refused sign-up with a 200 and a placeholder user, and the page also maps a 403
+  `SIGNUP_INVITE_ONLY` to the same copy). The matcher refuses any email without exactly one `@`
+  and any non-ASCII email. `SIGNUP_ALLOWLIST` is a required
   server secret (`string()` in the composed `env.ts`): exact emails and `@domain` entries
   separated by commas or whitespace, case-insensitive; `@x.com` matches exactly that domain
   (not `sub.x.com` or `evilx.com`); a missing or empty list refuses everyone (Void's required-env check turns an unset or empty value into a 500 on every request; a list with no entries refuses every sign-up). Matcher
@@ -218,8 +228,9 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   revoked, migration present, `.env` gitignored; `--email` reset mail in the dev inbox, link,
   new password signs in, bad or used token rejected, earlier sessions revoked;
   `--turnstile` sign-up, sign-in (and reset) refused without a token, accepted with the dummy
-  token; `--invite-only` @example.com admitted (any case), lookalike domain and subdomain 403
-  `SIGNUP_INVITE_ONLY` with the copy and no user or mail, an exact entry admits and a
+  token; `--invite-only` @example.com admitted (any case) but with no session until the dev-inbox
+  verification link is followed (sign-in refused before it, signs in after), lookalike domain
+  and subdomain leave no user row and no mail, an exact entry admits and a
   same-domain address is refused, an empty list refuses everyone, existing users still sign
   in (the list is changed by restarting the dev server on a new `.env`); `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
   without a session, upload and download under `users/<id>/`, escaping names rejected (keys

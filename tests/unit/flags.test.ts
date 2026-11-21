@@ -118,9 +118,10 @@ test("usage text shows the valued flag from argv()", () => {
   expect(r.stderr.toString()).toContain("[--secrets infisical]");
 });
 
-test("--invite-only implies auth, saying so, and is prompted", () => {
+test("--invite-only implies email and, through it, auth, saying so, and is prompted", () => {
   const r = validateFlags({ name: "x", framework: "svelte", inviteOnly: true });
-  expect(r.config).toMatchObject({ inviteOnly: true, auth: true });
-  expect(r.notes).toEqual(["--invite-only implies --auth; enabling auth."]);
-  expect(FEATURE_LIST.find((f) => f.flag === "invite-only")).toMatchObject({ key: "inviteOnly", requires: "auth", prompt: "Restrict sign-up to invited emails?" });
+  expect(r.config).toMatchObject({ inviteOnly: true, email: true, auth: true });
+  expect(r.notes).toEqual(["--invite-only implies --email; enabling email.", "--email implies --auth; enabling auth."]);
+  expect(validateFlags({ name: "x", framework: "svelte", inviteOnly: true, email: true, auth: true }).notes).toEqual([]);
+  expect(FEATURE_LIST.find((f) => f.flag === "invite-only")).toMatchObject({ key: "inviteOnly", requires: "email", prompt: "Restrict sign-up to invited emails?" });
 });

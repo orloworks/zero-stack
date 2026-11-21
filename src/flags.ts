@@ -11,7 +11,7 @@ export const FEATURES = [
   { flag: "account-deletion", key: "accountDeletion", label: "account deletion", prompt: "Add account deletion?", requires: "auth", frameworks: ["svelte"] },
   { flag: "email", key: "email", label: "email", prompt: "Add email?", requires: "auth", frameworks: ["svelte"] },
   { flag: "turnstile", key: "turnstile", label: "Turnstile", prompt: "Add Turnstile?", requires: "auth", frameworks: ["svelte"] },
-  { flag: "invite-only", key: "inviteOnly", label: "invite-only signup", prompt: "Restrict sign-up to invited emails?", requires: "auth", frameworks: ["svelte"] },
+  { flag: "invite-only", key: "inviteOnly", label: "invite-only signup", prompt: "Restrict sign-up to invited emails?", requires: "email", frameworks: ["svelte"] },
   { flag: "storage", key: "storage", label: "storage", prompt: "Add storage?", requires: "auth" },
   { flag: "secrets", key: "secrets", label: "Infisical secrets", prompt: "Sync secrets with Infisical?", requires: "auth", value: "infisical" },
 ] as const satisfies readonly {
@@ -33,7 +33,7 @@ export function parseFeature(f: Feature, raw: string | boolean | undefined): boo
 }
 
 // Add-on keys are optional so hand-built configs (test fixtures) need not list them; validateFlags always sets every key.
-type AddOnKey = Extract<(typeof FEATURES)[number], { requires: "auth" }>["key"];
+type AddOnKey = Extract<(typeof FEATURES)[number], { requires: "auth" | "email" }>["key"];
 export type Config = { name: string; framework: Framework } & Record<Exclude<FeatureKey, AddOnKey>, boolean> & Partial<Record<AddOnKey, boolean>>;
 export type FlagInput = Partial<Omit<Config, "framework">> & { name: string; framework?: string };
 
@@ -48,11 +48,16 @@ export function validateFlags(input: FlagInput): { config: Config; notes: string
   for (const f of FEATURE_LIST)
     if (on[f.key] && f.frameworks && !f.frameworks.includes(framework))
       throw new Error(`--${f.flag} requires --framework ${f.frameworks.join("|")} (got ${framework}); drop --${f.flag} or use --framework ${f.frameworks[0]}.`);
-  for (const f of FEATURE_LIST) {
-    const req = FEATURE_LIST.find((r) => r.key === f.requires);
-    if (on[f.key] && req && !on[req.key]) {
-      on[req.key] = true;
-      notes.push(`--${f.flag} implies --${req.flag}; enabling ${req.label}.`);
+  // Repeat until stable: --invite-only implies --email, which in turn implies --auth.
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const f of FEATURE_LIST) {
+      const req = FEATURE_LIST.find((r) => r.key === f.requires);
+      if (on[f.key] && req && !on[req.key]) {
+        on[req.key] = true;
+        changed = true;
+        notes.push(`--${f.flag} implies --${req.flag}; enabling ${req.label}.`);
+      }
     }
   }
   return { config: { name, framework: framework as Framework, ...on }, notes };

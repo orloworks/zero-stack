@@ -61,17 +61,18 @@ const INVITE_ONLY_HOOK = `  databaseHooks: {
 // Svelte only: react, vue and solid --auth keep v0.1 output (no auth.ts).
 export function composeAuthTs(config: Config): string {
   const options = [
-    // Not requireEmailVerification: sign-in never waits on mail (D8). Reset revokes every other session (D30).
+    // Sign-in never waits on mail (D8), except --invite-only: the allowlist must see a proven address, so verification is required and its link signs the user in
+    // (sign-up then creates no session). Reset revokes every other session (D30).
     ...(config.email
       ? [
           `  emailAndPassword: {
     ...defaults.emailAndPassword,
     enabled: true,
-    revokeSessionsOnPasswordReset: true,
+    revokeSessionsOnPasswordReset: true,${config.inviteOnly ? "\n    requireEmailVerification: true," : ""}
     sendResetPassword: ({ user, url }) => send(user.email, "Reset your password", url),
   },
   emailVerification: {
-    sendOnSignUp: true,
+    sendOnSignUp: true,${config.inviteOnly ? "\n    autoSignInAfterVerification: true," : ""}
     sendVerificationEmail: ({ user, url }) => send(user.email, "Verify your email", url),
   },`,
         ]

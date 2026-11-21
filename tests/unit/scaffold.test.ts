@@ -392,6 +392,7 @@ test("svelte --invite-only gates user creation in auth.ts, ships the matcher and
   expect(readFileSync(join(off.dir, "auth.ts"), "utf8")).not.toContain("SIGNUP_INVITE_ONLY");
   expect(existsSync(join(off.dir, "src/signup-allowlist.ts"))).toBe(false);
   expect(existsSync(join(off.dir, "env.ts"))).toBe(false);
+  expect(readFileSync(join(off.dir, "pages/sign-up.svelte"), "utf8")).toContain('location.href = "/"'); // unchanged without the flag
 
   const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
   const exec = async (cmd: string[]) => {
@@ -408,6 +409,13 @@ test("svelte --invite-only gates user creation in auth.ts, ships the matcher and
   expect(read(".env")).toContain("\nSIGNUP_ALLOWLIST=@example.com\n");
   for (const f of ["src/signup-allowlist.ts", "tests/signup-allowlist.test.ts"]) expect(existsSync(join(dir, f))).toBe(true);
   expect(read("AGENTS.md")).toContain("SIGNUP_ALLOWLIST");
+  expect(read("AGENTS.md")).not.toContain("${"); // the invite-only section's interpolation must not print as code
+  // The gate checks a proven email: verification is required and its link signs in. Sign-up shows one notice for invited and refused alike.
+  for (const t of ["requireEmailVerification: true,", "autoSignInAfterVerification: true,"]) expect(auth).toContain(t);
+  const page = read("pages/sign-up.svelte");
+  expect(page).toContain("Check your inbox to finish signing up.");
+  expect(page).not.toContain("invite-only");
+  expect(page).not.toContain('location.href = "/"');
   expect(read("tests/auth-email.test.ts").match(/SIGNUP_ALLOWLIST: "@example.com"/g)).toHaveLength(2); // the email test signs up through the hook
 });
 
