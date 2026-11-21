@@ -359,9 +359,9 @@ try {
     r = runScript({ FAKE_EXPORT: "BETTER_AUTH_SECRET=other\n", FAKE_EXIT: "3", FAKE_STDERR: "LEAKED-sk_live_abc123" });
     check(r.code === 1 && r.out.includes("infisical exited 3") && !r.out.includes("LEAKED") && !r.out.includes("other"), `on a failing infisical exited ${r.code}, output: ${r.out}`);
     check(readFileSync(envFile).equals(before) && !existsSync(tmp), "on a failing infisical changed .env or left a temp file");
-    // Success: contents replaced verbatim (${X} intact), mode 0600, the expected argv; the legacy link file works too.
+    // Success: contents replaced verbatim, mode 0600, the expected argv; the legacy link file works too.
     // Built from the scaffold's own .env so every key it has (Turnstile, ...) is present.
-    const exported = readFileSync(envFile, "utf8").replace(/^BETTER_AUTH_SECRET=.*$/m, "BETTER_AUTH_SECRET=pulled") + "EXTRA=pre${X}post\n";
+    const exported = readFileSync(envFile, "utf8").replace(/^BETTER_AUTH_SECRET=.*$/m, "BETTER_AUTH_SECRET=pulled") + "EXTRA=pre post\n";
     const exportedKeys = exported.trim().split("\n").length;
     rmSync(yaml);
     writeFileSync(join(app, ".infisical.json"), "{}\n");
@@ -400,7 +400,7 @@ try {
     const at = pushed.toString().split("\n").length; // the 1-based number of a line appended to `pushed`
     for (const bad of [
       'PRIVATE_PEM="-----BEGIN KEY-----\nhunter2=ghi\n-----END KEY-----"\n', "export C=hunter2\n", "TOKEN_KEY=`hunter2`\n",
-      'PRIVATE_KEY="hunter2\\nb"\n', "A_KEY='hunter2\\'b'\n", 'WIN_DIR="C:\\hunter2\\"\nVITE_ADMIN_TOKEN="tok"\n',
+      'PRIVATE_KEY="hunter2\\nb"\n', "A_KEY='hunter2\\'b'\n", "DB_PASSWORD='pa$hunter2'\n", 'WIN_DIR="C:\\hunter2\\"\nVITE_ADMIN_TOKEN="tok"\n',
     ]) {
       rmSync(log, { force: true });
       writeFileSync(envFile, Buffer.concat([pushed, Buffer.from(bad)]));

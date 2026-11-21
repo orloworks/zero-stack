@@ -50,6 +50,9 @@ const OUTSIDE: [string, string][] = [
   ["lone CR", "A_KEY=a\rhunter2\n"],
   ["lone CR in double quotes", 'A_KEY="a\rhunter2"\n'],
   ["lone CR in single quotes", "A_KEY='a\rhunter2'\n"],
+  ["dollar unquoted", "A_KEY=pa$hunter2\n"],
+  ["dollar in double quotes", 'A_KEY="k${hunter2}"\n'],
+  ["dollar in single quotes", "A_KEY='pa$hunter2'\n"],
 ];
 
 for (const [what, line] of OUTSIDE)
@@ -71,7 +74,7 @@ test("push accepts every non-empty form in the format and counts the keys", () =
 });
 
 test("push refuses empty values by line number, before infisical runs", () => {
-  for (const empty of ["E_KEY=", 'E_KEY=""', "E_KEY=''"]) {
+  for (const empty of ["E_KEY=", 'E_KEY=""', "E_KEY=''", 'E_KEY=" "', "E_KEY='\t'"]) {
     const r = app(`GOOD=1\n${empty}\n`)("push");
     expect([empty, r.code, r.called, r.out.includes("line 2: Infisical rejects empty values; remove the line or give it a value")]).toEqual([empty, 1, false, true]);
   }
@@ -119,6 +122,6 @@ test("pull refuses an export that lacks a local key, naming it", () => {
 });
 
 test("pull replaces .env when the export has every local key", () => {
-  const r = app("# note\nA=1\nB=\"x y\"\n", "A='2'\nB='x y'\nC='${X}'\n")("pull");
-  expect([r.code, r.env, r.tmp]).toEqual([0, "A='2'\nB='x y'\nC='${X}'\n", false]);
+  const r = app("# note\nA=1\nB=\"x y\"\n", "A='2'\nB='x y'\nC='x'\n")("pull");
+  expect([r.code, r.env, r.tmp]).toEqual([0, "A='2'\nB='x y'\nC='x'\n", false]);
 });

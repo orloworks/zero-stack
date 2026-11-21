@@ -66,7 +66,7 @@ from `.env`; overwrites Infisical values; prints only a key count) and `bun run 
 --project-id <id>`). `push` refuses names that break the key naming convention (upper snake
 case, no `VITE_` name containing SECRET/PASSWORD/TOKEN/PRIVATE, never `VOID_`/`__VOID_`).
 Both accept only a strict line format (blank, `#` comment, `KEY=value` with the value empty,
-unquoted without `#`, quotes, backticks or `\`, or in one `"…"`/`'…'` pair with no quote or `\`
+unquoted without `#`, quotes, backticks, `\` or `$`, or in one `"…"`/`'…'` pair with no quote, `\` or `$`
 inside) in `.env` and the export, and refuse any other line by line number. Empty values are
 pull-only: `push` refuses them by line number, because Infisical rejects empty values. Both run under Bun
 (`bun scripts/secrets.ts`). Infisical

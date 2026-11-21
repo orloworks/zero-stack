@@ -18,14 +18,15 @@ const failed = (r: ReturnType<typeof spawnSync>): string =>
     : `infisical exited ${r.status ?? r.signal}`;
 
 // The strict line format (spec story 11): blank, `#` comment, or KEY=value with no spaces around `=`, the value empty, unquoted
-// (no `#`, quote, backtick or `\`, no edge whitespace) or one "…" or '…' pair with no quote or `\` inside. Void, Infisical's
+// (no `#`, quote, backtick, `\` or `$`, no edge whitespace) or one "…" or '…' pair with no quote, `\` or `$` inside. `$` is
+// refused because Void dev expands it in .env even inside single quotes, and its `\$` escape is outside the format. Void, Infisical's
 // `--file` and its export agree only on these lines. Anything else is reported as `line <n>`, never its text (it may be part of a value).
-const ENTRY = /^([A-Za-z_][A-Za-z0-9_]*)=(|[^\s#'"`\\](?:[^\r#'"`\\]*[^\s#'"`\\])?|"[^\r"'\\]*"|'[^\r'"\\]*')$/;
+const ENTRY = /^([A-Za-z_][A-Za-z0-9_]*)=(|[^\s#'"`\\$](?:[^\r#'"`\\$]*[^\s#'"`\\$])?|"[^\r"'\\$]*"|'[^\r'"\\$]*')$/;
 const FORMAT =
   "Each line must be blank, a # comment, or KEY=value on one line: no spaces around =, and the value empty, unquoted " +
-  "(no # ' \" ` or \\, no leading or trailing space), or wrapped in one pair of \" or ' with no quote or \\ inside. " +
+  "(no # ' \" ` \\ or $, no leading or trailing space), or wrapped in one pair of \" or ' with no quote, \\ or $ inside. " +
   "A lone carriage return inside a value is refused too.";
-// `empty` lists lines whose value is empty (`K=`, `K=""`, `K=''`): fine for pull, refused by push (Infisical's `--file` rejects them).
+// `empty` lists lines whose value is empty or quoted whitespace (`K=`, `K=""`, `K=' '`; Infisical trims): fine for pull, refused by push (Infisical's `--file` rejects them).
 const read = (text: string): { names: string[]; bad: string[]; empty: string[] } => {
   const names: string[] = [];
   const bad: string[] = [];
@@ -35,7 +36,7 @@ const read = (text: string): { names: string[]; bad: string[]; empty: string[] }
     const m = ENTRY.exec(l);
     if (!m) return bad.push(`line ${i + 1}`);
     names.push(m[1]!);
-    if (/^(|""|'')$/.test(m[2]!)) empty.push(`line ${i + 1}`);
+    if (/^(|"\s*"|'\s*')$/.test(m[2]!)) empty.push(`line ${i + 1}`);
   });
   return { names, bad, empty };
 };

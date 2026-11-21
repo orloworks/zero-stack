@@ -74,10 +74,10 @@ test("--secrets AGENTS.md documents push as a one-time seed, the naming conventi
     "umask 077", "mktemp", "trap 'rm -f \"$raw\" \"$f\"' EXIT; trap 'exit 1' INT TERM HUP", "Infisical rejects empty values",
     "```bash\n(\n  umask 077",
     "> \"$raw\" || exit 1\n",
-    "grep -Evq \"^[A-Z_][A-Z0-9_]*='[^'\\\\\\\\\"$'\\r'\"]*'\\$\" \"$raw\"; [ $? -eq 1 ] || exit 1",
+    "grep -Evq \"^[A-Z_][A-Z0-9_]*='[^'\\$\\\\\\\\\"$'\\r'\"]*'\\$\" \"$raw\"; [ $? -eq 1 ] || exit 1",
     "grep -Ev '^(VITE_|BETTER_AUTH_)' \"$raw\" > \"$f\"; [ $? -le 1 ] || exit 1",
     "[ -s \"$f\" ] || exit 0", "void secret sync \"$f\" --yes || exit 1", "\n) && infisical run --env=prod -- void deploy", "Workers sync",
-    "`BETTER_AUTH_*` is filtered out", "declare every key you sync", "skipped when nothing is left", "refuses (exit 1, before the sync and the deploy) any export line other than `KEY='…'` with no `'`, `\\` or carriage return inside",
+    "`BETTER_AUTH_*` is filtered out", "declare every key you sync", "skipped when nothing is left", "refuses (exit 1, before the sync and the deploy) any export line other than `KEY='…'` with no `'`, `\\`, `$` or carriage return inside",
     "Line format (push and pull)", "inline comments", "`export line <n>`", "`.env line <n>`", "prints `line <n>`, never the line",
   ])
     expect(agents).toContain(s);
@@ -112,7 +112,7 @@ test("production route: syncs only the unfiltered keys, then deploys", async () 
 });
 
 test("production route: an export line other than KEY='…' (no ' or \\ inside) reaches neither the sync nor the deploy", async () => {
-  for (const bad of ["DB_PASSWORD='p'ss'\n", "A_KEY='1'\nVITE_PUBLIC_PEM='line1\nSTOLEN_KEY=x'\n", "A_KEY=1\n", "A_KEY='a\\'b'\n", "A_KEY='1'\r\n", "K='a\rb'\n"]) {
+  for (const bad of ["DB_PASSWORD='p'ss'\n", "A_KEY='1'\nVITE_PUBLIC_PEM='line1\nSTOLEN_KEY=x'\n", "A_KEY=1\n", "A_KEY='a\\'b'\n", "A_KEY='1'\r\n", "K='a\rb'\n", "DB_PASSWORD='pa$word'\n"]) {
     const r = await route({ FAKE_EXPORT: bad });
     expect([bad, r.code, r.calls, r.synced]).toEqual([bad, 1, ["infisical export --env=prod"], ""]);
   }
