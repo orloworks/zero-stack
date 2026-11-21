@@ -29,9 +29,9 @@ tests/
 2. Target dir must be new or empty. On any failure, delete a directory zero-stack created; a pre-existing empty target is emptied, not removed.
 3. Validate flags, fail fast with a one-line fix. Implied flags are declared once in
    `FEATURES` (`src/flags.ts`) and each is announced: `--shadcn` enables `--tailwind`;
-   `--account-deletion`, `--email`, `--turnstile`, `--storage` and `--secrets` enable `--auth`.
-   `--shadcn` requires `--framework react`; `--account-deletion`, `--email` and
-   `--turnstile` require `--framework svelte` (D33).
+   `--account-deletion`, `--email`, `--turnstile`, `--invite-only`, `--storage` and `--secrets` enable `--auth`.
+   `--shadcn` requires `--framework react`; `--account-deletion`, `--email`,
+   `--turnstile` and `--invite-only` require `--framework svelte` (D33).
 4. Run pinned `bunx create-void@<pin> <name> --toolchain vite-plus --framework <fw>
    --starter sqlite --deploy none --git`. It always installs and cannot be prevented.
 5. Apply installers by anchored string replace against the known generated output of the
@@ -56,6 +56,7 @@ tests/
 | `--account-deletion` | bool | Svelte only, implies `--auth`. Delete-account section on the Account page |
 | `--email` | bool | Svelte only, implies `--auth`. Password reset and sign-up verification mail |
 | `--turnstile` | bool | Svelte only, implies `--auth`. Cloudflare Turnstile on sign-up, sign-in and password reset |
+| `--invite-only` | bool | Svelte only, implies `--auth`. Sign-up limited to the `SIGNUP_ALLOWLIST` secret |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes and helper |
 | `--secrets` | `infisical` (the only value) | Any framework, implies `--auth`. `secrets:pull` / `secrets:push` against Infisical `dev`, see below |
 
@@ -105,6 +106,18 @@ in `AGENTS.md`.
   when `BETTER_AUTH_URL` is not localhost, and returns an empty secret when none is set so the
   build-time schema pass does not throw (captcha then fails closed). Local `.env` gets the test
   secret.
+- `--invite-only` (svelte): `auth.ts` gains a Better Auth `databaseHooks.user.create.before` part
+  that throws `APIError("FORBIDDEN", { code: "SIGNUP_INVITE_ONLY", message: "Signups are
+  invite-only right now." })` unless `signupAllowed(env.SIGNUP_ALLOWLIST, user.email)`. The
+  page, the raw API and any later sign-in method are all gated; a refused sign-up creates no
+  user and sends no mail; existing users sign in as before. `SIGNUP_ALLOWLIST` is a required
+  server secret (`string()` in the composed `env.ts`): exact emails and `@domain` entries
+  separated by commas or whitespace, case-insensitive; `@x.com` matches exactly that domain
+  (not `sub.x.com` or `evilx.com`); a missing or empty list refuses everyone (Void's required-env check turns an unset or empty value into a 500 on every request; a list with no entries refuses every sign-up). Matcher
+  `src/signup-allowlist.ts` ships with `tests/signup-allowlist.test.ts`. Local `.env` gets
+  `SIGNUP_ALLOWLIST=@example.com`. `env.ts` is composed from the enabled features
+  (`src/installers/env-ts.ts`); no feature copies one. Going public means scaffolding or
+  editing without the gate, never emptying the list.
 - `--storage` (any framework): `src/storage.ts` (per-user keys `users/<id>/<name>` that reject
   escaping names, `purgeUserFiles`) and `tests/storage.test.ts`. With auth (always, via the
   implied flag) `routes/api/files/[name].ts` adds PUT (streamed, needs Content-Length), GET
@@ -121,6 +134,8 @@ Void imports `void/email` and `void/storage` lazily in generated helpers: its pl
 - `--turnstile`: `void secret put TURNSTILE_SECRET_KEY` (real secret), and set
   `VITE_TURNSTILE_SITE_KEY` in the build shell (`VITE_TURNSTILE_SITE_KEY=... void deploy`;
   builds ignore `.env`). Shipping the default site key is a test key.
+- `--invite-only`: set `SIGNUP_ALLOWLIST` for prod (`void secret put SIGNUP_ALLOWLIST`, or Infisical
+  `prod` through the production route); dev uses the `@example.com` placeholder.
 - `--email`: set `email.from` in `void.config.ts` to an address on your mail domain; production
   delivery needs that domain (or Workers Paid on your Cloudflare account). Without it sends
   fail, are logged, and the user gets no mail.
@@ -197,13 +212,16 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   `nice`, shared bun cache, scaffolds skipped when the hash of pins + template is
   unchanged. The matrix (`scripts/matrix.ts`) is every framework with all its valid flags,
   bare, and solo runs per add-on: `svelte-auth`, `svelte-account-deletion`, `svelte-email`,
-  `svelte-turnstile`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
+  `svelte-turnstile`, `svelte-invite-only`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
 - Gate checks per flag (`scripts/gate.ts`, HTTP against `vp dev`): `--auth` sign-up, sign-in,
   session, `/settings` signed in and out, wrong then right change-password, other session
   revoked, migration present, `.env` gitignored; `--email` reset mail in the dev inbox, link,
   new password signs in, bad or used token rejected, earlier sessions revoked;
   `--turnstile` sign-up, sign-in (and reset) refused without a token, accepted with the dummy
-  token; `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
+  token; `--invite-only` @example.com admitted (any case), lookalike domain and subdomain 403
+  `SIGNUP_INVITE_ONLY` with the copy and no user or mail, an exact entry admits and a
+  same-domain address is refused, an empty list refuses everyone, existing users still sign
+  in (the list is changed by restarting the dev server on a new `.env`); `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
   without a session, upload and download under `users/<id>/`, escaping names rejected (keys
   read back from the local R2 state), object gone after account deletion. The
   `STORAGE_PURGE_FAILED` path is covered by string tests only, not over HTTP.

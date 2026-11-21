@@ -20,3 +20,9 @@ test("two features' keys compose into one env.ts that declares both", () => {
   expect(out).toContain("// a\nexport default defineEnv({\n  A_KEY: string(),\n  B_KEY: string(),\n});\n");
   expect(out.match(/defineEnv\(/g)).toHaveLength(1);
 });
+
+test("--invite-only declares SIGNUP_ALLOWLIST, alone and beside Turnstile's keys", () => {
+  expect(composeEnvTs(cfg({ inviteOnly: true }))).toContain("export default defineEnv({\n  SIGNUP_ALLOWLIST: string(),\n});\n");
+  const both = composeEnvTs(cfg({ inviteOnly: true, turnstile: true }))!;
+  for (const k of ["TURNSTILE_SECRET_KEY", "VITE_TURNSTILE_SITE_KEY", "SIGNUP_ALLOWLIST: string()"]) expect(both).toContain(k);
+});

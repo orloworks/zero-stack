@@ -10,10 +10,12 @@ const TURNSTILE: EnvPart = {
   keys: ["TURNSTILE_SECRET_KEY: string(),", 'VITE_TURNSTILE_SITE_KEY: string().default("1x00000000000000000000AA"),'],
 };
 
+const INVITE_ONLY: EnvPart = { keys: ["SIGNUP_ALLOWLIST: string(),"] };
+
 export const renderEnvTs = (parts: EnvPart[]): string | null =>
   parts.some((p) => p.keys.length)
     ? `import { defineEnv, string } from "void/env";\n\n${parts.map((p) => p.comment ?? "").join("")}export default defineEnv({\n${parts.flatMap((p) => p.keys).map((k) => `  ${k}\n`).join("")}});\n`
     : null;
 
 // The root env.ts, written whole from the enabled features (one owner; no feature copies an env.ts). null = no feature declares a key.
-export const composeEnvTs = (config: Config): string | null => renderEnvTs([...(config.turnstile ? [TURNSTILE] : [])]);
+export const composeEnvTs = (config: Config): string | null => renderEnvTs([...(config.turnstile ? [TURNSTILE] : []), ...(config.inviteOnly ? [INVITE_ONLY] : [])]);

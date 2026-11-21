@@ -31,6 +31,7 @@ empty; on any failure it is deleted. The CLI writes only inside that directory.
 | `--account-deletion` | bool | Svelte only, implies `--auth`. Delete-account section on the Account page, confirmed with the password (always required server-side) |
 | `--email` | bool | Svelte only, implies `--auth`. Password reset and sign-up verification mail, dev inbox locally |
 | `--turnstile` | bool | Svelte only, implies `--auth`. Cloudflare Turnstile on sign-up, sign-in and password reset |
+| `--invite-only` | bool | Svelte only, implies `--auth`. Only emails on the `SIGNUP_ALLOWLIST` secret (exact emails and `@domain` entries) can sign up; empty or missing list refuses everyone |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes (`/api/files/:name`) behind sign-in, purged on account deletion |
 
 The starter is fixed to sqlite (D1). `--auth` on react, vue and solid is the same as in
@@ -52,6 +53,8 @@ A `create-void` app (vite-plus toolchain, sqlite starter, git) plus your chosen 
 - `--turnstile`: `void secret put TURNSTILE_SECRET_KEY`, and set `VITE_TURNSTILE_SITE_KEY` in
   the build shell (`VITE_TURNSTILE_SITE_KEY=... void deploy`; builds ignore `.env`). Dev uses
   Cloudflare's test keys, and `auth.ts` refuses a test secret off localhost.
+- `--invite-only`: set `SIGNUP_ALLOWLIST` for prod (`void secret put SIGNUP_ALLOWLIST`, or Infisical `prod`).
+  Dev uses `@example.com` (a placeholder). A missing or empty list refuses every sign-up.
 - `--email`: set `email.from` in `void.config.ts` to an address on your mail domain (scaffolded
   as `noreply@example.com`); without a mail domain sends fail and are logged.
 - Set `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` for the deployed origin.

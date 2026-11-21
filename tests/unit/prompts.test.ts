@@ -53,7 +53,7 @@ test("add-ons are asked only after auth is yes, and only those valid for the fra
   expect(no.asked).not.toContain("Sync secrets with Infisical?");
   const yes = ui(yesAll);
   await fillPrompts({ name: "x", framework: "svelte" }, yes.ui);
-  expect(yes.asked.slice(-5)).toEqual(["Add account deletion?", "Add email?", "Add Turnstile?", "Add storage?", "Sync secrets with Infisical?"]);
+  expect(yes.asked.slice(-6)).toEqual(["Add account deletion?", "Add email?", "Add Turnstile?", "Restrict sign-up to invited emails?", "Add storage?", "Sync secrets with Infisical?"]);
   const vue = ui(yesAll);
   await fillPrompts({ name: "x", framework: "vue" }, vue.ui);
   expect(vue.asked.slice(-2)).toEqual(["Add storage?", "Sync secrets with Infisical?"]);
@@ -65,7 +65,7 @@ test("an add-on flag implies auth, so auth is not asked", async () => {
   await fillPrompts({ name: "x", framework: "svelte", email: true }, t.ui);
   expect(t.asked).not.toContain("Add auth?");
   expect(t.asked).not.toContain("Add email?");
-  expect(t.asked.slice(-4)).toEqual(["Add account deletion?", "Add Turnstile?", "Add storage?", "Sync secrets with Infisical?"]);
+  expect(t.asked.slice(-5)).toEqual(["Add account deletion?", "Add Turnstile?", "Restrict sign-up to invited emails?", "Add storage?", "Sync secrets with Infisical?"]);
 });
 
 test("shadcn is asked even when Tailwind was declined, and choosing it implies Tailwind", async () => {

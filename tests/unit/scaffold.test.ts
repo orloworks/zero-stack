@@ -386,6 +386,31 @@ test("svelte --turnstile wires captcha in auth.ts, the helper, the guard, widget
   expect(read("AGENTS.md")).toContain("void secret put TURNSTILE_SECRET_KEY");
 });
 
+test("svelte --invite-only gates user creation in auth.ts, ships the matcher and its test, declares and seeds SIGNUP_ALLOWLIST; absent without the flag", async () => {
+  const off = authApp("svelte");
+  await off.run();
+  expect(readFileSync(join(off.dir, "auth.ts"), "utf8")).not.toContain("SIGNUP_INVITE_ONLY");
+  expect(existsSync(join(off.dir, "src/signup-allowlist.ts"))).toBe(false);
+  expect(existsSync(join(off.dir, "env.ts"))).toBe(false);
+
+  const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await seed(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  };
+  await scaffold({ ...cfg, framework: "svelte", auth: true, email: true, inviteOnly: true }, dir, exec);
+  const read = (f: string) => readFileSync(join(dir, f), "utf8");
+  const auth = read("auth.ts");
+  for (const t of ['import { APIError } from "better-auth/api"', 'import { signupAllowed } from "./src/signup-allowlist"', "databaseHooks", "signupAllowed(env.SIGNUP_ALLOWLIST, user.email)", 'code: "SIGNUP_INVITE_ONLY"', "Signups are invite-only right now.", "{ defaults, env }"]) expect(auth).toContain(t);
+  expect(read("env.ts")).toContain("SIGNUP_ALLOWLIST: string(),");
+  expect(read(".env")).toContain("\nSIGNUP_ALLOWLIST=@example.com\n");
+  for (const f of ["src/signup-allowlist.ts", "tests/signup-allowlist.test.ts"]) expect(existsSync(join(dir, f))).toBe(true);
+  expect(read("AGENTS.md")).toContain("SIGNUP_ALLOWLIST");
+  expect(read("tests/auth-email.test.ts").match(/SIGNUP_ALLOWLIST: "@example.com"/g)).toHaveLength(2); // the email test signs up through the hook
+});
+
 const storageApp = (config: Record<string, unknown>) => {
   const { dir, exec: seed } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
   const exec = async (cmd: string[]) => {

@@ -103,18 +103,22 @@ try {
     probe.stop(true);
     return p;
   };
-  const port = freePort();
-  dev = spawnTracked([vp, "dev", "--port", String(port), "--strictPort"], {
-    cwd: app, stdio: ["ignore", "inherit", "inherit"],
-    env: { ...process.env, VOID_INSPECTOR_PORT: String(freePort()) },
-  });
-  let status = 0;
-  for (let i = 0; i < 120 && status !== 200; i++) {
-    await Bun.sleep(500);
-    if (dev.exitCode !== null) throw new Error("vp dev exited early");
-    status = await fetch(`http://localhost:${port}/`).then((r) => r.status, () => 0);
-  }
-  if (status !== 200) throw new Error(`GET / returned ${status}`);
+  const startDev = async () => {
+    const port = freePort();
+    dev = spawnTracked([vp, "dev", "--port", String(port), "--strictPort"], {
+      cwd: app, stdio: ["ignore", "inherit", "inherit"],
+      env: { ...process.env, VOID_INSPECTOR_PORT: String(freePort()) },
+    });
+    let status = 0;
+    for (let i = 0; i < 120 && status !== 200; i++) {
+      await Bun.sleep(500);
+      if (dev.exitCode !== null) throw new Error("vp dev exited early");
+      status = await fetch(`http://localhost:${port}/`).then((r) => r.status, () => 0);
+    }
+    if (status !== 200) throw new Error(`GET / returned ${status}`);
+    return { port, status };
+  };
+  const { port, status } = await startDev();
   if (config.shadcn) {
     const html = await fetch(`http://localhost:${port}/`).then((r) => r.text());
     if (!html.includes('data-slot="button"')) throw new Error("shadcn Button not rendered on /");
@@ -130,6 +134,22 @@ try {
     console.log(`gate: POST /api/echo invalid -> ${bad}, valid -> ${good}`);
     if (bad < 400 || bad >= 500 || good !== 200) throw new Error("zod-rpc route did not validate");
   }
+  // --invite-only helpers: a POST to the auth API at `b`, and the refusal check (403, code, copy, then no user to sign in).
+  const kept = `kept-${Date.now()}@example.com`;
+  const gatePw = "gate-password-123";
+  const authPost = (b: string, path: string, body: object) =>
+    fetch(b + path, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: b, ...(config.turnstile && { "x-captcha-response": "XXXX.DUMMY.TOKEN.XXXX" }) },
+      body: JSON.stringify(body),
+    });
+  const inviteRefused = async (b: string, address: string) => {
+    const r = await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: address, password: gatePw });
+    const j = (await r.json().catch(() => ({}))) as any;
+    if (r.status !== 403 || j?.code !== "SIGNUP_INVITE_ONLY" || j?.message !== "Signups are invite-only right now.")
+      throw new Error(`sign-up for ${address} -> ${r.status} ${JSON.stringify(j)}, expected 403 SIGNUP_INVITE_ONLY with the copy`);
+    if ((await authPost(b, "/api/auth/sign-in/email", { email: address, password: gatePw })).ok) throw new Error(`${address} was refused but can sign in (a user row exists)`);
+  };
   if (config.auth) {
     const base = `http://localhost:${port}`;
     // The always-pass test secret accepts Cloudflare's documented dummy token; without the header the captcha plugin must refuse.
@@ -160,6 +180,19 @@ try {
     const session = await fetch(`${base}/api/auth/get-session`, { headers: { cookie } }).then((r) => r.json() as Promise<any>);
     if (session?.user?.email !== email) throw new Error("auth get-session did not return the signed-in user");
     console.log("gate: auth sign-up -> sign-in -> session ok");
+    // --invite-only: the create hook refuses before any row or mail. The scaffold's list is @example.com; `kept` is an existing user for the restarts below.
+    if (config.inviteOnly) {
+      if (!(await authPost(base, "/api/auth/sign-up/email", { name: "Gate", email: kept, password: gatePw })).ok) throw new Error("sign-up for an @example.com address was refused");
+      const refused = [`nobody-${Date.now()}@evilexample.com`, `nobody-${Date.now()}@sub.example.com`, `NOBODY-${Date.now()}@EVILEXAMPLE.COM`];
+      for (const a of refused) await inviteRefused(base, a);
+      if (!(await post("/api/auth/sign-up/email", { name: "Gate", email: `Upper-${Date.now()}@EXAMPLE.COM`, password })).ok) throw new Error("a domain entry did not admit an upper-case match");
+      if (config.email) {
+        const token = readFileSync(join(app, ".void/dev-trigger-token"), "utf8").trim();
+        const inbox = await fetch(`${base}/__void/inbox`, { headers: { "x-void-dev-trigger": token } }).then((r) => r.text());
+        if (inbox.toLowerCase().includes("evilexample.com") || inbox.toLowerCase().includes("sub.example.com")) throw new Error("a refused sign-up still sent mail");
+      }
+      console.log("gate: invite-only admits @example.com (any case); a lookalike domain and a subdomain get 403 SIGNUP_INVITE_ONLY, no user row, no mail");
+    }
     // --storage: routes are auth-gated and per-user. Keys are read back from the local R2 state (miniflare's _mf_objects) to prove what is stored.
     // Only the sqlite files with an _mf_objects table are R2's; any read error on one of them fails the gate.
     const r2Keys = () => {
@@ -314,6 +347,33 @@ try {
     if (!/^BETTER_AUTH_SECRET=\S{40,}$/m.test(env) || !env.includes("BETTER_AUTH_URL=http://localhost:5173"))
       throw new Error(".env missing secret or url");
     console.log("gate: auth migration present, .env gitignored");
+  }
+  if (config.inviteOnly) {
+    // The list is read at startup: restart the dev server on a changed .env. Exact entries, then a list with no entries (fail closed).
+    const envFile = join(app, ".env"), original = readFileSync(envFile, "utf8");
+    const withList = async (list: string) => {
+      await killChildren();
+      writeFileSync(envFile, original.replace(/^SIGNUP_ALLOWLIST=.*$/m, `SIGNUP_ALLOWLIST=${list}`));
+      return startDev();
+    };
+    try {
+      const exact = `exact-${Date.now()}@partner.test`;
+      let { port: p } = await withList(`${exact.toUpperCase()},other@partner.test`);
+      let b = `http://localhost:${p}`;
+      if (!(await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: exact, password: gatePw })).ok) throw new Error("an exact list entry did not admit its email (any case)");
+      await inviteRefused(b, `other2-${Date.now()}@partner.test`); // a different address on the same domain is not a domain entry
+      await inviteRefused(b, `nobody-${Date.now()}@example.com`); // the list no longer holds @example.com
+      if (!(await authPost(b, "/api/auth/sign-in/email", { email: kept, password: gatePw })).ok) throw new Error("an existing user could not sign in after the list changed");
+      // A truly empty value fails Void's required-env check (every request is a 500, so nothing is admitted); a list of only separators is the empty list the matcher sees.
+      ({ port: p } = await withList(","));
+      b = `http://localhost:${p}`;
+      await inviteRefused(b, `nobody-${Date.now()}@example.com`);
+      await inviteRefused(b, `nobody-${Date.now()}@partner.test`);
+      if (!(await authPost(b, "/api/auth/sign-in/email", { email: kept, password: gatePw })).ok) throw new Error("an existing user could not sign in with an empty list");
+      console.log("gate: invite-only exact entry admits (any case) and a same-domain address is refused; a list with no entries refuses everyone; existing users still sign in");
+    } finally {
+      writeFileSync(envFile, original);
+    }
   }
   if (config.secrets) {
     // A fake `infisical` first on PATH records its argv (FAKE_LOG) and is driven by env: FAKE_EXIT, FAKE_EXPORT (file contents), FAKE_STDERR.

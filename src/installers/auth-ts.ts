@@ -45,6 +45,18 @@ const DELETE_PASSWORD_HOOK = `  hooks: {
     }),
   },`;
 
+// Gate on user creation (D-invite): every sign-up path goes through it. No row is written and no mail is sent when it throws.
+const INVITE_ONLY_HOOK = `  databaseHooks: {
+    user: {
+      create: {
+        before: async (user) => {
+          if (!signupAllowed(env.SIGNUP_ALLOWLIST, user.email))
+            throw new APIError("FORBIDDEN", { code: "SIGNUP_INVITE_ONLY", message: "Signups are invite-only right now." });
+        },
+      },
+    },
+  },`;
+
 // The root auth.ts, written whole from the enabled features (one owner; add-ons contribute parts here, never patch the file).
 // Svelte only: react, vue and solid --auth keep v0.1 output (no auth.ts).
 export function composeAuthTs(config: Config): string {
@@ -68,14 +80,15 @@ export function composeAuthTs(config: Config): string {
     ...(config.turnstile
       ? ['  plugins: [captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })],']
       : []),
+    ...(config.inviteOnly ? [INVITE_ONLY_HOOK] : []),
     // Better Auth skips the password for sessions under freshAge, so this hook requires it.
     ...(config.accountDeletion ? [config.storage ? STORAGE_DELETE_USER : "  user: { deleteUser: { enabled: true } },", DELETE_PASSWORD_HOOK] : []),
   ];
   const del = config.accountDeletion && config.storage;
-  const ba = config.accountDeletion ? 'import { APIError, createAuthMiddleware } from "better-auth/api";\n' : "";
+  const ba = config.accountDeletion ? 'import { APIError, createAuthMiddleware } from "better-auth/api";\n' : config.inviteOnly ? 'import { APIError } from "better-auth/api";\n' : "";
   return `import { defineAuth } from "void/auth";
-${ba}${config.turnstile ? 'import { captcha } from "better-auth/plugins";\n' : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}
-export default defineAuth(({ defaults${config.turnstile ? ", env" : ""} }) => ({
+${ba}${config.turnstile ? 'import { captcha } from "better-auth/plugins";\n' : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.inviteOnly ? 'import { signupAllowed } from "./src/signup-allowlist";\n' : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}
+export default defineAuth(({ defaults${config.turnstile || config.inviteOnly ? ", env" : ""} }) => ({
   ...defaults,
 ${options.map((o) => o + "\n").join("")}}));
 `;
