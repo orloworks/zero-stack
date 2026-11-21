@@ -19,11 +19,11 @@ const failed = (r: ReturnType<typeof spawnSync>): string =>
     : `infisical exited ${r.status ?? r.signal}`;
 
 // Key names only, never values. Names come from parseEnv (what Void reads .env with); a line scan adds only what parseEnv
-// skips (names outside [\w.]+, which Infisical would still receive) and finds multi-line values and `export ` lines, which
-// `infisical secrets set --file` cannot take. A name is printed only when it is plain; anything else is reported as `line <n>`.
+// skips (names outside [\w.]+, which Infisical would still receive) and finds multi-line values, `export ` lines and inline
+// comments (a `#` or `'` in an unquoted value, or text after a closing quote), which `infisical secrets set --file` stores raw. A name is printed only when it is plain; anything else is reported as `line <n>`.
 const SAFE = /^[A-Za-z0-9_.-]{1,64}$/;
 const ENTRY = /^\s*(export\s+)?([^\s=#][^=]*?)\s*=\s*(.*)$/;
-const ONE_LINE = /^(?:'(?:\\'|[^'])*'|"(?:\\"|[^"])*"|`(?:\\`|[^`])*`)\s*(?:#.*)?$/; // a quoted value closed on its own line
+const ONE_LINE = /^(?:'(?:\\'|[^'])*'|"(?:\\"|[^"])*"|`(?:\\`|[^`])*`)\s*$/; // a quoted value closed on its own line, nothing after it
 type Entry = { name: string; label: string };
 const scan = (text: string): { names: Entry[]; unsupported: string[] } => {
   const lines = text.split(/\r?\n/);
@@ -37,7 +37,7 @@ const scan = (text: string): { names: Entry[]; unsupported: string[] } => {
     if (!m) return;
     const [, ex, name, v] = m as unknown as [string, string | undefined, string, string];
     const quoted = /^['"`]/.test(v);
-    if (ex || (quoted && !ONE_LINE.test(v))) unsupported.push(label(name, i));
+    if (ex || (quoted ? !ONE_LINE.test(v) : /[#']/.test(v))) unsupported.push(label(name, i));
     if (quoted && !v.slice(1).includes(v[0]!)) open = v[0]!;
     if (!/^[\w.]+$/.test(name)) names.push({ name, label: label(name, i) });
   });
@@ -62,8 +62,8 @@ function push(): void {
   const { names: entries, unsupported } = scan(readFileSync(ENV, "utf8"));
   if (unsupported.length)
     throw new Refuse(
-      `Refusing to push: multi-line values and "export " lines are not supported (Infisical reads ${ENV} one line at a time): ${[...new Set(unsupported)].join(", ")}.\n` +
-        "Nothing was sent. Put each value on one line without `export`, then rerun.",
+      `Refusing to push: multi-line values, inline comments and "export " lines are not supported (Infisical reads ${ENV} one line at a time): ${[...new Set(unsupported)].join(", ")}.\n` +
+        "Nothing was sent. Put each value on one line without `export` or a trailing `# comment` (quote a value that holds `#`), then rerun.",
     );
   const names = [...new Set(entries.map((e) => e.name))];
   if (!names.length) throw new Refuse(`${ENV} has no keys. Nothing was sent.`);
@@ -86,7 +86,8 @@ function push(): void {
 function pull(): void {
   requireLink();
   const args = ["export", "--env=dev", "--format=dotenv", "--expand=false", "--silent", `--output-file=${TMP}`];
-  // spawnSync blocks handlers until the child exits; the child gets the signal too, so this runs right after.
+  // A signal sent only to this process waits until spawnSync returns, then until the event loop runs (maybe never: .env may still be
+  // replaced, exit 0). The handlers stop it from killing us mid-export, so `finally` removes TMP. Ctrl-C or a hangup also hits infisical, which fails.
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
     process.on(sig, () => {
       rmSync(TMP, { force: true });
@@ -105,12 +106,18 @@ function pull(): void {
     const exp = scan(readFileSync(TMP, "utf8"));
     if (exp.unsupported.length)
       throw new Refuse(
-        `The Infisical dev export has multi-line values or "export " lines, which this script cannot round-trip: ${[...new Set(exp.unsupported)].join(", ")}.\n` +
+        `The Infisical dev export has multi-line values, inline comments or "export " lines, which this script cannot round-trip: ${[...new Set(exp.unsupported)].join(", ")}.\n` +
           `${ENV} was not changed. Store each value on one line in Infisical.`,
       );
     if (existsSync(ENV)) {
       const have = new Set(exp.names.map((e) => e.name));
-      const missing = scan(readFileSync(ENV, "utf8")).names.filter((e) => !have.has(e.name)).map((e) => e.label);
+      const local = scan(readFileSync(ENV, "utf8"));
+      if (local.unsupported.length)
+        throw new Refuse(
+          `Your ${ENV} has multi-line values, inline comments or "export " lines, so its keys cannot be checked against the export: ${[...new Set(local.unsupported)].join(", ")}.\n` +
+            `${ENV} was not changed. Fix those lines, then rerun.`,
+        );
+      const missing = local.names.filter((e) => !have.has(e.name)).map((e) => e.label);
       if (missing.length)
         throw new Refuse(
           `The Infisical dev export lacks keys your ${ENV} has: ${[...new Set(missing)].join(", ")}.\n` +
@@ -127,7 +134,7 @@ function pull(): void {
 const commands: Record<string, () => void> = { pull, push };
 const cmd = commands[process.argv[2] ?? ""];
 try {
-  if (!cmd) throw new Refuse(`Usage: bun scripts/secrets.ts <${Object.keys(commands).join("|")}>`);
+  if (!cmd) throw new Refuse(`Usage: node scripts/secrets.ts <${Object.keys(commands).join("|")}>`);
   cmd();
 } catch (e) {
   console.error(e instanceof Refuse ? e.message : `secrets: ${(e as Error).message}`);

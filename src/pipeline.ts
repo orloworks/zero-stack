@@ -43,7 +43,7 @@ function addAppScripts(targetDir: string, config: Config): void {
       verify: "void prepare && vp check && tsc --noEmit && vp build && vp test",
       test: "vp test",
       "db:reset": "void db reset --yes",
-      ...(config.secrets && { "secrets:pull": "bun scripts/secrets.ts pull", "secrets:push": "bun scripts/secrets.ts push" }),
+      ...(config.secrets && { "secrets:pull": "node scripts/secrets.ts pull", "secrets:push": "node scripts/secrets.ts push" }),
     });
     // Void does not handle bun script approvals.
     pkg.trustedDependencies = TRUSTED_DEPENDENCIES;

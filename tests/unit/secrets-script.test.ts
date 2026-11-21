@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const script = join(import.meta.dir, "../../template/secrets/scripts/secrets.ts");
+const node = Bun.which("node")!; // the generated package.json runs it with node, so its parseEnv is Node's (as Void's)
 
 // A linked folder with a fake infisical on PATH: it logs its argv to `calls` and writes FAKE_EXPORT to --output-file.
 function app(env: string, exported = "") {
@@ -16,7 +17,7 @@ function app(env: string, exported = "") {
   writeFileSync(join(dir, ".infisical.yaml"), "x: 1\n");
   writeFileSync(join(dir, ".env"), env);
   const run = (cmd: "push" | "pull") => {
-    const r = Bun.spawnSync([process.execPath, script, cmd], {
+    const r = Bun.spawnSync([node, script, cmd], {
       cwd: dir, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, FAKE_EXPORT: exported },
     });
     return { code: r.exitCode, out: r.stdout.toString() + r.stderr.toString(), called: existsSync(log), env: readFileSync(join(dir, ".env"), "utf8"), tmp: existsSync(join(dir, ".env.pull-tmp")) };
@@ -79,4 +80,35 @@ test("ordinary files still push and pull", () => {
   expect([push.code, push.out.includes("Pushed 3 keys")]).toEqual([0, true]);
   const pull = app(env, "A=2\nB=\"x y\"\nC=3\n")("pull");
   expect([pull.code, pull.env]).toEqual([0, "A=2\nB=\"x y\"\nC=3\n"]);
+});
+
+test("under node, a single backslash before the closing quote does not hide the keys after it", () => {
+  // The review's repros: Bun's parseEnv reads \" as an escape and swallows the next quoted line; Node's does not.
+  const env = 'WIN_DIR="C:\\temp\\"\nVITE_ADMIN_TOKEN="tok"\nOK=1\n'; // the file holds WIN_DIR="C:\temp\"
+  const push = app(env)("push");
+  expect([push.code, push.called, push.out.includes("VITE_ADMIN_TOKEN")]).toEqual([1, false, true]);
+  const local = 'WIN_DIR="C:\\temp\\"\nSTRIPE_SECRET_KEY="sk_live_local"\n';
+  const pull = app(local, "WIN_DIR='C:\\temp\\'\n")("pull");
+  expect([pull.code, pull.env, pull.out.includes("STRIPE_SECRET_KEY"), pull.out.includes("sk_live")]).toEqual([1, local, true, false]);
+});
+
+test("push refuses inline comments, naming the key only", () => {
+  for (const [env, named] of [["A=foo # note-one\n", "A"], ['B="bar" # note-two\n', "B"], ["C=x#frag-three\n", "C"]] as const) {
+    const r = app(`OK=1\n${env}`)("push");
+    expect([r.code, r.called, r.out.includes(`: ${named}.`)]).toEqual([1, false, true]);
+    for (const h of ["note", "frag", "foo", "bar", "OK"]) expect(r.out).not.toContain(h);
+  }
+});
+
+test("pull refuses when the local .env has a line it cannot check, leaving it untouched", () => {
+  for (const env of ["A=1\nB=foo # note\n", "A=1\nexport B=1\n", 'A=1\nB="x\ny"\n']) {
+    const r = app(env, "A=1\nB=2\n")("pull");
+    expect([r.code, r.env, r.tmp, r.out.includes("B")]).toEqual([1, env, false, true]);
+    expect(r.out).not.toContain("note");
+  }
+});
+
+test("pull refuses an export whose quoted value hid a newline and a fake key (a' + newline + X=Y)", () => {
+  const r = app("NOTE=1\n", "NOTE='a'\nX=Y'\n")("pull");
+  expect([r.code, r.env, r.tmp, r.out.includes("X")]).toEqual([1, "NOTE=1\n", false, true]);
 });

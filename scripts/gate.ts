@@ -401,11 +401,13 @@ try {
     writeFileSync(envFile, pushed);
     r = runScript({ FAKE_EXPORT: pem });
     check(r.code === 1 && r.out.includes("PRIVATE_PEM") && !r.out.includes("abcDEF") && !r.out.includes("lower_body") && readFileSync(envFile).equals(pushed) && !existsSync(tmp), `pull with a PEM export exited ${r.code}, output: ${r.out}`);
-    // A value ending in an escaped backslash must not hide the keys after it.
-    writeFileSync(envFile, 'WIN_DIR="C:\\\\temp\\\\"\nSTRIPE_SECRET_KEY=sk_test_1\nVITE_ADMIN_TOKEN=tok\n');
-    rmSync(log, { force: true });
-    r = runScript({}, ["run", "secrets:push"]);
-    checkPush(r.code === 1 && r.out.includes("VITE_ADMIN_TOKEN") && !existsSync(log), `push after an escaped backslash exited ${r.code}, output: ${r.out}`);
+    // A value ending in a backslash (escaped or not) must not hide the keys after it; `WIN_DIR="C:\temp\"` hid the next quoted key from Bun's parseEnv.
+    for (const bad of ['WIN_DIR="C:\\\\temp\\\\"\nSTRIPE_SECRET_KEY=sk_test_1\nVITE_ADMIN_TOKEN=tok\n', 'WIN_DIR="C:\\temp\\"\nVITE_ADMIN_TOKEN="tok"\nOK=1\n']) {
+      writeFileSync(envFile, bad);
+      rmSync(log, { force: true });
+      r = runScript({}, ["run", "secrets:push"]);
+      checkPush(r.code === 1 && r.out.includes("VITE_ADMIN_TOKEN") && !existsSync(log), `push after a trailing backslash exited ${r.code}, output: ${r.out}`);
+    }
     writeFileSync(envFile, pushed);
     // The generated tsconfig covers scripts/: a type error there fails tsc.
     const script = join(app, "scripts/secrets.ts"), scriptSrc = readFileSync(script);

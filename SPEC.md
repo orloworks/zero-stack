@@ -150,8 +150,10 @@ dependency-free `scripts/secrets.ts` (`node:` APIs only) and adds `secrets:pull`
   is empty; every step exits 1 on failure so a failed export never deploys; client keys via
   `infisical run --env=prod -- void deploy`. `void secret sync` needs an `env.ts` declaring
   every synced key (AGENTS.md says so).
-- Push and pull refuse multi-line values and `export ` lines (naming the key only). Names are read
-  with `parseEnv` from `node:util`; a name is printed only if it matches `^[A-Za-z0-9_.-]{1,64}$`,
+- Push and pull refuse multi-line values, inline comments (`#` or `'` in an unquoted value, text
+  after a closing quote) and `export ` lines, naming the key only; pull checks both the export and
+  the local `.env`. The scripts run `node scripts/secrets.ts`, so names are read with Node's
+  `parseEnv` from `node:util`, as Void reads `.env`; a name is printed only if it matches `^[A-Za-z0-9_.-]{1,64}$`,
   otherwise `line <n>`.
 - Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its
   first sync overwrites Worker secrets), production or preview scripts, other secret managers,

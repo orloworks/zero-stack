@@ -71,11 +71,11 @@ test("--secrets AGENTS.md documents push as a one-time seed, the naming conventi
   for (const s of [
     "bun run secrets:push", "one-time seed", "overwrites", "some keys may already have been set",
     "^[A-Z][A-Z0-9_]*$", "__VOID_", "_PREVIOUS", "env.ts",
-    "umask 077", "mktemp", "trap 'rm -f \"$f\"' EXIT",
+    "umask 077", "mktemp", "trap 'rm -f \"$f\"' EXIT INT TERM HUP",
     "```bash\n(\n  set -o pipefail",
-    "| { grep -Ev '^(VITE_|BETTER_AUTH_)' || true; } > \"$f\" || exit 1",
+    "| { grep -Ev '^(VITE_|BETTER_AUTH_)'; [ $? -le 1 ]; } > \"$f\" || exit 1",
     "[ -s \"$f\" ] || exit 0", "void secret sync \"$f\" --yes || exit 1", "\n) && infisical run --env=prod -- void deploy", "Workers sync",
-    "`BETTER_AUTH_*` is filtered out", "declare every key you sync", "skipped when nothing is left",
+    "`BETTER_AUTH_*` is filtered out", "declare every key you sync", "skipped when nothing is left", "must not contain `'` or newlines", "inline comment",
   ])
     expect(agents).toContain(s);
 });
@@ -89,6 +89,7 @@ async function route(env: Record<string, string>) {
   mkdirSync(bin);
   writeFileSync(join(bin, "infisical"), '#!/bin/sh\necho "infisical $*" >> "$CALLS"\n[ "$1" = export ] && { printf \'%s\' "$FAKE_EXPORT"; exit "${FAKE_EXIT:-0}"; }\nexit 0\n', { mode: 0o755 });
   writeFileSync(join(bin, "void"), '#!/bin/sh\necho "void $1 $2" >> "$CALLS"\ncat "$3" > "$SYNCED"\nexit "${VOID_EXIT:-0}"\n', { mode: 0o755 });
+  if (env.GREP_EXIT) writeFileSync(join(bin, "grep"), '#!/bin/sh\ncat > /dev/null\nexit "$GREP_EXIT"\n', { mode: 0o755 }); // grep itself failing (exit 2)
   const r = Bun.spawnSync(["bash", "-c", block], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CALLS: calls, SYNCED: synced, ...env } });
   const read = (f: string) => (existsSync(f) ? readFileSync(f, "utf8") : "");
   return { code: r.exitCode, calls: read(calls).trim().split("\n").filter(Boolean).map((l) => l.split(" ").slice(0, 3).join(" ")), synced: read(synced) };
@@ -108,6 +109,12 @@ test("production route: syncs only the unfiltered keys, then deploys", async () 
 test("production route: skips the sync when the filtered file is empty, then deploys", async () => {
   const r = await route({ FAKE_EXPORT: "VITE_X=2\nBETTER_AUTH_SECRET=s\n" });
   expect([r.code, r.calls]).toEqual([0, ["infisical export --env=prod", "infisical run --env=prod"]]);
+});
+
+test("production route: a grep error (exit 2) reaches neither the sync nor the deploy", async () => {
+  const r = await route({ FAKE_EXPORT: "A=1\n", GREP_EXIT: "2" });
+  expect(r.code).not.toBe(0);
+  expect(r.calls).toEqual(["infisical export --env=prod"]);
 });
 
 test("production route: a failed sync never deploys", async () => {

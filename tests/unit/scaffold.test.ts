@@ -440,8 +440,8 @@ const withTsconfig = (s: ReturnType<typeof seeded>, body = REAL_TSCONFIG) => asy
 test("secrets adds scripts/secrets.ts, the secrets:pull script and the .env.pull-tmp ignore; without it, none of them", async () => {
   const on = seeded("<!--/injected-by-void-->\n");
   await scaffold({ ...cfg, secrets: true }, on.dir, withTsconfig(on));
-  expect(JSON.parse(readFileSync(join(on.dir, "package.json"), "utf8")).scripts["secrets:pull"]).toBe("bun scripts/secrets.ts pull");
-  expect(JSON.parse(readFileSync(join(on.dir, "package.json"), "utf8")).scripts["secrets:push"]).toBe("bun scripts/secrets.ts push");
+  expect(JSON.parse(readFileSync(join(on.dir, "package.json"), "utf8")).scripts["secrets:pull"]).toBe("node scripts/secrets.ts pull");
+  expect(JSON.parse(readFileSync(join(on.dir, "package.json"), "utf8")).scripts["secrets:push"]).toBe("node scripts/secrets.ts push");
   expect(existsSync(join(on.dir, "scripts/secrets.ts"))).toBe(true);
   expect(readFileSync(join(on.dir, ".gitignore"), "utf8").split("\n")).toContain(".env.pull-tmp");
   expect(JSON.parse(readFileSync(join(on.dir, "tsconfig.json"), "utf8")).include).toEqual(["src", "pages", "routes", "middleware", "crons", "queues", "db", "scripts"]);
