@@ -65,11 +65,13 @@ from `.env`; overwrites Infisical values; prints only a key count) and `bun run 
 (replaces `.env` from `dev`). Link the folder first (`secret-sync` skill or `infisical init
 --project-id <id>`). `push` refuses names that break the key naming convention (upper snake
 case, no `VITE_` name containing SECRET/PASSWORD/TOKEN/PRIVATE, never `VOID_`/`__VOID_`).
-It also refuses multi-line values, inline comments and `export ` lines, as does `pull` for the
-export and the local `.env`. Both run under Node (`node scripts/secrets.ts`). Infisical
+Both accept only a strict line format (blank, `#` comment, `KEY=value` with the value empty,
+unquoted without `#`, quotes, backticks or `\`, or in one `"…"`/`'…'` pair with no quote or `\`
+inside) in `.env` and the export, and refuse any other line by line number. Both run under Bun
+(`bun scripts/secrets.ts`). Infisical
 output is never printed. The generated `AGENTS.md` documents the production route (`void secret
-sync` for server keys, which needs an `env.ts` declaring every synced key and skips `VITE_` and
-`BETTER_AUTH_` lines; `infisical run --env=prod -- void deploy` for client keys).
+sync` for server keys, which needs an `env.ts` declaring every synced key, skips `VITE_` and
+`BETTER_AUTH_` lines and refuses any export line other than `KEY='…'`; `infisical run --env=prod -- void deploy` for client keys).
 
 Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its
 first sync overwrites Worker secrets), production or preview scripts, other secret managers,

@@ -71,11 +71,14 @@ test("--secrets AGENTS.md documents push as a one-time seed, the naming conventi
   for (const s of [
     "bun run secrets:push", "one-time seed", "overwrites", "some keys may already have been set",
     "^[A-Z][A-Z0-9_]*$", "__VOID_", "_PREVIOUS", "env.ts",
-    "umask 077", "mktemp", "trap 'rm -f \"$f\"' EXIT INT TERM HUP",
-    "```bash\n(\n  set -o pipefail",
-    "| { grep -Ev '^(VITE_|BETTER_AUTH_)'; [ $? -le 1 ]; } > \"$f\" || exit 1",
+    "umask 077", "mktemp", "trap 'rm -f \"$raw\" \"$f\"' EXIT INT TERM HUP",
+    "```bash\n(\n  umask 077",
+    "> \"$raw\" || exit 1\n",
+    "grep -Evq \"^[A-Z_][A-Z0-9_]*='[^'\\\\\\\\]*'\\$\" \"$raw\"; [ $? -eq 1 ] || exit 1",
+    "grep -Ev '^(VITE_|BETTER_AUTH_)' \"$raw\" > \"$f\"; [ $? -le 1 ] || exit 1",
     "[ -s \"$f\" ] || exit 0", "void secret sync \"$f\" --yes || exit 1", "\n) && infisical run --env=prod -- void deploy", "Workers sync",
-    "`BETTER_AUTH_*` is filtered out", "declare every key you sync", "skipped when nothing is left", "must not contain `'` or newlines", "inline comment",
+    "`BETTER_AUTH_*` is filtered out", "declare every key you sync", "skipped when nothing is left", "refuses (exit 1, before the sync and the deploy) any export line other than `KEY='…'` with no `'` or `\\` inside",
+    "Line format (push and pull)", "inline comments", "`export line <n>`", "`.env line <n>`", "prints `line <n>`, never the line",
   ])
     expect(agents).toContain(s);
 });
@@ -102,23 +105,30 @@ test("production route: a failed infisical export reaches neither the sync nor t
 });
 
 test("production route: syncs only the unfiltered keys, then deploys", async () => {
-  const r = await route({ FAKE_EXPORT: "A=1\nVITE_X=2\nBETTER_AUTH_URL=u\nBETTER_AUTH_SECRET=s\nB=3\n" });
-  expect([r.code, r.synced, r.calls]).toEqual([0, "A=1\nB=3\n", ["infisical export --env=prod", "void secret sync", "infisical run --env=prod"]]);
+  const r = await route({ FAKE_EXPORT: "A_KEY='1'\nVITE_X='y'\nBETTER_AUTH_SECRET='z'\n" });
+  expect([r.code, r.synced, r.calls]).toEqual([0, "A_KEY='1'\n", ["infisical export --env=prod", "void secret sync", "infisical run --env=prod"]]);
+});
+
+test("production route: an export line other than KEY='…' (no ' or \\ inside) reaches neither the sync nor the deploy", async () => {
+  for (const bad of ["DB_PASSWORD='p'ss'\n", "A_KEY='1'\nVITE_PUBLIC_PEM='line1\nSTOLEN_KEY=x'\n", "A_KEY=1\n", "A_KEY='a\\'b'\n", "A_KEY='1'\r\n"]) {
+    const r = await route({ FAKE_EXPORT: bad });
+    expect([bad, r.code, r.calls, r.synced]).toEqual([bad, 1, ["infisical export --env=prod"], ""]);
+  }
 });
 
 test("production route: skips the sync when the filtered file is empty, then deploys", async () => {
-  const r = await route({ FAKE_EXPORT: "VITE_X=2\nBETTER_AUTH_SECRET=s\n" });
+  const r = await route({ FAKE_EXPORT: "VITE_X='2'\nVITE_Y='3'\n" });
   expect([r.code, r.calls]).toEqual([0, ["infisical export --env=prod", "infisical run --env=prod"]]);
 });
 
 test("production route: a grep error (exit 2) reaches neither the sync nor the deploy", async () => {
-  const r = await route({ FAKE_EXPORT: "A=1\n", GREP_EXIT: "2" });
+  const r = await route({ FAKE_EXPORT: "A_KEY='1'\n", GREP_EXIT: "2" });
   expect(r.code).not.toBe(0);
   expect(r.calls).toEqual(["infisical export --env=prod"]);
 });
 
 test("production route: a failed sync never deploys", async () => {
-  const r = await route({ FAKE_EXPORT: "A=1\n", VOID_EXIT: "2" });
+  const r = await route({ FAKE_EXPORT: "A_KEY='1'\n", VOID_EXIT: "2" });
   expect(r.code).not.toBe(0);
   expect(r.calls).toEqual(["infisical export --env=prod", "void secret sync"]);
 });

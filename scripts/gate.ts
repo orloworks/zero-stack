@@ -388,27 +388,24 @@ try {
     checkPush(r.code === 1 && ["lower_case", "VITE_API_TOKEN", "VOID_X"].every((n) => r.out.includes(n)) && !r.out.includes("GOOD_KEY") && !r.out.includes("VALUE-"), `bad names exited ${r.code}, output: ${r.out}`);
     checkPush(!existsSync(log), "push with bad names still ran infisical");
     writeFileSync(envFile, pushed);
-    // Multi-line values and `export ` lines: push refuses before infisical runs (the real CLI reads --file one line at a time), naming the key only.
+    // Lines outside the strict format (spec story 11): push refuses before infisical runs, pull refuses the same in the export (and in
+    // the local .env), leaving .env as it was. Both report the line number only, never text from the line (it may be part of a value).
     writeFileSync(join(app, ".infisical.json"), "{}\n");
-    const pem = 'GOOD_KEY=1\nPRIVATE_PEM="-----BEGIN KEY-----\nabcDEF=ghi\nlower_body=xyz\n-----END KEY-----"\n';
-    for (const [bad, key] of [[pem, "PRIVATE_PEM"], ["GOOD_KEY=1\nexport C=1\n", "C"]] as const) {
+    const at = pushed.toString().split("\n").length; // the 1-based number of a line appended to `pushed`
+    for (const bad of [
+      'PRIVATE_PEM="-----BEGIN KEY-----\nhunter2=ghi\n-----END KEY-----"\n', "export C=hunter2\n", "TOKEN_KEY=`hunter2`\n",
+      'PRIVATE_KEY="hunter2\\nb"\n', "A_KEY='hunter2\\'b'\n", 'WIN_DIR="C:\\hunter2\\"\nVITE_ADMIN_TOKEN="tok"\n',
+    ]) {
       rmSync(log, { force: true });
-      writeFileSync(envFile, bad);
+      writeFileSync(envFile, Buffer.concat([pushed, Buffer.from(bad)]));
       r = runScript({}, ["run", "secrets:push"]);
-      checkPush(r.code === 1 && r.out.includes(key) && !r.out.includes("abcDEF") && !r.out.includes("lower_body") && !existsSync(log), `push with ${key} exited ${r.code}, output: ${r.out}`);
+      checkPush(r.code === 1 && r.out.includes(`line ${at}`) && !r.out.includes("hunter2") && !existsSync(log), `push with ${JSON.stringify(bad)} exited ${r.code}, output: ${r.out}`);
+      r = runScript({ FAKE_EXPORT: pushed.toString() });
+      check(r.code === 1 && r.out.includes(`.env line ${at}`) && !r.out.includes("hunter2") && readFileSync(envFile).equals(Buffer.concat([pushed, Buffer.from(bad)])) && !existsSync(tmp), `pull with ${JSON.stringify(bad)} in .env exited ${r.code}, output: ${r.out}`);
+      writeFileSync(envFile, pushed);
+      r = runScript({ FAKE_EXPORT: pushed.toString() + bad });
+      check(r.code === 1 && r.out.includes(`export line ${at}`) && !r.out.includes("hunter2") && readFileSync(envFile).equals(pushed) && !existsSync(tmp), `pull with ${JSON.stringify(bad)} in the export exited ${r.code}, output: ${r.out}`);
     }
-    // Pull refuses the same in the export, leaving .env as it was.
-    writeFileSync(envFile, pushed);
-    r = runScript({ FAKE_EXPORT: pem });
-    check(r.code === 1 && r.out.includes("PRIVATE_PEM") && !r.out.includes("abcDEF") && !r.out.includes("lower_body") && readFileSync(envFile).equals(pushed) && !existsSync(tmp), `pull with a PEM export exited ${r.code}, output: ${r.out}`);
-    // A value ending in a backslash (escaped or not) must not hide the keys after it; `WIN_DIR="C:\temp\"` hid the next quoted key from Bun's parseEnv.
-    for (const bad of ['WIN_DIR="C:\\\\temp\\\\"\nSTRIPE_SECRET_KEY=sk_test_1\nVITE_ADMIN_TOKEN=tok\n', 'WIN_DIR="C:\\temp\\"\nVITE_ADMIN_TOKEN="tok"\nOK=1\n']) {
-      writeFileSync(envFile, bad);
-      rmSync(log, { force: true });
-      r = runScript({}, ["run", "secrets:push"]);
-      checkPush(r.code === 1 && r.out.includes("VITE_ADMIN_TOKEN") && !existsSync(log), `push after a trailing backslash exited ${r.code}, output: ${r.out}`);
-    }
-    writeFileSync(envFile, pushed);
     // The generated tsconfig covers scripts/: a type error there fails tsc.
     const script = join(app, "scripts/secrets.ts"), scriptSrc = readFileSync(script);
     writeFileSync(script, Buffer.concat([scriptSrc, Buffer.from('\nconst n: number = "x";\n')]));
@@ -420,8 +417,8 @@ try {
     rmSync(log, { force: true });
     r = runScript({}, ["run", "secrets:push"]);
     checkPush(r.code === 1 && r.out.includes("secret-sync") && r.out.includes("infisical init --project-id") && !existsSync(log), `push without a link file exited ${r.code}, output: ${r.out}`);
-    console.log("gate: secrets:push sends the exact argv and prints only the key count; refuses bad names, no link and an infisical failure without leaking a value");
-    console.log("gate: secrets:pull refuses without a link / on a missing key / on an infisical failure (.env untouched, nothing leaked); ok pull is verbatim 0600");
+    console.log("gate: secrets:push sends the exact argv and prints only the key count; refuses bad names, lines outside the format, no link and an infisical failure without leaking a value");
+    console.log("gate: secrets:pull refuses without a link / on a missing key / on a line outside the format / on an infisical failure (.env untouched, nothing leaked); ok pull is verbatim 0600");
   }
 } catch (e) {
   console.error(`gate failed: ${(e as Error).message}`);

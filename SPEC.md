@@ -29,7 +29,7 @@ tests/
 2. Target dir must be new or empty. On any failure, delete a directory zero-stack created; a pre-existing empty target is emptied, not removed.
 3. Validate flags, fail fast with a one-line fix. Implied flags are declared once in
    `FEATURES` (`src/flags.ts`) and each is announced: `--shadcn` enables `--tailwind`;
-   `--account-deletion`, `--email`, `--turnstile` and `--storage` enable `--auth`.
+   `--account-deletion`, `--email`, `--turnstile`, `--storage` and `--secrets` enable `--auth`.
    `--shadcn` requires `--framework react`; `--account-deletion`, `--email` and
    `--turnstile` require `--framework svelte` (D33).
 4. Run pinned `bunx create-void@<pin> <name> --toolchain vite-plus --framework <fw>
@@ -57,6 +57,7 @@ tests/
 | `--email` | bool | Svelte only, implies `--auth`. Password reset and sign-up verification mail |
 | `--turnstile` | bool | Svelte only, implies `--auth`. Cloudflare Turnstile on sign-up, sign-in and password reset |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes and helper |
+| `--secrets` | `infisical` (the only value) | Any framework, implies `--auth`. `secrets:pull` / `secrets:push` against Infisical `dev`, see below |
 
 Starter is fixed to sqlite (D1). The four add-ons are the wave 1 flags; each CLI flag has a
 matching prompt. `--auth` on react, vue and solid is unchanged from v0.1.x (D34): the
@@ -150,11 +151,14 @@ dependency-free `scripts/secrets.ts` (`node:` APIs only) and adds `secrets:pull`
   is empty; every step exits 1 on failure so a failed export never deploys; client keys via
   `infisical run --env=prod -- void deploy`. `void secret sync` needs an `env.ts` declaring
   every synced key (AGENTS.md says so).
-- Push and pull refuse multi-line values, inline comments (`#` or `'` in an unquoted value, text
-  after a closing quote) and `export ` lines, naming the key only; pull checks both the export and
-  the local `.env`. The scripts run `node scripts/secrets.ts`, so names are read with Node's
-  `parseEnv` from `node:util`, as Void reads `.env`; a name is printed only if it matches `^[A-Za-z0-9_.-]{1,64}$`,
-  otherwise `line <n>`.
+- Strict line format, no dotenv parser: push (`.env`) and pull (the export and the local `.env`)
+  accept only blank lines, `#` comments and `KEY=value` with no spaces around `=`, the value
+  empty, unquoted (no `#`, quote, backtick or `\`, no edge whitespace) or one `"…"` or `'…'` pair
+  with no quote or `\` inside. Any other line (multi-line values, `export `, inline comments,
+  escapes, CRLF) is refused as `line <n>` (`export line <n>`, `.env line <n>` for pull), never its
+  text. Names come only from accepted lines. The scripts run under Bun (`bun scripts/secrets.ts`).
+- The production route refuses (exit 1, before sync and deploy) a prod export with any line other
+  than `KEY='…'` with no `'` or `\` inside.
 - Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its
   first sync overwrites Worker secrets), production or preview scripts, other secret managers,
   writing `.infisical.yaml` or creating Infisical projects, `infisical run` for dev.
