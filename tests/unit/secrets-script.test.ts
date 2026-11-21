@@ -125,3 +125,15 @@ test("pull replaces .env when the export has every local key", () => {
   const r = app("# note\nA=1\nB=\"x y\"\n", "A='2'\nB='x y'\nC='x'\n")("pull");
   expect([r.code, r.env, r.tmp]).toEqual([0, "A='2'\nB='x y'\nC='x'\n", false]);
 });
+
+test("pull refuses an export where a value's quote and newline add an override or a comment line, by line number", () => {
+  for (const exported of ["A='1'\nVITE_BANNER='Welcome'\nA='hunter2'\n", "A='correct'\n#hunter2'\n", "A='1'\n\nB='hunter2'\n"]) {
+    const r = app("A=1\n", exported)("pull");
+    expect([exported, r.code, r.env, r.tmp, r.out.includes("hunter2"), /export line \d/.test(r.out)]).toEqual([exported, 1, "A=1\n", false, false, true]);
+  }
+});
+
+test("pull accepts an empty export when .env has no keys", () => {
+  const r = app("# none\n", "")("pull");
+  expect([r.code, r.env]).toEqual([0, ""]);
+});

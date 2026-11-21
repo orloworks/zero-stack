@@ -74,7 +74,7 @@ test("--secrets AGENTS.md documents push as a one-time seed, the naming conventi
     "umask 077", "mktemp", "trap 'rm -f \"$raw\" \"$f\"' EXIT; trap 'exit 1' INT TERM HUP", "Infisical rejects empty values",
     "```bash\n(\n  umask 077",
     ">| \"$raw\" || exit 1\n", "  raw= f=\n  trap", "`command grep -a`",
-    "command grep -aEvq \"^[A-Z_][A-Z0-9_]*='[^'\\$\\\\\\\\\"$'\\r'\"]*'\\$\" \"$raw\"; [ $? -eq 1 ] || exit 1",
+    "command grep -aEvq \"^[A-Z_][A-Z0-9_]*='[^'\\$\\\\\\\\$cr]*'\\$\" \"$raw\"; [ $? -eq 1 ] || exit 1", "cr=$(printf '\\r')", "[ -z \"$(cut -d= -f1 \"$raw\" | sort | uniq -d)\" ] || exit 1",
     "command grep -aEv '^(VITE_|BETTER_AUTH_)' \"$raw\" >| \"$f\"; [ $? -le 1 ] || exit 1",
     "[ -s \"$f\" ] || exit 0", "void secret sync \"$f\" --yes || exit 1", "\n) && infisical run --env=prod -- void deploy", "Workers sync",
     "`BETTER_AUTH_*` is filtered out", "declare every key you sync", "skipped when nothing is left", "refuses (exit 1, before the sync and the deploy) any export line other than `KEY='…'` with no `'`, `\\`, `$` or carriage return inside",
@@ -95,7 +95,7 @@ async function route(env: Record<string, string>) {
   writeFileSync(join(bin, "void"), '#!/bin/sh\necho "void $1 $2" >> "$CALLS"\ncat "$3" > "$SYNCED"\nexit "${VOID_EXIT:-0}"\n', { mode: 0o755 });
   if (env.SIG_FILTER) writeFileSync(join(bin, "grep"), '#!/bin/sh\n[ "$1" = -aEv ] && kill -TERM $PPID\nexec /usr/bin/grep "$@"\n', { mode: 0o755 });
   if (env.GREP_EXIT) writeFileSync(join(bin, "grep"), '#!/bin/sh\ncat > /dev/null\nexit "$GREP_EXIT"\n', { mode: 0o755 }); // grep itself failing (exit 2)
-  const r = Bun.spawnSync(["bash", "-c", (env.PRELUDE ?? "") + block], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CALLS: calls, SYNCED: synced, ...env } });
+  const r = Bun.spawnSync([env.SHELL_BIN ?? "bash", "-c", (env.PRELUDE ?? "") + block], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CALLS: calls, SYNCED: synced, ...env } });
   const read = (f: string) => (existsSync(f) ? readFileSync(f, "utf8") : "");
   return { code: r.exitCode, calls: read(calls).trim().split("\n").filter(Boolean).map((l) => l.split(" ").slice(0, 3).join(" ")), synced: read(synced) };
 }
@@ -155,4 +155,16 @@ test("production route: a failing mktemp never deletes a file a stale $f or $raw
   writeFileSync(join(fakeBin, "mktemp"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   const r = await route({ FAKE_EXPORT: "A_KEY='1'\n", PRELUDE: `PATH=${fakeBin}:$PATH; f=${keep}; raw=${keep}\n` });
   expect([r.code, r.calls, existsSync(keep)]).toEqual([1, [], true]);
+});
+
+test("production route: a repeated name (a value's quote and newline adding an override) reaches neither the sync nor the deploy", async () => {
+  const r = await route({ FAKE_EXPORT: "STRIPE_SECRET_KEY='sk_real'\nVITE_BANNER='Welcome'\nSTRIPE_SECRET_KEY='sk_bad'\n" });
+  expect([r.code, r.calls, r.synced]).toEqual([1, ["infisical export --env=prod"], ""]);
+});
+
+test("production route under dash: a carriage return is still refused and a good export still syncs", async () => {
+  const bad = await route({ FAKE_EXPORT: "DB_PASSWORD='pa\r55'\nAPI_KEY='abc'\n", SHELL_BIN: "/bin/dash" });
+  expect([bad.code, bad.calls]).toEqual([1, ["infisical export --env=prod"]]);
+  const good = await route({ FAKE_EXPORT: "A_KEY='secret'\nVITE_X='y'\n", SHELL_BIN: "/bin/dash" });
+  expect([good.code, good.synced]).toEqual([0, "A_KEY='secret'\n"]);
 });

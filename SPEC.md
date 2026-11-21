@@ -160,7 +160,7 @@ dependency-free `scripts/secrets.ts` (`node:` APIs only) and adds `secrets:pull`
   `K=''` and whitespace-only quoted values (`K=" "`, which Infisical trims) by line number before any `infisical` call ("Infisical rejects empty values; remove the
   line or give it a value"), because `infisical secrets set --file` rejects the whole file. The scripts run under Bun with `--no-env-file` (`bun --no-env-file scripts/secrets.ts`), so `.env` never reaches the `infisical` child (an `INFISICAL_*` key there would redirect it).
 - The production route refuses (exit 1, before sync and deploy) a prod export with any line other
-  than `KEY='…'` with no `'`, `\`, `$` or carriage return inside.
+  than `KEY='…'` with no `'`, `\`, `$` or carriage return inside. Pull and the route also refuse an export with a blank, `#` or repeated-name line: Infisical's export does not escape values, so a value holding `'` and a newline can add a line that overrides another key.
 - Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its
   first sync overwrites Worker secrets), production or preview scripts, other secret managers,
   writing `.infisical.yaml` or creating Infisical projects, `infisical run` for dev.

@@ -98,9 +98,21 @@ function pull(): void {
           `${ENV} was not changed. Rerun by hand: (umask 077; infisical ${args.join(" ")}); rm -f ${TMP}`,
       );
     chmodSync(TMP, 0o600);
-    const exp = read(readFileSync(TMP, "utf8"));
+    const text = readFileSync(TMP, "utf8");
+    const exp = read(text);
     if (exp.bad.length)
       throw new Refuse(`The Infisical dev export has lines this script cannot round-trip: export ${exp.bad.join(", export ")}. ${FORMAT}\n${ENV} was not changed. Fix those values in Infisical.`);
+    // Infisical's export writes only KEY='…' lines, each name once, and does not escape values: a blank, `#` or repeated-name
+    // line means a value holds `'` and a newline (it would override another key or cut a value short). Line numbers only.
+    const seen = new Set<string>();
+    const split = text ? text.replace(/\n$/, "").split("\n").flatMap((l, i) => {
+      const k = ENTRY.exec(l)?.[1];
+      if (!k || seen.has(k)) return [`export line ${i + 1}`];
+      seen.add(k);
+      return [];
+    }) : [];
+    if (split.length)
+      throw new Refuse(`The Infisical dev export has a blank, comment or repeated-name line, so a value holds a quote and a newline: ${split.join(", ")}.\n${ENV} was not changed. Fix that value in Infisical.`);
     if (existsSync(ENV)) {
       const local = read(readFileSync(ENV, "utf8"));
       if (local.bad.length)
