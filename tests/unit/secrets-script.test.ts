@@ -5,19 +5,27 @@ import { join } from "node:path";
 
 const script = join(import.meta.dir, "../../template/secrets/scripts/secrets.ts");
 
-// A linked folder with a fake infisical on PATH: it logs its argv to `calls` and writes FAKE_EXPORT to --output-file.
-function app(env: string, exported = "") {
+// A linked folder with a fake infisical on PATH: it logs its argv to `calls`, writes FAKE_EXPORT to --output-file, rejects a --file
+// holding an empty value (as the real CLI does) and exits FAKE_EXIT.
+function app(env: string, exported = "", fakeExit = "0") {
   const dir = mkdtempSync(join(tmpdir(), "zs-sec-"));
   const bin = join(dir, "bin");
   const log = join(dir, "calls.log");
   mkdirSync(bin);
-  writeFileSync(join(bin, "infisical"), '#!/bin/sh\necho "$*" >> "$FAKE_LOG"\nfor a in "$@"; do case "$a" in --output-file=*) out="${a#--output-file=}";; esac; done\n[ -n "$out" ] && printf \'%s\' "$FAKE_EXPORT" > "$out"\nexit 0\n');
+  writeFileSync(join(bin, "infisical"), [
+    "#!/bin/sh",
+    'echo "$*" >> "$FAKE_LOG"',
+    'for a in "$@"; do [ "$prev" = --file ] && file="$a"; prev="$a"; case "$a" in --output-file=*) out="${a#--output-file=}";; esac; done',
+    '[ -n "$out" ] && printf \'%s\' "$FAKE_EXPORT" > "$out"',
+    `[ -n "$file" ] && grep -Eq "^[^=]*=(''|\\"\\"|)$" "$file" && exit 1`,
+    'exit "$FAKE_EXIT"',
+  ].join("\n") + "\n");
   chmodSync(join(bin, "infisical"), 0o755);
   writeFileSync(join(dir, ".infisical.yaml"), "x: 1\n");
   writeFileSync(join(dir, ".env"), env);
   const run = (cmd: "push" | "pull") => {
     const r = Bun.spawnSync([process.execPath, script, cmd], {
-      cwd: dir, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, FAKE_EXPORT: exported },
+      cwd: dir, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, FAKE_EXPORT: exported, FAKE_EXIT: fakeExit },
     });
     return { code: r.exitCode, out: r.stdout.toString() + r.stderr.toString(), called: existsSync(log), env: readFileSync(join(dir, ".env"), "utf8"), tmp: existsSync(join(dir, ".env.pull-tmp")) };
   };
@@ -39,6 +47,9 @@ const OUTSIDE: [string, string][] = [
   ["multi-line value", 'A="hunter2\nB=2"\n'],
   ["no =", "hunter2\n"],
   ["CRLF", "A=hunter2\r\n"],
+  ["lone CR", "A_KEY=a\rhunter2\n"],
+  ["lone CR in double quotes", 'A_KEY="a\rhunter2"\n'],
+  ["lone CR in single quotes", "A_KEY='a\rhunter2'\n"],
 ];
 
 for (const [what, line] of OUTSIDE)
@@ -54,9 +65,27 @@ test("push names a bad name from a well-formed line, before infisical runs", () 
   expect([r.code, r.called, r.out.includes("lower_key"), r.out.includes("GOOD")]).toEqual([1, false, true, false]);
 });
 
-test("push accepts every form in the format and counts the keys", () => {
-  const r = app("\n  \n# a comment\nA=\nB=foo bar\nC=\"x\"\nD='x'\n")("push");
-  expect([r.code, r.called, r.out]).toEqual([0, true, "Pushed 4 keys from .env to the Infisical dev environment.\n"]);
+test("push accepts every non-empty form in the format and counts the keys", () => {
+  const r = app("\n  \n# a comment\nB=foo bar\nC=\"x\"\nD='x'\n")("push");
+  expect([r.code, r.called, r.out]).toEqual([0, true, "Pushed 3 keys from .env to the Infisical dev environment.\n"]);
+});
+
+test("push refuses empty values by line number, before infisical runs", () => {
+  for (const empty of ["E_KEY=", 'E_KEY=""', "E_KEY=''"]) {
+    const r = app(`GOOD=1\n${empty}\n`)("push");
+    expect([empty, r.code, r.called, r.out.includes("line 2: Infisical rejects empty values; remove the line or give it a value")]).toEqual([empty, 1, false, true]);
+  }
+});
+
+test("pull accepts an empty value in the export and in the local .env", () => {
+  const r = app("A=1\nE_KEY=\n", "A='2'\nE_KEY=''\n")("pull");
+  expect([r.code, r.env, r.tmp]).toEqual([0, "A='2'\nE_KEY=''\n", false]);
+});
+
+test("a failed pull prints the rerun command inside (umask 077; …)", () => {
+  const r = app("A=1\n", "", "3")("pull");
+  expect([r.code, r.env]).toEqual([1, "A=1\n"]);
+  expect(r.out).toContain("Rerun by hand: (umask 077; infisical export --env=dev --format=dotenv --expand=false --silent --output-file=.env.pull-tmp)");
 });
 
 test("push refuses a file with no keys", () => {

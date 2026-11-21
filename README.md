@@ -67,7 +67,8 @@ from `.env`; overwrites Infisical values; prints only a key count) and `bun run 
 case, no `VITE_` name containing SECRET/PASSWORD/TOKEN/PRIVATE, never `VOID_`/`__VOID_`).
 Both accept only a strict line format (blank, `#` comment, `KEY=value` with the value empty,
 unquoted without `#`, quotes, backticks or `\`, or in one `"…"`/`'…'` pair with no quote or `\`
-inside) in `.env` and the export, and refuse any other line by line number. Both run under Bun
+inside) in `.env` and the export, and refuse any other line by line number. Empty values are
+pull-only: `push` refuses them by line number, because Infisical rejects empty values. Both run under Bun
 (`bun scripts/secrets.ts`). Infisical
 output is never printed. The generated `AGENTS.md` documents the production route (`void secret
 sync` for server keys, which needs an `env.ts` declaring every synced key, skips `VITE_` and

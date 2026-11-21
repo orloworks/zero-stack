@@ -20,20 +20,24 @@ const failed = (r: ReturnType<typeof spawnSync>): string =>
 // The strict line format (spec story 11): blank, `#` comment, or KEY=value with no spaces around `=`, the value empty, unquoted
 // (no `#`, quote, backtick or `\`, no edge whitespace) or one "…" or '…' pair with no quote or `\` inside. Void, Infisical's
 // `--file` and its export agree only on these lines. Anything else is reported as `line <n>`, never its text (it may be part of a value).
-const ENTRY = /^([A-Za-z_][A-Za-z0-9_]*)=(|[^\s#'"`\\](?:[^#'"`\\]*[^\s#'"`\\])?|"[^"'\\]*"|'[^'"\\]*')$/;
+const ENTRY = /^([A-Za-z_][A-Za-z0-9_]*)=(|[^\s#'"`\\](?:[^\r#'"`\\]*[^\s#'"`\\])?|"[^\r"'\\]*"|'[^\r'"\\]*')$/;
 const FORMAT =
   "Each line must be blank, a # comment, or KEY=value on one line: no spaces around =, and the value empty, unquoted " +
-  "(no # ' \" ` or \\, no leading or trailing space), or wrapped in one pair of \" or ' with no quote or \\ inside.";
-const read = (text: string): { names: string[]; bad: string[] } => {
+  "(no # ' \" ` or \\, no leading or trailing space), or wrapped in one pair of \" or ' with no quote or \\ inside. " +
+  "A lone carriage return inside a value is refused too.";
+// `empty` lists lines whose value is empty (`K=`, `K=""`, `K=''`): fine for pull, refused by push (Infisical's `--file` rejects them).
+const read = (text: string): { names: string[]; bad: string[]; empty: string[] } => {
   const names: string[] = [];
   const bad: string[] = [];
+  const empty: string[] = [];
   text.split("\n").forEach((l, i) => {
     if (/^[ \t]*$/.test(l) || l.startsWith("#")) return;
     const m = ENTRY.exec(l);
-    if (m) names.push(m[1]!);
-    else bad.push(`line ${i + 1}`);
+    if (!m) return bad.push(`line ${i + 1}`);
+    names.push(m[1]!);
+    if (/^(|""|'')$/.test(m[2]!)) empty.push(`line ${i + 1}`);
   });
-  return { names, bad };
+  return { names, bad, empty };
 };
 
 function requireLink(): void {
@@ -51,9 +55,11 @@ const badName = (k: string): boolean =>
 function push(): void {
   requireLink();
   if (!existsSync(ENV)) throw new Refuse(`No ${ENV} to push. Nothing was sent.`);
-  const { names: all, bad: lines } = read(readFileSync(ENV, "utf8"));
+  const { names: all, bad: lines, empty } = read(readFileSync(ENV, "utf8"));
   if (lines.length)
     throw new Refuse(`Refusing to push: ${ENV} has lines outside the supported format: ${lines.join(", ")}. ${FORMAT}\nNothing was sent.`);
+  if (empty.length)
+    throw new Refuse(`Refusing to push: ${ENV} ${empty.join(", ")}: Infisical rejects empty values; remove the line or give it a value.\nNothing was sent.`);
   const names = [...new Set(all)];
   const bad = names.filter(badName);
   if (bad.length)
@@ -88,7 +94,7 @@ function pull(): void {
     if (r.error || r.status !== 0)
       throw new Refuse(
         `${failed(r)}.\n` +
-          `${ENV} was not changed. Rerun by hand: infisical ${args.join(" ")}`,
+          `${ENV} was not changed. Rerun by hand: (umask 077; infisical ${args.join(" ")})`,
       );
     chmodSync(TMP, 0o600);
     const exp = read(readFileSync(TMP, "utf8"));

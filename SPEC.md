@@ -59,7 +59,7 @@ tests/
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes and helper |
 | `--secrets` | `infisical` (the only value) | Any framework, implies `--auth`. `secrets:pull` / `secrets:push` against Infisical `dev`, see below |
 
-Starter is fixed to sqlite (D1). The four add-ons are the wave 1 flags; each CLI flag has a
+Starter is fixed to sqlite (D1). The add-ons are the wave 1 and 1b flags; each CLI flag has a
 matching prompt. `--auth` on react, vue and solid is unchanged from v0.1.x (D34): the
 sign-in/sign-up pages, `void.config.ts` entry, alias, migration and `.env` below, and no
 root `auth.ts`. On svelte, `--auth` also gains an Account page and a generated `auth.ts`. No `--ui none`; no API-only mode exists upstream.
@@ -155,10 +155,12 @@ dependency-free `scripts/secrets.ts` (`node:` APIs only) and adds `secrets:pull`
   accept only blank lines, `#` comments and `KEY=value` with no spaces around `=`, the value
   empty, unquoted (no `#`, quote, backtick or `\`, no edge whitespace) or one `"…"` or `'…'` pair
   with no quote or `\` inside. Any other line (multi-line values, `export `, inline comments,
-  escapes, CRLF) is refused as `line <n>` (`export line <n>`, `.env line <n>` for pull), never its
-  text. Names come only from accepted lines. The scripts run under Bun (`bun scripts/secrets.ts`).
+  escapes, CRLF, a lone carriage return in a value) is refused as `line <n>` (`export line <n>`, `.env line <n>` for pull), never its
+  text. Names come only from accepted lines. Empty values are pull-only: push refuses `K=`, `K=""`
+  and `K=''` by line number before any `infisical` call ("Infisical rejects empty values; remove the
+  line or give it a value"), because `infisical secrets set --file` rejects the whole file. The scripts run under Bun (`bun scripts/secrets.ts`).
 - The production route refuses (exit 1, before sync and deploy) a prod export with any line other
-  than `KEY='…'` with no `'` or `\` inside.
+  than `KEY='…'` with no `'`, `\` or carriage return inside.
 - Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its
   first sync overwrites Worker secrets), production or preview scripts, other secret managers,
   writing `.infisical.yaml` or creating Infisical projects, `infisical run` for dev.
@@ -227,7 +229,7 @@ pnpm/npm support, Playwright, magicast, rollback tracker, `void-stack.json`.
 ## Non-goals for wave 1
 
 Data export, grace-period (soft) deletion, Stripe/billing, add-ons for react/vue/solid (D33:
-only `--storage` is framework-agnostic), social providers, and the rest of the roadmap: wave 2
+only `--storage` and `--secrets` are framework-agnostic), social providers, and the rest of the roadmap: wave 2
 (orgs, admin, 2FA), #17 referrals, #18 affiliate.
 
 ## Open facts to verify during build

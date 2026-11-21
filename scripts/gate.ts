@@ -317,13 +317,15 @@ try {
   }
   if (config.secrets) {
     // A fake `infisical` first on PATH records its argv (FAKE_LOG) and is driven by env: FAKE_EXIT, FAKE_EXPORT (file contents), FAKE_STDERR.
+    // Like the real CLI, it rejects a --file holding an empty value.
     const bin = join(root, "fake-bin");
     mkdirSync(bin);
     writeFileSync(join(bin, "infisical"), [
       "#!/bin/sh",
       'echo "$*" >> "$FAKE_LOG"',
-      'for a in "$@"; do case "$a" in --output-file=*) out="${a#--output-file=}";; esac; done',
+      'for a in "$@"; do [ "$prev" = --file ] && file="$a"; prev="$a"; case "$a" in --output-file=*) out="${a#--output-file=}";; esac; done',
       '[ -n "$out" ] && printf \'%s\' "$FAKE_EXPORT" > "$out"',
+      `[ -n "$file" ] && grep -Eq "^[^=]*=(''|\\"\\"|)$" "$file" && exit 1`,
       'echo "$FAKE_STDERR" >&2',
       'echo "$FAKE_STDERR"',
       'exit "${FAKE_EXIT:-0}"',
@@ -387,6 +389,10 @@ try {
     r = runScript({}, ["run", "secrets:push"]);
     checkPush(r.code === 1 && ["lower_case", "VITE_API_TOKEN", "VOID_X"].every((n) => r.out.includes(n)) && !r.out.includes("GOOD_KEY") && !r.out.includes("VALUE-"), `bad names exited ${r.code}, output: ${r.out}`);
     checkPush(!existsSync(log), "push with bad names still ran infisical");
+    // Empty values: Infisical's --file rejects them, so push refuses them by line number before infisical runs.
+    writeFileSync(envFile, Buffer.concat([pushed, Buffer.from("EMPTY_KEY=''\n")]));
+    r = runScript({}, ["run", "secrets:push"]);
+    checkPush(r.code === 1 && r.out.includes(`line ${pushed.toString().split("\n").length}: Infisical rejects empty values`) && !existsSync(log), `push with an empty value exited ${r.code}, output: ${r.out}`);
     writeFileSync(envFile, pushed);
     // Lines outside the strict format (spec story 11): push refuses before infisical runs, pull refuses the same in the export (and in
     // the local .env), leaving .env as it was. Both report the line number only, never text from the line (it may be part of a value).
