@@ -73,9 +73,9 @@ test("--secrets AGENTS.md documents push as a one-time seed, the naming conventi
     "^[A-Z][A-Z0-9_]*$", "__VOID_", "_PREVIOUS", "env.ts",
     "umask 077", "mktemp", "trap 'rm -f \"$raw\" \"$f\"' EXIT; trap 'exit 1' INT TERM HUP", "Infisical rejects empty values",
     "```bash\n(\n  umask 077",
-    "> \"$raw\" || exit 1\n",
-    "grep -Evq \"^[A-Z_][A-Z0-9_]*='[^'\\$\\\\\\\\\"$'\\r'\"]*'\\$\" \"$raw\"; [ $? -eq 1 ] || exit 1",
-    "grep -Ev '^(VITE_|BETTER_AUTH_)' \"$raw\" > \"$f\"; [ $? -le 1 ] || exit 1",
+    ">| \"$raw\" || exit 1\n", "  raw= f=\n  trap", "`command grep -a`",
+    "command grep -aEvq \"^[A-Z_][A-Z0-9_]*='[^'\\$\\\\\\\\\"$'\\r'\"]*'\\$\" \"$raw\"; [ $? -eq 1 ] || exit 1",
+    "command grep -aEv '^(VITE_|BETTER_AUTH_)' \"$raw\" >| \"$f\"; [ $? -le 1 ] || exit 1",
     "[ -s \"$f\" ] || exit 0", "void secret sync \"$f\" --yes || exit 1", "\n) && infisical run --env=prod -- void deploy", "Workers sync",
     "`BETTER_AUTH_*` is filtered out", "declare every key you sync", "skipped when nothing is left", "refuses (exit 1, before the sync and the deploy) any export line other than `KEY='…'` with no `'`, `\\`, `$` or carriage return inside",
     "Line format (push and pull)", "inline comments", "`export line <n>`", "`.env line <n>`", "prints `line <n>`, never the line",
@@ -93,9 +93,9 @@ async function route(env: Record<string, string>) {
   // SIG_EXPORT / SIG_FILTER: send TERM to the route's subshell only (the fake's parent) during the export / the VITE_ filter.
   writeFileSync(join(bin, "infisical"), '#!/bin/sh\necho "infisical $*" >> "$CALLS"\n[ "$1" = export ] && { [ -n "$SIG_EXPORT" ] && kill -TERM $PPID; printf \'%s\' "$FAKE_EXPORT"; exit "${FAKE_EXIT:-0}"; }\nexit 0\n', { mode: 0o755 });
   writeFileSync(join(bin, "void"), '#!/bin/sh\necho "void $1 $2" >> "$CALLS"\ncat "$3" > "$SYNCED"\nexit "${VOID_EXIT:-0}"\n', { mode: 0o755 });
-  if (env.SIG_FILTER) writeFileSync(join(bin, "grep"), '#!/bin/sh\n[ "$1" = -Ev ] && kill -TERM $PPID\nexec /usr/bin/grep "$@"\n', { mode: 0o755 });
+  if (env.SIG_FILTER) writeFileSync(join(bin, "grep"), '#!/bin/sh\n[ "$1" = -aEv ] && kill -TERM $PPID\nexec /usr/bin/grep "$@"\n', { mode: 0o755 });
   if (env.GREP_EXIT) writeFileSync(join(bin, "grep"), '#!/bin/sh\ncat > /dev/null\nexit "$GREP_EXIT"\n', { mode: 0o755 }); // grep itself failing (exit 2)
-  const r = Bun.spawnSync(["bash", "-c", block], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CALLS: calls, SYNCED: synced, ...env } });
+  const r = Bun.spawnSync(["bash", "-c", (env.PRELUDE ?? "") + block], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CALLS: calls, SYNCED: synced, ...env } });
   const read = (f: string) => (existsSync(f) ? readFileSync(f, "utf8") : "");
   return { code: r.exitCode, calls: read(calls).trim().split("\n").filter(Boolean).map((l) => l.split(" ").slice(0, 3).join(" ")), synced: read(synced) };
 }
@@ -140,4 +140,19 @@ test("production route: a TERM sent only to the subshell reaches neither the syn
     const r = await route({ FAKE_EXPORT: "A_KEY='1'\n", [sig]: "1" });
     expect([sig, r.code === 0, r.calls]).toEqual([sig, false, ["infisical export --env=prod"]]);
   }
+});
+
+test("production route: a shell grep function that always exits 1 cannot switch off the line check", async () => {
+  const r = await route({ FAKE_EXPORT: "DB_PASSWORD='p'ss'\n", PRELUDE: "grep() { return 1; }\n" });
+  expect([r.code, r.calls, r.synced]).toEqual([1, ["infisical export --env=prod"], ""]);
+});
+
+test("production route: a failing mktemp never deletes a file a stale $f or $raw names", async () => {
+  const keep = join(tmp(), "keep.txt");
+  writeFileSync(keep, "keep\n");
+  const fakeBin = join(tmp(), "mk");
+  mkdirSync(fakeBin);
+  writeFileSync(join(fakeBin, "mktemp"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const r = await route({ FAKE_EXPORT: "A_KEY='1'\n", PRELUDE: `PATH=${fakeBin}:$PATH; f=${keep}; raw=${keep}\n` });
+  expect([r.code, r.calls, existsSync(keep)]).toEqual([1, [], true]);
 });

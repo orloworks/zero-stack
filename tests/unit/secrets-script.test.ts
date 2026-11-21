@@ -88,7 +88,7 @@ test("pull accepts an empty value in the export and in the local .env", () => {
 test("a failed pull prints the rerun command inside (umask 077; …)", () => {
   const r = app("A=1\n", "", "3")("pull");
   expect([r.code, r.env]).toEqual([1, "A=1\n"]);
-  expect(r.out).toContain("Rerun by hand: (umask 077; infisical export --env=dev --format=dotenv --expand=false --silent --output-file=.env.pull-tmp)");
+  expect(r.out).toContain("Rerun by hand: (umask 077; infisical export --env=dev --format=dotenv --expand=false --silent --output-file=.env.pull-tmp); rm -f .env.pull-tmp");
 });
 
 test("push refuses a file with no keys", () => {

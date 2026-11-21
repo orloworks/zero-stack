@@ -156,9 +156,9 @@ dependency-free `scripts/secrets.ts` (`node:` APIs only) and adds `secrets:pull`
   empty, unquoted (no `#`, quote, backtick, `\` or `$`, no edge whitespace) or one `"…"` or `'…'` pair
   with no quote, `\` or `$` inside (Void dev expands `$` in `.env`, even in single quotes). Any other line (multi-line values, `export `, inline comments,
   escapes, CRLF, a lone carriage return in a value) is refused as `line <n>` (`export line <n>`, `.env line <n>` for pull), never its
-  text. Names come only from accepted lines. Empty values are pull-only: push refuses `K=`, `K=""`
-  and `K=''` by line number before any `infisical` call ("Infisical rejects empty values; remove the
-  line or give it a value"), because `infisical secrets set --file` rejects the whole file. The scripts run under Bun (`bun scripts/secrets.ts`).
+  text. Names come only from accepted lines. Empty values are pull-only: push refuses `K=`, `K=""`,
+  `K=''` and whitespace-only quoted values (`K=" "`, which Infisical trims) by line number before any `infisical` call ("Infisical rejects empty values; remove the
+  line or give it a value"), because `infisical secrets set --file` rejects the whole file. The scripts run under Bun with `--no-env-file` (`bun --no-env-file scripts/secrets.ts`), so `.env` never reaches the `infisical` child (an `INFISICAL_*` key there would redirect it).
 - The production route refuses (exit 1, before sync and deploy) a prod export with any line other
   than `KEY='…'` with no `'`, `\`, `$` or carriage return inside.
 - Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its

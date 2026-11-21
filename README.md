@@ -68,8 +68,8 @@ case, no `VITE_` name containing SECRET/PASSWORD/TOKEN/PRIVATE, never `VOID_`/`_
 Both accept only a strict line format (blank, `#` comment, `KEY=value` with the value empty,
 unquoted without `#`, quotes, backticks, `\` or `$`, or in one `"…"`/`'…'` pair with no quote, `\` or `$`
 inside) in `.env` and the export, and refuse any other line by line number. Empty values are
-pull-only: `push` refuses them by line number, because Infisical rejects empty values. Both run under Bun
-(`bun scripts/secrets.ts`). Infisical
+pull-only: `push` refuses them, and whitespace-only quoted values, by line number, because Infisical rejects empty values. Both run under Bun
+(`bun --no-env-file scripts/secrets.ts`, so `.env` never reaches the `infisical` CLI). Infisical
 output is never printed. The generated `AGENTS.md` documents the production route (`void secret
 sync` for server keys, which needs an `env.ts` declaring every synced key, skips `VITE_` and
 `BETTER_AUTH_` lines and refuses any export line other than `KEY='…'`; `infisical run --env=prod -- void deploy` for client keys).

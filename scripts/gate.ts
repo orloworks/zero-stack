@@ -323,6 +323,7 @@ try {
     writeFileSync(join(bin, "infisical"), [
       "#!/bin/sh",
       'echo "$*" >> "$FAKE_LOG"',
+      '[ -n "$INFISICAL_ZS_PROBE" ] && echo leaked >> "$FAKE_LOG.probe"', // .env must never reach this child
       'for a in "$@"; do [ "$prev" = --file ] && file="$a"; prev="$a"; case "$a" in --output-file=*) out="${a#--output-file=}";; esac; done',
       '[ -n "$out" ] && printf \'%s\' "$FAKE_EXPORT" > "$out"',
       `[ -n "$file" ] && grep -Eq "^[^=]*=(''|\\"\\"|)$" "$file" && exit 1`,
@@ -379,6 +380,11 @@ try {
     r = runScript({ FAKE_STDERR: "LEAKED-sk_live_abc123" }, ["run", "secrets:push"]);
     checkPush(r.code === 0 && r.out.includes(`Pushed ${exportedKeys} keys`) && !r.out.includes("LEAKED") && !r.out.includes("pulled"), `push ok exited ${r.code}, output: ${r.out}`);
     checkPush(readFileSync(log, "utf8").trim() === "secrets set --file .env --env=dev --silent", `push ran infisical with ${readFileSync(log, "utf8")}`);
+    // A .env key must not reach the infisical child's environment (an INFISICAL_* key would redirect the CLI): --no-env-file.
+    writeFileSync(envFile, Buffer.concat([pushed, Buffer.from("INFISICAL_ZS_PROBE='x'\n")]));
+    for (const cmd of ["secrets:push", "secrets:pull"]) runScript({ FAKE_EXPORT: pushed.toString() + "INFISICAL_ZS_PROBE='x'\n" }, ["run", cmd]);
+    checkPush(!existsSync(log + ".probe"), "passed a .env key into the infisical child's environment");
+    writeFileSync(envFile, pushed);
     rmSync(log);
     r = runScript({ FAKE_STDERR: "LEAKED-sk_live_abc123", FAKE_EXIT: "4" }, ["run", "secrets:push"]);
     checkPush(r.code === 1 && r.out.includes("infisical exited 4") && r.out.includes("may already have been set") && r.out.includes("Rerun by hand")

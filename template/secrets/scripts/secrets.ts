@@ -95,7 +95,7 @@ function pull(): void {
     if (r.error || r.status !== 0)
       throw new Refuse(
         `${failed(r)}.\n` +
-          `${ENV} was not changed. Rerun by hand: (umask 077; infisical ${args.join(" ")})`,
+          `${ENV} was not changed. Rerun by hand: (umask 077; infisical ${args.join(" ")}); rm -f ${TMP}`,
       );
     chmodSync(TMP, 0o600);
     const exp = read(readFileSync(TMP, "utf8"));
@@ -123,7 +123,7 @@ function pull(): void {
 const commands: Record<string, () => void> = { pull, push };
 const cmd = commands[process.argv[2] ?? ""];
 try {
-  if (!cmd) throw new Refuse(`Usage: bun scripts/secrets.ts <${Object.keys(commands).join("|")}>`);
+  if (!cmd) throw new Refuse(`Usage: bun --no-env-file scripts/secrets.ts <${Object.keys(commands).join("|")}>`);
   cmd();
 } catch (e) {
   console.error(e instanceof Refuse ? e.message : `secrets: ${(e as Error).message}`);
