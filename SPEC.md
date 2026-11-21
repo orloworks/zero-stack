@@ -29,7 +29,7 @@ tests/
 2. Target dir must be new or empty. On any failure, delete a directory zero-stack created; a pre-existing empty target is emptied, not removed.
 3. Validate flags, fail fast with a one-line fix. Implied flags are declared once in
    `FEATURES` (`src/flags.ts`) and each is announced: `--shadcn` enables `--tailwind`;
-   `--account-deletion`, `--email`, `--turnstile` and `--storage` enable `--auth`.
+   `--account-deletion`, `--email`, `--turnstile`, `--storage` and `--secrets` enable `--auth`.
    `--shadcn` requires `--framework react`; `--account-deletion`, `--email` and
    `--turnstile` require `--framework svelte` (D33).
 4. Run pinned `bunx create-void@<pin> <name> --toolchain vite-plus --framework <fw>
@@ -57,8 +57,9 @@ tests/
 | `--email` | bool | Svelte only, implies `--auth`. Password reset and sign-up verification mail |
 | `--turnstile` | bool | Svelte only, implies `--auth`. Cloudflare Turnstile on sign-up, sign-in and password reset |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes and helper |
+| `--secrets` | `infisical` (the only value) | Any framework, implies `--auth`. `secrets:pull` / `secrets:push` against Infisical `dev`, see below |
 
-Starter is fixed to sqlite (D1). The four add-ons are the wave 1 flags; each CLI flag has a
+Starter is fixed to sqlite (D1). The add-ons are the wave 1 and 1b flags; each CLI flag has a
 matching prompt. `--auth` on react, vue and solid is unchanged from v0.1.x (D34): the
 sign-in/sign-up pages, `void.config.ts` entry, alias, migration and `.env` below, and no
 root `auth.ts`. On svelte, `--auth` also gains an Account page and a generated `auth.ts`. No `--ui none`; no API-only mode exists upstream.
@@ -125,6 +126,45 @@ Void imports `void/email` and `void/storage` lazily in generated helpers: its pl
   fail, are logged, and the user gets no mail.
 - Always: `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` for the deployed origin.
 
+## `--secrets infisical`
+
+Implies `--auth`. The scaffold never calls Infisical and works offline. It copies a
+dependency-free `scripts/secrets.ts` (`node:` APIs only) and adds `secrets:pull` and
+`secrets:push`; `.env` and `.env.pull-tmp` are gitignored. Both commands need a link file
+(`.infisical.yaml`, or legacy `.infisical.json`), which the owner's `secret-sync` skill or
+`infisical init --project-id <id>` creates; the scaffold writes neither.
+
+- `secrets:push`: `infisical secrets set --file .env --env=dev --silent`, a one-time seed that
+  overwrites Infisical values. Prints only the key count, on exit 0. Refuses before calling
+  Infisical when a `.env` name breaks key naming rule 1, 5 or 6. On failure: exit 1,
+  `infisical exited <code>`, a note that some keys may already be set, and the command to rerun.
+- `secrets:pull`: replaces `.env` with the `dev` environment, verbatim, mode 0600; refuses an
+  export lacking any key the current `.env` has.
+- Infisical's stdout and stderr are captured and never printed.
+- Key naming convention: upper snake case `^[A-Z][A-Z0-9_]*$`; one name in `env.ts`, `.env`,
+  every environment and the Worker; provider prefix first; `VITE_` names are public and never
+  contain SECRET, PASSWORD, TOKEN or PRIVATE; never `__VOID_` or `VOID_`; `env.ts` lists every
+  app key except Void-owned `BETTER_AUTH_*`.
+- Production (documentation in AGENTS.md, no script): server keys via `infisical export
+  --env=prod` minus `VITE_` and `BETTER_AUTH_` lines (Void creates `BETTER_AUTH_SECRET` on deploy)
+  into a private `mktemp` file, then `void secret sync "$f" --yes`, skipped when the filtered file
+  is empty; every step exits 1 on failure so a failed export never deploys; client keys via
+  `infisical run --env=prod -- void deploy`. `void secret sync` needs an `env.ts` declaring
+  every synced key (AGENTS.md says so).
+- Strict line format, no dotenv parser: push (`.env`) and pull (the export and the local `.env`)
+  accept only blank lines, `#` comments and `KEY=value` with no spaces around `=`, the value
+  empty, unquoted (no `#`, quote, backtick, `\` or `$`, no edge whitespace) or one `"…"` or `'…'` pair
+  with no quote, `\` or `$` inside (Void dev expands `$` in `.env`, even in single quotes). Any other line (multi-line values, `export `, inline comments,
+  escapes, CRLF, a lone carriage return in a value) is refused as `line <n>` (`export line <n>`, `.env line <n>` for pull), never its
+  text. Names come only from accepted lines. Empty values are pull-only: push refuses `K=`, `K=""`,
+  `K=''` and whitespace-only quoted values (`K=" "`, which Infisical trims) by line number before any `infisical` call ("Infisical rejects empty values; remove the
+  line or give it a value"), because `infisical secrets set --file` rejects the whole file. The scripts run under Bun with `--no-env-file` (`bun --no-env-file scripts/secrets.ts`), so `.env` never reaches the `infisical` child (an `INFISICAL_*` key there would redirect it).
+- The production route refuses (exit 1, before sync and deploy) a prod export with any line other
+  than `KEY='…'` with no `'`, `\`, `$` or carriage return inside. Pull and the route also refuse an export with a blank, `#` or repeated-name line: Infisical's export does not escape values, so a value holding `'` and a newline can add a line that overrides another key.
+- Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its
+  first sync overwrites Worker secrets), production or preview scripts, other secret managers,
+  writing `.infisical.yaml` or creating Infisical projects, `infisical run` for dev.
+
 ## Generated app
 
 Scripts: `verify` (`void prepare && vp check && tsc --noEmit && vp build && vp test`), `test`,
@@ -189,8 +229,8 @@ pnpm/npm support, Playwright, magicast, rollback tracker, `void-stack.json`.
 ## Non-goals for wave 1
 
 Data export, grace-period (soft) deletion, Stripe/billing, add-ons for react/vue/solid (D33:
-only `--storage` is framework-agnostic), social providers, and the rest of the roadmap: wave 2
-(orgs, admin, 2FA), #17 referrals, #18 affiliate, #26 Infisical secrets.
+only `--storage` and `--secrets` are framework-agnostic), social providers, and the rest of the roadmap: wave 2
+(orgs, admin, 2FA), #17 referrals, #18 affiliate.
 
 ## Open facts to verify during build
 

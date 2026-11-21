@@ -36,13 +36,14 @@ Run \`bun run verify\` before finishing any task; it must pass.
 `;
 
 // Anchored edits to the pinned create-void output; a missing anchor is a hard error.
-function addAppScripts(targetDir: string): void {
+function addAppScripts(targetDir: string, config: Config): void {
   editJson(targetDir, "package.json", (pkg) => {
     if (!pkg.scripts?.postinstall) throw anchorError("scripts.postinstall", "package.json");
     Object.assign(pkg.scripts, {
       verify: "void prepare && vp check && tsc --noEmit && vp build && vp test",
       test: "vp test",
       "db:reset": "void db reset --yes",
+      ...(config.secrets && { "secrets:pull": "bun --no-env-file scripts/secrets.ts pull", "secrets:push": "bun --no-env-file scripts/secrets.ts push" }),
     });
     // Void does not handle bun script approvals.
     pkg.trustedDependencies = TRUSTED_DEPENDENCIES;
@@ -51,7 +52,20 @@ function addAppScripts(targetDir: string): void {
   const agents = join(targetDir, "AGENTS.md");
   if (!readFileSync(agents, "utf8").includes("<!--/injected-by-void-->")) throw anchorError("<!--/injected-by-void-->", "AGENTS.md");
   appendFileSync(agents, VERIFY_BLOCK);
-  cpSync(join(dirname(fileURLToPath(import.meta.url)), "../template/tests"), join(targetDir, "tests"), { recursive: true });
+  const template = join(dirname(fileURLToPath(import.meta.url)), "../template");
+  cpSync(join(template, "tests"), join(targetDir, "tests"), { recursive: true });
+  if (config.secrets) {
+    cpSync(join(template, "secrets/scripts"), join(targetDir, "scripts"), { recursive: true });
+    // create-void's tsconfig `include` lists directories, so `tsc --noEmit` (verify) skips scripts/ unless it is added.
+    editJson(targetDir, "tsconfig.json", (ts) => {
+      if (!Array.isArray(ts.include)) throw anchorError("include", "tsconfig.json");
+      ts.include.push("scripts");
+    });
+    // The pull's temp file sits beside .env; .env itself is ignored by installAuth (secrets implies auth).
+    const gi = join(targetDir, ".gitignore");
+    const lines = existsSync(gi) ? readFileSync(gi, "utf8").split("\n") : [];
+    if (!lines.includes(".env.pull-tmp")) appendFileSync(gi, (lines.at(-1) === "" || !lines.length ? "" : "\n") + ".env.pull-tmp\n");
+  }
 }
 
 export async function scaffold(config: Config, targetDir: string, exec: Run = run): Promise<void> {
@@ -78,7 +92,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     if (config.shadcn) installShadcn(targetDir);
     if (config.auth) installAuth(targetDir, config);
     if (config.storage) installStorage(targetDir);
-    addAppScripts(targetDir);
+    addAppScripts(targetDir, config);
     await exec([process.execPath, "install"], targetDir);
     // Leaves the auth migration generated, not applied to any database.
     if (config.auth) await exec([join(targetDir, "node_modules/.bin/void"), "db", "generate"], targetDir);

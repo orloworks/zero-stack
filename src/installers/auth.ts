@@ -10,6 +10,9 @@ import { installAccountDeletion } from "./account-deletion";
 import { installEmail } from "./email";
 import { installTurnstile } from "./turnstile";
 
+export const authEnv = (config: Pick<Config, "turnstile">): string =>
+  `BETTER_AUTH_SECRET=${randomBytes(32).toString("base64url")}\nBETTER_AUTH_URL=http://localhost:5173\n${config.turnstile ? "TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA\n" : ""}`;
+
 // Runs after installShadcn. Pages are copied; `void db generate` runs later in the pipeline (needs deps).
 export function installAuth(dir: string, config: Config): void {
   const framework = config.framework;
@@ -30,9 +33,5 @@ export function installAuth(dir: string, config: Config): void {
   const gi = join(dir, ".gitignore");
   const lines = existsSync(gi) ? readFileSync(gi, "utf8").split("\n") : [];
   if (!lines.includes(".env")) appendFileSync(gi, (lines.at(-1) === "" || !lines.length ? "" : "\n") + ".env\n");
-  writeFileSync(
-    join(dir, ".env"),
-    `BETTER_AUTH_SECRET=${randomBytes(32).toString("base64url")}\nBETTER_AUTH_URL=http://localhost:5173\n${config.turnstile ? "TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA\n" : ""}`,
-    { mode: 0o600 },
-  );
+  writeFileSync(join(dir, ".env"), authEnv(config), { mode: 0o600 });
 }

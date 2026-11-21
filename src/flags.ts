@@ -12,12 +12,24 @@ export const FEATURES = [
   { flag: "email", key: "email", label: "email", prompt: "Add email?", requires: "auth", frameworks: ["svelte"] },
   { flag: "turnstile", key: "turnstile", label: "Turnstile", prompt: "Add Turnstile?", requires: "auth", frameworks: ["svelte"] },
   { flag: "storage", key: "storage", label: "storage", prompt: "Add storage?", requires: "auth" },
+  { flag: "secrets", key: "secrets", label: "Infisical secrets", prompt: "Sync secrets with Infisical?", requires: "auth", value: "infisical" },
 ] as const satisfies readonly {
-  flag: string; key: string; label: string; prompt: string; requires?: string; frameworks?: readonly Framework[];
+  flag: string; key: string; label: string; prompt: string; requires?: string; frameworks?: readonly Framework[]; value?: string;
 }[];
-export type Feature = { flag: string; key: FeatureKey; label: string; prompt: string; requires?: FeatureKey; frameworks?: readonly string[] };
+export type Feature = { flag: string; key: FeatureKey; label: string; prompt: string; requires?: FeatureKey; frameworks?: readonly string[]; value?: string };
 export type FeatureKey = (typeof FEATURES)[number]["key"];
 export const FEATURE_LIST: readonly Feature[] = FEATURES;
+
+// The one place a feature's CLI form is derived: usage, parseArgs, the gate and the ci:full matrix all use it.
+// A feature with `value` is `--flag value` (config key stays a boolean); the rest are bare `--flag`.
+export const argv = (f: Feature): string[] => (f.value ? [`--${f.flag}`, f.value] : [`--${f.flag}`]);
+
+// Raw parseArgs value -> the config boolean (undefined = flag not given). A valued feature accepts only its value.
+export function parseFeature(f: Feature, raw: string | boolean | undefined): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (f.value && raw !== f.value) throw new Error(`--${f.flag} accepts only "${f.value}" (got "${raw}").`);
+  return true;
+}
 
 // Add-on keys are optional so hand-built configs (test fixtures) need not list them; validateFlags always sets every key.
 type AddOnKey = Extract<(typeof FEATURES)[number], { requires: "auth" }>["key"];

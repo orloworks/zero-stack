@@ -1,0 +1,139 @@
+import { expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const script = join(import.meta.dir, "../../template/secrets/scripts/secrets.ts");
+
+// A linked folder with a fake infisical on PATH: it logs its argv to `calls`, writes FAKE_EXPORT to --output-file, rejects a --file
+// holding an empty value (as the real CLI does) and exits FAKE_EXIT.
+function app(env: string, exported = "", fakeExit = "0") {
+  const dir = mkdtempSync(join(tmpdir(), "zs-sec-"));
+  const bin = join(dir, "bin");
+  const log = join(dir, "calls.log");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "infisical"), [
+    "#!/bin/sh",
+    'echo "$*" >> "$FAKE_LOG"',
+    'for a in "$@"; do [ "$prev" = --file ] && file="$a"; prev="$a"; case "$a" in --output-file=*) out="${a#--output-file=}";; esac; done',
+    '[ -n "$out" ] && printf \'%s\' "$FAKE_EXPORT" > "$out"',
+    `[ -n "$file" ] && grep -Eq "^[^=]*=(''|\\"\\"|)$" "$file" && exit 1`,
+    'exit "$FAKE_EXIT"',
+  ].join("\n") + "\n");
+  chmodSync(join(bin, "infisical"), 0o755);
+  writeFileSync(join(dir, ".infisical.yaml"), "x: 1\n");
+  writeFileSync(join(dir, ".env"), env);
+  const run = (cmd: "push" | "pull") => {
+    const r = Bun.spawnSync([process.execPath, script, cmd], {
+      cwd: dir, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, FAKE_EXPORT: exported, FAKE_EXIT: fakeExit },
+    });
+    return { code: r.exitCode, out: r.stdout.toString() + r.stderr.toString(), called: existsSync(log), env: readFileSync(join(dir, ".env"), "utf8"), tmp: existsSync(join(dir, ".env.pull-tmp")) };
+  };
+  return run;
+}
+
+// Lines outside spec story 11's strict format. Each sits on line 2, after a good line; `hunter2` is the value that must never print.
+const OUTSIDE: [string, string][] = [
+  ["backtick", "TOKEN_KEY=`hunter2`\n"],
+  ["escaped newline", 'PRIVATE_KEY="hunter2\\nb"\n'],
+  ["quote inside double quotes", 'A_KEY="hunter2\'s"\n'],
+  ["spaces around =", "A = hunter2\n"],
+  ["leading space in the value", "A= hunter2\n"],
+  ["quote inside an unquoted value", 'A=x"hunter2\n'],
+  ["backslash", "A=foo\\hunter2\n"],
+  ["quote inside single quotes", "A='x\"hunter2'\n"],
+  ["inline comment", "A=foo # hunter2\n"],
+  ["export line", "export A=hunter2\n"],
+  ["multi-line value", 'A="hunter2\nB=2"\n'],
+  ["no =", "hunter2\n"],
+  ["CRLF", "A=hunter2\r\n"],
+  ["lone CR", "A_KEY=a\rhunter2\n"],
+  ["lone CR in double quotes", 'A_KEY="a\rhunter2"\n'],
+  ["lone CR in single quotes", "A_KEY='a\rhunter2'\n"],
+  ["dollar unquoted", "A_KEY=pa$hunter2\n"],
+  ["dollar in double quotes", 'A_KEY="k${hunter2}"\n'],
+  ["dollar in single quotes", "A_KEY='pa$hunter2'\n"],
+];
+
+for (const [what, line] of OUTSIDE)
+  test(`push refuses a line outside the format (${what}) by line number, before infisical runs`, () => {
+    const r = app(`GOOD=1\n${line}`)("push");
+    expect([r.code, r.called, r.out.includes("line 2")]).toEqual([1, false, true]);
+    expect(r.out).not.toContain("hunter2");
+    expect(r.out).not.toContain("GOOD");
+  });
+
+test("push names a bad name from a well-formed line, before infisical runs", () => {
+  const r = app("GOOD=1\nlower_key=1\n")("push");
+  expect([r.code, r.called, r.out.includes("lower_key"), r.out.includes("GOOD")]).toEqual([1, false, true, false]);
+});
+
+test("push accepts every non-empty form in the format and counts the keys", () => {
+  const r = app("\n  \n# a comment\nB=foo bar\nC=\"x\"\nD='x'\n")("push");
+  expect([r.code, r.called, r.out]).toEqual([0, true, "Pushed 3 keys from .env to the Infisical dev environment.\n"]);
+});
+
+test("push refuses empty values by line number, before infisical runs", () => {
+  for (const empty of ["E_KEY=", 'E_KEY=""', "E_KEY=''", 'E_KEY=" "', "E_KEY='\t'"]) {
+    const r = app(`GOOD=1\n${empty}\n`)("push");
+    expect([empty, r.code, r.called, r.out.includes("line 2: Infisical rejects empty values; remove the line or give it a value")]).toEqual([empty, 1, false, true]);
+  }
+});
+
+test("pull accepts an empty value in the export and in the local .env", () => {
+  const r = app("A=1\nE_KEY=\n", "A='2'\nE_KEY=''\n")("pull");
+  expect([r.code, r.env, r.tmp]).toEqual([0, "A='2'\nE_KEY=''\n", false]);
+});
+
+test("a failed pull prints the rerun command inside (umask 077; …)", () => {
+  const r = app("A=1\n", "", "3")("pull");
+  expect([r.code, r.env]).toEqual([1, "A=1\n"]);
+  expect(r.out).toContain("Rerun by hand: (umask 077; infisical export --env=dev --format=dotenv --expand=false --silent --output-file=.env.pull-tmp); rm -f .env.pull-tmp");
+});
+
+test("push refuses a file with no keys", () => {
+  const r = app("# only a comment\n")("push");
+  expect([r.code, r.called, r.out.includes("no keys")]).toEqual([1, false, true]);
+});
+
+test("pull refuses an export with an escaped quote, leaving .env untouched", () => {
+  const r = app("A_KEY=1\n", "A_KEY='a\\'b'\n")("pull");
+  expect([r.code, r.env, r.tmp, r.out.includes("export line 1")]).toEqual([1, "A_KEY=1\n", false, true]);
+});
+
+test("pull refuses a multi-line export by line number, printing no fragment of the value", () => {
+  const r = app("A_KEY=1\n", "A_KEY='1'\nNOTE='Don't share\nhunter2-pass=it's'\n")("pull");
+  expect([r.code, r.env, r.tmp, r.out.includes("export line 2"), r.out.includes("export line 3")]).toEqual([1, "A_KEY=1\n", false, true, true]);
+  for (const frag of ["hunter2", "share", "NOTE"]) expect(r.out).not.toContain(frag);
+});
+
+test("pull refuses when the local .env has a line outside the format, by line number", () => {
+  for (const [, line] of OUTSIDE) {
+    const env = `A=1\n${line}`;
+    const r = app(env, "A=1\nB=2\n")("pull");
+    expect([line, r.code, r.env, r.tmp, r.out.includes(".env line 2")]).toEqual([line, 1, env, false, true]);
+    expect(r.out).not.toContain("hunter2");
+  }
+});
+
+test("pull refuses an export that lacks a local key, naming it", () => {
+  const r = app("A=1\nSTRIPE_SECRET_KEY=sk_local\n", "A='2'\n")("pull");
+  expect([r.code, r.env, r.tmp, r.out.includes("STRIPE_SECRET_KEY"), r.out.includes("sk_local")]).toEqual([1, "A=1\nSTRIPE_SECRET_KEY=sk_local\n", false, true, false]);
+});
+
+test("pull replaces .env when the export has every local key", () => {
+  const r = app("# note\nA=1\nB=\"x y\"\n", "A='2'\nB='x y'\nC='x'\n")("pull");
+  expect([r.code, r.env, r.tmp]).toEqual([0, "A='2'\nB='x y'\nC='x'\n", false]);
+});
+
+test("pull refuses an export where a value's quote and newline add an override or a comment line, by line number", () => {
+  for (const exported of ["A='1'\nVITE_BANNER='Welcome'\nA='hunter2'\n", "A='correct'\n#hunter2'\n", "A='1'\n\nB='hunter2'\n"]) {
+    const r = app("A=1\n", exported)("pull");
+    expect([exported, r.code, r.env, r.tmp, r.out.includes("hunter2"), /export line \d/.test(r.out)]).toEqual([exported, 1, "A=1\n", false, false, true]);
+  }
+});
+
+test("pull accepts an empty export when .env has no keys", () => {
+  const r = app("# none\n", "")("pull");
+  expect([r.code, r.env]).toEqual([0, ""]);
+});

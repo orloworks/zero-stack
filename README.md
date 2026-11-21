@@ -56,7 +56,27 @@ A `create-void` app (vite-plus toolchain, sqlite starter, git) plus your chosen 
   as `noreply@example.com`); without a mail domain sends fail and are logged.
 - Set `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` for the deployed origin.
 
-Not included: data export, grace-period deletion, Stripe, orgs/admin/2FA (later waves), #17 referrals, #18 affiliate app, #26 Infisical secrets.
+Not included: data export, grace-period deletion, Stripe, orgs/admin/2FA (later waves), #17 referrals, #18 affiliate app.
+
+## `--secrets infisical`
+
+Implies `--auth`. Adds `bun run secrets:push` (one-time seed of the Infisical `dev` environment
+from `.env`; overwrites Infisical values; prints only a key count) and `bun run secrets:pull`
+(replaces `.env` from `dev`). Link the folder first (`secret-sync` skill or `infisical init
+--project-id <id>`). `push` refuses names that break the key naming convention (upper snake
+case, no `VITE_` name containing SECRET/PASSWORD/TOKEN/PRIVATE, never `VOID_`/`__VOID_`).
+Both accept only a strict line format (blank, `#` comment, `KEY=value` with the value empty,
+unquoted without `#`, quotes, backticks, `\` or `$`, or in one `"…"`/`'…'` pair with no quote, `\` or `$`
+inside) in `.env` and the export, and refuse any other line by line number. Empty values are
+pull-only: `push` refuses them, and whitespace-only quoted values, by line number, because Infisical rejects empty values. Both run under Bun
+(`bun --no-env-file scripts/secrets.ts`, so `.env` never reaches the `infisical` CLI). Infisical
+output is never printed. The generated `AGENTS.md` documents the production route (`void secret
+sync` for server keys, which needs an `env.ts` declaring every synced key, skips `VITE_` and
+`BETTER_AUTH_` lines and refuses any export line other than `KEY='…'`; `infisical run --env=prod -- void deploy` for client keys).
+
+Out of scope: any network call from the scaffold CLI, Infisical's Cloudflare Workers sync (its
+first sync overwrites Worker secrets), production or preview scripts, other secret managers,
+writing `.infisical.yaml` or creating Infisical projects, `infisical run` for dev.
 
 ## Cloudflare routing
 
