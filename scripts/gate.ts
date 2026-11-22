@@ -634,6 +634,10 @@ try {
       if (rows("user", "SELECT 1 FROM user WHERE role = 'admin' AND id = ?", victimU.id).length) throw new Error("set-role changed a role");
       console.log("gate: admin 404 for signed out, non-admin" + (ownerU ? ", listed-unverified" : "") + ", case/encoding variants and the 7 refused endpoints; 200 for an admin; /admin/users redirects");
 
+      // Sign-in writes lastSignInAt (E9) and never role: only the guard writes that.
+      if (!rows("user", "SELECT lastSignInAt AS t FROM user WHERE id = ?", plainU.id)[0].t) throw new Error("sign-in did not write lastSignInAt");
+      if (rows("user", "SELECT role FROM user WHERE id = ?", plainU.id)[0].role === "admin") throw new Error("a non-admin has role admin");
+
       // Grant on a live session (O3): a listed user who verifies after signing in reaches the plugin API on the same session; the guard is what writes role.
       if (ownerU) {
         onUser(owner2, "UPDATE user SET emailVerified = 1 WHERE id = ?");
@@ -682,7 +686,7 @@ try {
       const detail = await html(b, `/admin/users/${victimU.id}`, bossU.cookie);
       if (!detail.text.includes("Banned") || !detail.text.includes("spam signup") || !detail.text.includes("Unban")) throw new Error("user detail does not show the ban, its reason and Unban");
       const live = await html(b, `/admin/users/${otherU.id}`, bossU.cookie);
-      for (const t of ["Only admins see this.", `aria-label="Ban ${other}"`, "Danger zone", "Delete user permanently", `Type ${other} to confirm`, "Send reset link", 'tabindex="-1"']) if (!live.text.includes(t)) throw new Error(`user detail lacks ${t}`);
+      for (const t of ["Only admins see this.", "Active, last sign-in", `aria-label="Ban ${other}"`, "Danger zone", "Delete user permanently", `Type ${other} to confirm`, "Send reset link", 'tabindex="-1"']) if (!live.text.includes(t)) throw new Error(`user detail lacks ${t}`);
       if (JSON.stringify(refusedBody).includes("spam")) throw new Error("the ban reason reached the banned user");
       if (!auditRows().some((r) => r.verb === "ban" && r.target_email === victim && r.actor_email === boss && r.detail === "spam signup" && r.old_value === "active" && r.new_value === "banned")) throw new Error("no audit entry for the ban");
       if ((await call(b, "POST", "/api/auth/admin/unban-user", bossU.cookie, { userId: victimU.id })).status !== 200) throw new Error("unban-user failed");
