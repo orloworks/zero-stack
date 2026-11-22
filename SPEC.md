@@ -241,9 +241,12 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   `--turnstile` sign-up, sign-in (and reset) refused without a token, accepted with the dummy
   token; `--invite-only` @example.com admitted (any case) with no session and no kept password
   until the dev-inbox set-password link is followed; in both orders (attacker first, owner
-  first) a raw-API attacker's password P is refused (the sign-in mails another set-password
-  link), the owner sets Q through a link, then P gets 401 and Q 200, no verify link is ever
-  mailed, a later sign-up over the verified user changes nothing; lookalike domain
+  first) a raw-API attacker's password P is refused, each address gets one set-password
+  mail while its link is live (wrong-password, cross-origin and no-name requests add none),
+  the owner sets Q through a link, then P gets 401 and Q 200, no verify link is ever
+  mailed, a later sign-up over the verified user changes nothing; a pending user removed
+  from the list gets no mail and their old link neither verifies nor resets, while a
+  verified user removed from the list still resets and signs in; lookalike domain
   and subdomain leave no user row and no mail, an exact entry admits and a
   same-domain address is refused, an empty list refuses everyone, existing users still sign
   in (the list is changed by restarting the dev server on a new `.env`); `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
