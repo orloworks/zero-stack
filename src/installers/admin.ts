@@ -17,6 +17,12 @@ export function installAdmin(dir: string, config: Config): void {
   if (!config.inviteOnly) cpSync(join(template, "auth/invite-only/src/signup-allowlist.ts"), join(dir, "src/signup-allowlist.ts"));
   if (!config.inviteOnly) cpSync(join(template, "auth/invite-only/tests/signup-allowlist.test.ts"), join(dir, "tests/signup-allowlist.test.ts"));
 
+  // The email test's second case signs up a real (unverified) user and asks for a reset: an invite-only admin app mails them a set-password link.
+  if (config.inviteOnly) {
+    const t = "tests/auth-email.test.ts";
+    editFile(dir, t, (s) => replaceAnchor(s, "/email send failed \\(Reset your password\\)/", "/email send failed \\((Reset|Set) your password\\)/", t));
+  }
+
   const layout = "pages/admin/layout.svelte";
   editFile(dir, layout, (s) => replaceAnchor(s, 'const APP_NAME = "__APP_NAME__";', `const APP_NAME = ${JSON.stringify(config.name)};`, layout));
   if (config.inviteOnly) editFile(dir, "src/admin.ts", (s) => replaceAnchor(s, "export const INVITE_ONLY = false;", "export const INVITE_ONLY = true;", "src/admin.ts"));

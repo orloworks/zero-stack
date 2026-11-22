@@ -560,6 +560,7 @@ test("svelte --admin --storage checks the user row after an upload; --admin --in
   const auth = readFileSync(on.dir + "/auth.ts", "utf8");
   expect(auth).toContain("purge: purgeUserFiles");
   expect(auth.match(/^  databaseHooks:/gm)).toHaveLength(1);
+  expect(readFileSync(join(on.dir, "tests/auth-email.test.ts"), "utf8")).toContain("(Reset|Set) your password"); // an invite-only admin app mails an unverified user a set-password link
 });
 
 test("without --admin none of it exists", async () => {
