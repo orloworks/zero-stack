@@ -62,7 +62,10 @@ const INVITE_ONLY_HOOK = `  databaseHooks: {
 // - sign-up: the body's password is replaced by a random one nobody sees (the page sends none). Hooks run before Better Auth validates the body.
 // - sign-up, repeat sign-up and sign-in for an unverified user: mail a set-password link, a Better Auth reset token. There is no emailVerification config,
 //   so Better Auth never mints a plain verify link (/send-verification-email answers 400). Nothing is deleted, so a repeat sign-up cannot lock the owner out.
-// - reset-password: a valid token proves the inbox, so it marks the email verified; the reset then replaces the random password.
+//   Mail goes only for a request Better Auth accepted (sign-in: only the wrong-password refusal), only while the address is on the list, and only when the user
+//   has no unexpired set-password or reset link, so a new one goes out after the last expires or is used.
+// - reset-password: a valid token proves the inbox, so it marks an unverified user verified, if the list still holds the address; if not, the reset is refused
+//   with Better Auth's invalid-token error. Verified users reset as usual. The reset then replaces the random password.
 const INVITE_ONLY_PLUGIN = `{
       id: "invite-only",
       hooks: {
@@ -76,7 +79,11 @@ const INVITE_ONLY_PLUGIN = `{
             handler: createAuthMiddleware(async (ctx) => {
               const token = ctx.body?.token || ctx.query?.token;
               const found = typeof token === "string" && (await ctx.context.internalAdapter.findVerificationValue(\`reset-password:\${token}\`));
-              if (found && found.expiresAt > new Date()) await ctx.context.internalAdapter.updateUser(found.value, { emailVerified: true });
+              if (!found || found.expiresAt <= new Date()) return;
+              const user = await ctx.context.internalAdapter.findUserById(found.value);
+              if (!user || user.emailVerified) return;
+              if (!signupAllowed(env.SIGNUP_ALLOWLIST, user.email)) throw new APIError("BAD_REQUEST", { code: "INVALID_TOKEN", message: "Invalid token" });
+              await ctx.context.internalAdapter.updateUser(user.id, { emailVerified: true });
             }),
           },
         ],
@@ -84,9 +91,20 @@ const INVITE_ONLY_PLUGIN = `{
           {
             matcher: (ctx) => ctx.path === "/sign-up/email" || ctx.path === "/sign-in/email",
             handler: createAuthMiddleware(async (ctx) => {
+              const returned = ctx.context.returned;
+              if (isAPIError(returned) && !(ctx.path === "/sign-in/email" && returned.body?.code === "INVALID_EMAIL_OR_PASSWORD")) return;
               const email = ctx.body?.email;
               const found = typeof email === "string" && (await ctx.context.internalAdapter.findUserByEmail(email.toLowerCase()));
-              if (!found || found.user.emailVerified) return;
+              if (!found || found.user.emailVerified || !signupAllowed(env.SIGNUP_ALLOWLIST, found.user.email)) return;
+              const unexpired = await ctx.context.adapter.findOne({
+                model: "verification",
+                where: [
+                  { field: "value", value: found.user.id },
+                  { field: "identifier", operator: "starts_with", value: "reset-password:" },
+                  { field: "expiresAt", operator: "gt", value: new Date() },
+                ],
+              });
+              if (unexpired) return;
               const token = crypto.randomUUID().replaceAll("-", "");
               const expiresIn = ctx.context.options.emailAndPassword?.resetPasswordTokenExpiresIn ?? 3600;
               await ctx.context.runInBackgroundOrAwait(
@@ -137,7 +155,7 @@ export function composeAuthTs(config: Config): string {
     ...(config.accountDeletion ? [config.storage ? STORAGE_DELETE_USER : "  user: { deleteUser: { enabled: true } },", DELETE_PASSWORD_HOOK] : []),
   ];
   const del = config.accountDeletion && config.storage;
-  const ba = config.accountDeletion || config.inviteOnly ? 'import { APIError, createAuthMiddleware } from "better-auth/api";\n' : "";
+  const ba = config.accountDeletion || config.inviteOnly ? `import { APIError, createAuthMiddleware${config.inviteOnly ? ", isAPIError" : ""} } from "better-auth/api";\n` : "";
   return `import { defineAuth } from "void/auth";
 ${ba}${config.turnstile ? 'import { captcha } from "better-auth/plugins";\n' : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.inviteOnly ? 'import { signupAllowed } from "./src/signup-allowlist";\n' : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}
 export default defineAuth(({ defaults${config.turnstile || config.inviteOnly ? ", env" : ""} }) => ({

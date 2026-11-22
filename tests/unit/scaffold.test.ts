@@ -415,7 +415,9 @@ test("svelte --invite-only gates user creation in auth.ts, ships the matcher and
   // The gate checks a proven email: verification is required. Password after verification: the sign-up's password is replaced by a random one, every mail to an
   // unverified user is a set-password (reset) link and never a verify link, and a valid set-password token marks the email verified. Nothing is deleted.
   expect(auth).toContain("requireEmailVerification: true,");
-  for (const t of ['id: "invite-only"', 'ctx.path === "/sign-up/email"', "password: crypto.randomUUID()", 'ctx.path === "/reset-password"', "{ emailVerified: true }", 'ctx.path === "/sign-in/email"', "found.user.emailVerified", '"Set your password"', "`reset-password:${token}`", 'import { APIError, createAuthMiddleware } from "better-auth/api"'])
+  for (const t of ['id: "invite-only"', 'ctx.path === "/sign-up/email"', "password: crypto.randomUUID()", 'ctx.path === "/reset-password"', "{ emailVerified: true }", 'ctx.path === "/sign-in/email"', "found.user.emailVerified", '"Set your password"', "`reset-password:${token}`", 'import { APIError, createAuthMiddleware, isAPIError } from "better-auth/api"',
+    // Re-checked when the inbox is proven; mail only for an accepted request and only when no unexpired link exists.
+    "signupAllowed(env.SIGNUP_ALLOWLIST, found.user.email)", "signupAllowed(env.SIGNUP_ALLOWLIST, user.email)) throw", 'code: "INVALID_TOKEN"', 'returned.body?.code === "INVALID_EMAIL_OR_PASSWORD"', 'operator: "starts_with", value: "reset-password:"'])
     expect(auth).toContain(t);
   for (const t of ["emailVerification", "sendVerificationEmail", "autoSignInAfterVerification", "sendOnSignIn", "deleteUser", "Verify your email", "latest-signup-wins"]) expect(auth).not.toContain(t);
   const signIn = read("pages/sign-in.svelte");
