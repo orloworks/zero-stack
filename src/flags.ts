@@ -12,6 +12,7 @@ export const FEATURES = [
   { flag: "email", key: "email", label: "email", prompt: "Add email?", requires: "auth", frameworks: ["svelte"] },
   { flag: "turnstile", key: "turnstile", label: "Turnstile", prompt: "Add Turnstile?", requires: "auth", frameworks: ["svelte"] },
   { flag: "invite-only", key: "inviteOnly", label: "invite-only signup", prompt: "Restrict sign-up to invited emails?", requires: "email", frameworks: ["svelte"] },
+  { flag: "admin", key: "admin", label: "admin area", prompt: "Add an admin area?", requires: "email", frameworks: ["svelte"] },
   { flag: "storage", key: "storage", label: "storage", prompt: "Add storage?", requires: "auth" },
   { flag: "secrets", key: "secrets", label: "Infisical secrets", prompt: "Sync secrets with Infisical?", requires: "auth", value: "infisical" },
 ] as const satisfies readonly {

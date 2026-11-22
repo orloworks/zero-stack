@@ -12,7 +12,7 @@ const ui = (answers: Record<string, string | boolean>) => {
   return { asked, ui: { text: get, confirm: get } as Ui };
 };
 
-const yesAll = { "Project name": "my-app", "Add Tailwind?": true, "Add shadcn/ui?": true, "Add typed zod RPC?": true, "Add auth?": true, "Add account deletion?": true, "Add email?": true, "Add Turnstile?": true, "Add storage?": true, "Sync secrets with Infisical?": true };
+const yesAll = { "Project name": "my-app", "Add Tailwind?": true, "Add shadcn/ui?": true, "Add typed zod RPC?": true, "Add auth?": true, "Add account deletion?": true, "Add email?": true, "Add Turnstile?": true, "Restrict sign-up to invited emails?": true, "Add an admin area?": true, "Add storage?": true, "Sync secrets with Infisical?": true };
 
 test("interactive and flag-only runs produce identical configs", async () => {
   const t = ui(yesAll);
@@ -53,7 +53,7 @@ test("add-ons are asked only after auth is yes, and only those valid for the fra
   expect(no.asked).not.toContain("Sync secrets with Infisical?");
   const yes = ui(yesAll);
   await fillPrompts({ name: "x", framework: "svelte" }, yes.ui);
-  expect(yes.asked.slice(-6)).toEqual(["Add account deletion?", "Add email?", "Add Turnstile?", "Restrict sign-up to invited emails?", "Add storage?", "Sync secrets with Infisical?"]);
+  expect(yes.asked.slice(-7)).toEqual(["Add account deletion?", "Add email?", "Add Turnstile?", "Restrict sign-up to invited emails?", "Add an admin area?", "Add storage?", "Sync secrets with Infisical?"]);
   const vue = ui(yesAll);
   await fillPrompts({ name: "x", framework: "vue" }, vue.ui);
   expect(vue.asked.slice(-2)).toEqual(["Add storage?", "Sync secrets with Infisical?"]);
@@ -65,7 +65,7 @@ test("an add-on flag implies auth, so auth is not asked", async () => {
   await fillPrompts({ name: "x", framework: "svelte", email: true }, t.ui);
   expect(t.asked).not.toContain("Add auth?");
   expect(t.asked).not.toContain("Add email?");
-  expect(t.asked.slice(-5)).toEqual(["Add account deletion?", "Add Turnstile?", "Restrict sign-up to invited emails?", "Add storage?", "Sync secrets with Infisical?"]);
+  expect(t.asked.slice(-6)).toEqual(["Add account deletion?", "Add Turnstile?", "Restrict sign-up to invited emails?", "Add an admin area?", "Add storage?", "Sync secrets with Infisical?"]);
 });
 
 test("shadcn is asked even when Tailwind was declined, and choosing it implies Tailwind", async () => {
@@ -83,4 +83,13 @@ test("implication is followed transitively: invite-only implies email implies au
   const out = await fillPrompts({ name: "x", framework: "svelte" }, no.ui);
   expect(no.asked).not.toContain("Restrict sign-up to invited emails?");
   expect(validateFlags(out).config.inviteOnly).toBe(false);
+});
+
+test("--admin is prompted like the other add-ons, skipped when implied or off-framework", async () => {
+  const t = ui(yesAll);
+  await fillPrompts({ name: "x", framework: "svelte", admin: true }, t.ui);
+  for (const q of ["Add auth?", "Add email?", "Add an admin area?"]) expect(t.asked).not.toContain(q);
+  const react = ui(yesAll);
+  await fillPrompts({ name: "x", framework: "react" }, react.ui);
+  expect(react.asked).not.toContain("Add an admin area?");
 });

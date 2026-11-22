@@ -17,7 +17,7 @@ const broken = (k: string): number[] => [
 const templates = join(import.meta.dir, "../../template");
 // The env.ts of every flag set that has one: composed, never copied from a template.
 const composed = (): string[] =>
-  [{}, { turnstile: true }, { inviteOnly: true }, { turnstile: true, inviteOnly: true }].flatMap((o) => composeEnvTs(validateFlags({ name: "app", framework: "svelte", ...o }).config) ?? []);
+  [{}, { turnstile: true }, { inviteOnly: true }, { turnstile: true, inviteOnly: true }, { admin: true }, { admin: true, turnstile: true, inviteOnly: true }].flatMap((o) => composeEnvTs(validateFlags({ name: "app", framework: "svelte", ...o }).config) ?? []);
 // Keys declared inside defineEnv({ ... }): bare, quoted ('a-b', "a-b") or computed (["A"]) keys, with or without a space before the value,
 // at a line start or after `{` or `,` (so a second key on the same line is seen too).
 const declared = (src: string) =>
@@ -35,10 +35,11 @@ test("the checker catches each broken rule", () => {
 });
 
 test("every key in a generated .env follows the naming convention, for every flag set", () => {
-  for (const [turnstile, inviteOnly] of [[false, false], [true, false], [false, true], [true, true]]) {
-    const keys = Object.keys(parseEnv(authEnv({ turnstile, inviteOnly })));
+  for (const [turnstile, inviteOnly, admin] of [[false, false, false], [true, false, false], [false, true, false], [true, true, false], [false, false, true], [true, true, true]]) {
+    const keys = Object.keys(parseEnv(authEnv({ turnstile, inviteOnly, admin })));
     expect(keys).toContain("BETTER_AUTH_SECRET");
     expect(keys.includes("SIGNUP_ALLOWLIST")).toBe(inviteOnly);
+    expect(parseEnv(authEnv({ turnstile, inviteOnly, admin })).ADMIN_EMAILS).toBe(admin ? "@example.com" : undefined);
     for (const k of keys) expect([k, broken(k)]).toEqual([k, []]);
   }
 });

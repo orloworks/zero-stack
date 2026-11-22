@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { argv, FEATURE_LIST, parseFeature, validateFlags } from "../../src/flags";
 
-const base = { inviteOnly: false, tailwind: false, shadcn: false, zodRpc: false, auth: false, accountDeletion: false, email: false, turnstile: false, storage: false, secrets: false };
+const base = { admin: false, inviteOnly: false, tailwind: false, shadcn: false, zodRpc: false, auth: false, accountDeletion: false, email: false, turnstile: false, storage: false, secrets: false };
 
 test("defaults: react, every installer off, no notes", () => {
   expect(validateFlags({ name: "my-app" })).toEqual({
@@ -124,4 +124,21 @@ test("--invite-only implies email and, through it, auth, saying so, and is promp
   expect(r.notes).toEqual(["--invite-only implies --email; enabling email.", "--email implies --auth; enabling auth."]);
   expect(validateFlags({ name: "x", framework: "svelte", inviteOnly: true, email: true, auth: true }).notes).toEqual([]);
   expect(FEATURE_LIST.find((f) => f.flag === "invite-only")).toMatchObject({ key: "inviteOnly", requires: "email", prompt: "Restrict sign-up to invited emails?" });
+});
+
+test("--admin implies email and, through it, auth, saying so; it is one table row and is prompted", () => {
+  const r = validateFlags({ name: "x", framework: "svelte", admin: true });
+  expect(r.config).toMatchObject({ admin: true, email: true, auth: true });
+  expect(r.notes).toEqual(["--admin implies --email; enabling email.", "--email implies --auth; enabling auth."]);
+  expect(validateFlags({ name: "x", framework: "svelte", admin: true, email: true, auth: true }).notes).toEqual([]);
+  expect(FEATURE_LIST.filter((f) => f.flag === "admin")).toEqual([
+    { flag: "admin", key: "admin", label: "admin area", prompt: "Add an admin area?", requires: "email", frameworks: ["svelte"] },
+  ]);
+});
+
+test("--admin is refused on react, vue and solid, naming svelte", () => {
+  for (const framework of ["react", "vue", "solid"])
+    expect(() => validateFlags({ name: "x", framework, admin: true })).toThrow(
+      `--admin requires --framework svelte (got ${framework}); drop --admin or use --framework svelte.`,
+    );
 });
