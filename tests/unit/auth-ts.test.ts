@@ -78,7 +78,7 @@ test("--admin with account deletion keeps the purge-first beforeDelete and moves
 
 test("the reset mail subject is 'Set your password' for an unverified user only with --admin and --invite-only", () => {
   const both = compose({ admin: true, inviteOnly: true });
-  expect(both).toContain('user.emailVerified ? "Reset your password" : "Set your password"');
+  expect(both).toContain('user.emailVerified === false ? "Set your password" : "Reset your password"');
   expect(compose({ inviteOnly: true })).toContain('send(user.email, "Reset your password", url)');
   expect(compose({ admin: true })).toContain('send(user.email, "Reset your password", url)');
   expect(both.match(/^  databaseHooks:/gm)).toHaveLength(1);

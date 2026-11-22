@@ -168,7 +168,7 @@ export function composeAuthTs(config: Config): string {
     ...defaults.emailAndPassword,
     enabled: true,
     revokeSessionsOnPasswordReset: true,${config.inviteOnly ? "\n    requireEmailVerification: true," : ""}
-    sendResetPassword: ({ user, url }) => send(user.email, ${config.admin && config.inviteOnly ? 'user.emailVerified ? "Reset your password" : "Set your password"' : '"Reset your password"'}, url),
+    sendResetPassword: ({ user, url }) => send(user.email, ${config.admin && config.inviteOnly ? 'user.emailVerified === false ? "Set your password" : "Reset your password"' : '"Reset your password"'}, url),
   },${config.inviteOnly ? "" : `
   emailVerification: {
     sendOnSignUp: true,
