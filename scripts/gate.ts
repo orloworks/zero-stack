@@ -746,6 +746,14 @@ try {
       if (!own.text.includes("This device") || !own.text.includes("Revoke all other sessions")) throw new Error("own user detail lacks This device or Revoke all other sessions");
       console.log("gate: admin self-ban and self-delete refused (400), own detail page says 'This is you.' and labels This device");
 
+      // Before-hooks run ahead of the endpoint's own checks: a cross-origin delete with the admin's cookie must be refused before the guard purges anything.
+      const keep = await mk(b, addr("keep"));
+      if (config.storage && (await upload(b, keep.cookie, "keep.txt", "keep")) !== 201) throw new Error("the kept user's upload failed");
+      const evil = await fetch(`${b}/api/auth/admin/remove-user`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.test", cookie: bossU.cookie }, body: JSON.stringify({ userId: keep.id }) });
+      if (evil.status !== 403) throw new Error(`a cross-origin remove-user -> ${evil.status}, expected 403`);
+      if (!rows("user", "SELECT 1 FROM user WHERE id = ?", keep.id).length || (config.storage && !r2Keys().includes(`users/${keep.id}/keep.txt`))) throw new Error("a refused cross-origin remove-user purged files or deleted the user");
+      if (auditRows().some((r) => r.verb === "delete-user")) throw new Error("a refused cross-origin remove-user was audited");
+
       // Delete: the user row, sessions and files go; no audit entry holds the deleted email once the request is done; the delete itself is recorded without a target.
       const del = await mk(b, addr("doomed"));
       const doomed = addr("doomed");
