@@ -57,21 +57,44 @@ const INVITE_ONLY_HOOK = `  databaseHooks: {
     },
   },`;
 
-// Latest sign-up wins: a sign-up for an address that has an unverified user first deletes that user (its account and sessions with it), so the new password and
-// a fresh link replace whatever a squatter set. Verified users are never touched. Email-verification links are JWTs bound to the user id, not rows, so deleting the
-// user is what kills the older link (verify-email answers INVALID_TOKEN for a different id). A plugin, not options.hooks, so it runs after the captcha plugin
-// and an unverified sign-up cannot clear a pending user, and so it coexists with the account-deletion hook.
-const LATEST_SIGNUP_WINS = `{
-      id: "latest-signup-wins",
+// Password after verification: the inbox owner picks the password, so a password chosen before the inbox is proven never signs in (an attacker who signs up an
+// invited address first, or after the owner, gets nothing). A plugin, so its hooks run after the captcha plugin and coexist with the account-deletion hook.
+// - sign-up: the body's password is replaced by a random one nobody sees (the page sends none). Hooks run before Better Auth validates the body.
+// - sign-up, repeat sign-up and sign-in for an unverified user: mail a set-password link, a Better Auth reset token. There is no emailVerification config,
+//   so Better Auth never mints a plain verify link (/send-verification-email answers 400). Nothing is deleted, so a repeat sign-up cannot lock the owner out.
+// - reset-password: a valid token proves the inbox, so it marks the email verified; the reset then replaces the random password.
+const INVITE_ONLY_PLUGIN = `{
+      id: "invite-only",
       hooks: {
         before: [
           {
             matcher: (ctx) => ctx.path === "/sign-up/email",
+            handler: createAuthMiddleware(async (ctx) => ({ context: { body: { ...ctx.body, password: crypto.randomUUID() + crypto.randomUUID() } } })),
+          },
+          {
+            matcher: (ctx) => ctx.path === "/reset-password",
+            handler: createAuthMiddleware(async (ctx) => {
+              const token = ctx.body?.token || ctx.query?.token;
+              const found = typeof token === "string" && (await ctx.context.internalAdapter.findVerificationValue(\`reset-password:\${token}\`));
+              if (found && found.expiresAt > new Date()) await ctx.context.internalAdapter.updateUser(found.value, { emailVerified: true });
+            }),
+          },
+        ],
+        after: [
+          {
+            matcher: (ctx) => ctx.path === "/sign-up/email" || ctx.path === "/sign-in/email",
             handler: createAuthMiddleware(async (ctx) => {
               const email = ctx.body?.email;
-              if (typeof email !== "string" || !signupAllowed(env.SIGNUP_ALLOWLIST, email)) return;
-              const found = await ctx.context.internalAdapter.findUserByEmail(email);
-              if (found && !found.user.emailVerified) await ctx.context.internalAdapter.deleteUser(found.user.id);
+              const found = typeof email === "string" && (await ctx.context.internalAdapter.findUserByEmail(email.toLowerCase()));
+              if (!found || found.user.emailVerified) return;
+              const token = crypto.randomUUID().replaceAll("-", "");
+              const expiresIn = ctx.context.options.emailAndPassword?.resetPasswordTokenExpiresIn ?? 3600;
+              await ctx.context.runInBackgroundOrAwait(
+                (async () => {
+                  await ctx.context.internalAdapter.createVerificationValue({ value: found.user.id, identifier: \`reset-password:\${token}\`, expiresAt: new Date(Date.now() + expiresIn * 1000) });
+                  await send(found.user.email, "Set your password", \`\${ctx.context.baseURL}/reset-password/\${token}?callbackURL=%2Freset-password\`);
+                })(),
+              );
             }),
           },
         ],
@@ -82,8 +105,8 @@ const LATEST_SIGNUP_WINS = `{
 // Svelte only: react, vue and solid --auth keep v0.1 output (no auth.ts).
 export function composeAuthTs(config: Config): string {
   const options = [
-    // Sign-in never waits on mail (D8), except --invite-only: the allowlist must see a proven address, so verification is required and its link signs the user in
-    // (sign-up then creates no session). Reset revokes every other session (D30).
+    // Sign-in never waits on mail (D8), except --invite-only: the allowlist must see a proven address, so verification is required (sign-up creates no session)
+    // and is proven by the set-password link (INVITE_ONLY_PLUGIN). Reset revokes every other session (D30).
     ...(config.email
       ? [
           `  emailAndPassword: {
@@ -91,11 +114,11 @@ export function composeAuthTs(config: Config): string {
     enabled: true,
     revokeSessionsOnPasswordReset: true,${config.inviteOnly ? "\n    requireEmailVerification: true," : ""}
     sendResetPassword: ({ user, url }) => send(user.email, "Reset your password", url),
-  },
+  },${config.inviteOnly ? "" : `
   emailVerification: {
-    sendOnSignUp: true,${config.inviteOnly ? "\n    sendOnSignIn: true,\n    autoSignInAfterVerification: true," : ""}
+    sendOnSignUp: true,
     sendVerificationEmail: ({ user, url }) => send(user.email, "Verify your email", url),
-  },`,
+  },`}`,
         ]
       : []),
     // Better Auth's captcha plugin guards its default endpoints (sign-up, sign-in, request-password-reset); the guard refuses a test secret off localhost (D14).
@@ -103,7 +126,7 @@ export function composeAuthTs(config: Config): string {
       ? [
           `  plugins: [${[
             config.turnstile && 'captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })',
-            config.inviteOnly && LATEST_SIGNUP_WINS,
+            config.inviteOnly && INVITE_ONLY_PLUGIN,
           ]
             .filter(Boolean)
             .join(", ")}],`,

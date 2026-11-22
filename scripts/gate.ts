@@ -157,7 +157,25 @@ try {
     return urls;
   };
   const mailUrl = async (b: string, subject: string, to: string) => (await mailUrls(b, subject, to))[0] ?? null;
+  // Mail can be sent in the background of the request, so poll until `n` have arrived (or time out and return what is there).
+  const waitMails = async (b: string, subject: string, to: string, n: number) => {
+    let urls: URL[] = [];
+    for (let i = 0; i < 40 && urls.length < n; i++) {
+      urls = await mailUrls(b, subject, to);
+      if (urls.length < n) await Bun.sleep(250);
+    }
+    return urls;
+  };
   const follow = (b: string, u: URL) => fetch(b + u.pathname + u.search, { redirect: "manual" });
+  // --invite-only: the inbox owner picks the password. Every mail to an unverified user is a set-password link; following it lands on /reset-password?token=.
+  const SET_PW = "Set your password";
+  const setPassword = async (b: string, link: URL, newPassword: string) => {
+    const landed = new URL((await follow(b, link)).headers.get("location") ?? "", b);
+    const token = landed.searchParams.get("token");
+    if (landed.pathname !== "/reset-password" || !token) throw new Error(`set-password link landed on ${landed}`);
+    return authPost(b, "/api/auth/reset-password", { newPassword, token });
+  };
+  const signInStatus = async (b: string, address: string, password: string) => (await authPost(b, "/api/auth/sign-in/email", { email: address, password })).status;
   const userRow = (address: string) =>
     sqliteFiles(join(app, ".void")).some((f) => {
       const d = new Database(f, { readonly: true });
@@ -165,19 +183,20 @@ try {
         return !!d.query("SELECT 1 FROM sqlite_master WHERE name = 'user'").get() && !!d.query("SELECT 1 FROM user WHERE lower(email) = ?").get(address.toLowerCase());
       } finally { d.close(); }
     });
-  // Invited: the sign-up succeeds with no session cookie, sign-in is refused until the mailed link is followed, and the link signs the user in (session cookie).
+  // Invited: the sign-up (as the page sends it, with no password) succeeds with no session cookie and mails one set-password link and no verify link;
+  // setting the password through it verifies the email, and that password then signs in.
   const signUpVerified = async (b: string, address: string, password = gatePw) => {
-    const up = await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: address, password });
+    const up = await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: address, password: "" });
     if (!up.ok) throw new Error(`invited sign-up for ${address} -> ${up.status}`);
     if (cookieOf(up)) throw new Error(`sign-up for ${address} set a cookie before the email was verified`);
-    const early = await authPost(b, "/api/auth/sign-in/email", { email: address, password });
-    if (early.status !== 403 || ((await early.json().catch(() => ({}))) as any)?.code !== "EMAIL_NOT_VERIFIED") throw new Error(`sign-in before verifying -> ${early.status}, expected 403 EMAIL_NOT_VERIFIED`);
-    const link = await mailUrl(b, "Verify your email", address);
-    if (!link) throw new Error(`no verification mail for ${address} in the dev inbox`);
-    const done = await fetch(b + link.pathname + link.search, { redirect: "manual" });
-    const cookie = cookieOf(done);
-    if (!/session_token=/.test(cookie)) throw new Error(`verification link -> ${done.status}, no session cookie`);
-    return cookie;
+    const [link] = await waitMails(b, SET_PW, address, 1);
+    if (!link) throw new Error(`no set-password mail for ${address} in the dev inbox`);
+    if (await mailUrl(b, "Verify your email", address)) throw new Error(`${address} got a plain verify link`);
+    const set = await setPassword(b, link, password);
+    if (!set.ok) throw new Error(`set-password for ${address} -> ${set.status}`);
+    const inn = await authPost(b, "/api/auth/sign-in/email", { email: address, password });
+    if (!inn.ok || !/session_token=/.test(cookieOf(inn))) throw new Error(`sign-in after set-password for ${address} -> ${inn.status}`);
+    return cookieOf(inn);
   };
   // Refused: no session, no user row, no mail. Status: a 200 (with verification on, Better Auth answers a refused sign-up with a placeholder user) or a 4xx (a malformed address is rejected before the hook).
   const inviteRefused = async (b: string, address: string) => {
@@ -185,7 +204,7 @@ try {
     if (r.status !== 200 && (r.status < 400 || r.status >= 500)) throw new Error(`refused sign-up for ${address} -> ${r.status}`);
     if (cookieOf(r)) throw new Error(`refused sign-up for ${address} set a cookie`);
     if (userRow(address)) throw new Error(`${address} was refused but has a user row`);
-    if (await mailUrl(b, "Verify your email", address)) throw new Error(`${address} was refused but got a verification mail`);
+    for (const subject of [SET_PW, "Verify your email"]) if (await mailUrl(b, subject, address)) throw new Error(`${address} was refused but got a "${subject}" mail`);
     if ((await authPost(b, "/api/auth/sign-in/email", { email: address, password: gatePw })).ok) throw new Error(`${address} was refused but can sign in`);
   };
   if (config.auth) {
@@ -213,13 +232,12 @@ try {
     const up = await post("/api/auth/sign-up/email", { name: "Gate", email, password });
     if (!up.ok) throw new Error(`auth sign-up -> ${up.status}`);
     if (config.inviteOnly) {
-      // Sign-up made no session; the sign-in below only works after the mailed link is followed (the sign-up above is not repeated: same user).
+      // Sign-up made no session and kept no password: the sign-up's password is refused, and `password` works only once it is set through the mailed link.
       if (cookieOf(up)) throw new Error("invite-only sign-up set a cookie before the email was verified");
-      const early = await post("/api/auth/sign-in/email", { email, password });
-      if (early.status !== 403) throw new Error(`sign-in before verifying -> ${early.status}, expected 403`);
-      const link = await mailUrl(base, "Verify your email", email);
-      if (!link) throw new Error("no verification mail in the dev inbox");
-      if (!/session_token=/.test(cookieOf(await fetch(base + link.pathname + link.search, { redirect: "manual" })))) throw new Error("verification link did not sign the user in");
+      if ((await post("/api/auth/sign-in/email", { email, password })).status !== 401) throw new Error("the sign-up's own password was kept");
+      const [link] = await waitMails(base, SET_PW, email, 1);
+      if (!link) throw new Error("no set-password mail in the dev inbox");
+      if (!(await setPassword(base, link, password)).ok) throw new Error("set-password through the mailed link failed");
     }
     const inn = await post("/api/auth/sign-in/email", { email, password });
     const cookie = cookieOf(inn);
@@ -234,43 +252,58 @@ try {
       for (const a of refused) await inviteRefused(base, a);
       await signUpVerified(base, `Upper-${Date.now()}@EXAMPLE.COM`); // a domain entry admits an upper-case match
       if (!(await authPost(base, "/api/auth/sign-in/email", { email: kept, password: gatePw })).ok) throw new Error("a verified user could not sign in");
-      // Latest sign-up wins: a squatter signs up an invited address, the owner signs up the same address, and only the owner's link and password survive.
-      // Both mails go to the owner's inbox; the squatter's (older) link is bound to the deleted user id, so it gives no access to the new account.
-      const squat = `squat-${Date.now()}@example.com`, squatPw = "squatter-password-1", ownerPw = "owner-password-12";
-      await authPost(base, "/api/auth/sign-up/email", { name: "Squatter", email: squat, password: squatPw });
-      const [oldLink] = await mailUrls(base, "Verify your email", squat);
-      if (!oldLink) throw new Error("no verification mail for the squatter's sign-up");
-      const owner = await authPost(base, "/api/auth/sign-up/email", { name: "Owner", email: squat, password: ownerPw });
-      if (!owner.ok || cookieOf(owner)) throw new Error(`owner sign-up over an unverified user -> ${owner.status}, cookie ${cookieOf(owner) ? "set" : "none"}`);
-      const fresh = (await mailUrls(base, "Verify your email", squat)).filter((u) => u.href !== oldLink.href);
-      if (fresh.length !== 1) throw new Error(`expected one fresh verification mail after the owner's sign-up, got ${fresh.length}`);
-      if (/session_token=/.test(cookieOf(await follow(base, oldLink)))) throw new Error("the squatter's old link gave a session");
-      if ((await authPost(base, "/api/auth/sign-in/email", { email: squat, password: ownerPw })).status !== 403) throw new Error("the old link verified the new account");
-      if (!/session_token=/.test(cookieOf(await follow(base, fresh[0]!)))) throw new Error("the owner's fresh link did not sign them in");
-      const [sq, ow] = await Promise.all([squatPw, ownerPw].map((password) => authPost(base, "/api/auth/sign-in/email", { email: squat, password })));
-      if (sq!.status !== 401) throw new Error(`the squatter's password -> ${sq!.status}, expected 401`);
-      if (ow!.status !== 200) throw new Error(`the owner's password -> ${ow!.status}, expected 200`);
-      // A verified user is never touched: a later sign-up for the address changes nothing.
-      await authPost(base, "/api/auth/sign-up/email", { name: "Late", email: squat, password: squatPw });
-      if ((await authPost(base, "/api/auth/sign-in/email", { email: squat, password: ownerPw })).status !== 200 || (await authPost(base, "/api/auth/sign-in/email", { email: squat, password: squatPw })).status !== 401)
-        throw new Error("a sign-up over a verified user changed it");
-      console.log("gate: invite-only latest sign-up wins: the squatter's old link gives no access, the squatter's password gets 401, the owner's 200, a verified user is untouched");
-      // Resend on sign-in: an owner who ignored the first mail signs in (refused) and gets a second link, which signs them in.
-      const lost = `lost-${Date.now()}@example.com`;
-      await authPost(base, "/api/auth/sign-up/email", { name: "Lost", email: lost, password: gatePw });
-      const first = await mailUrls(base, "Verify your email", lost);
-      if (first.length !== 1) throw new Error(`expected one verification mail after sign-up, got ${first.length}`);
-      if ((await authPost(base, "/api/auth/sign-in/email", { email: lost, password: gatePw })).status !== 403) throw new Error("sign-in before verifying was not refused");
-      // The mail is sent in the background of the sign-in request, so give the inbox a moment. Count mails, not links: two links minted in the same second are identical.
-      let mails: URL[] = [];
-      for (let i = 0; i < 20 && mails.length < 2; i++) {
-        await Bun.sleep(250);
-        mails = await mailUrls(base, "Verify your email", lost);
-      }
-      if (mails.length !== 2) throw new Error(`expected a second verification mail after sign-in, got ${mails.length} in all`);
-      if (!/session_token=/.test(cookieOf(await follow(base, mails[1]!)))) throw new Error("the resent link did not sign the user in");
-      console.log("gate: invite-only sign-in before verifying sends a second link, and following it signs the user in");
-      console.log("gate: invite-only admits @example.com (any case) with no session until the mailed link signs in; lookalike, subdomain, two-@ and non-ASCII addresses get no session, no user row, no mail; a verified user signs in");
+      // Password after verification, in both orders: an attacker signs up the owner's address over the raw API with password P and tries P (refused, and the
+      // sign-in mails another set-password link to the inbox); the owner signs up from the page (no password). The owner follows one link and sets Q.
+      // Then P gets 401 and Q 200. Nothing is deleted, so every link stays in the inbox; the unused ones still set a password until they expire (Better Auth's
+      // reset-token lifetime), and they were only ever mailed to the inbox, so only its holder can use them.
+      const takeover = async (attackerFirst: boolean) => {
+        const a = `owner-${attackerFirst ? "late" : "early"}-${Date.now()}@example.com`, P = "attacker-password-1", Q = "owner-password-12";
+        let mails = 0;
+        const expectMails = async (n: number, what: string) => {
+          const got = (await waitMails(base, SET_PW, a, n)).length;
+          if (got !== n) throw new Error(`${what}: expected ${n} set-password mails for ${a}, got ${got}`);
+          mails = n;
+        };
+        const attacker = async () => {
+          const r = await authPost(base, "/api/auth/sign-up/email", { name: "Attacker", email: a, password: P });
+          if (!r.ok || cookieOf(r)) throw new Error(`attacker sign-up -> ${r.status}, cookie ${cookieOf(r) ? "set" : "none"}`);
+          await expectMails(mails + 1, "attacker sign-up");
+          if ((await signInStatus(base, a, P)) !== 401) throw new Error("the attacker's sign-up password was kept");
+          await expectMails(mails + 1, "sign-in before the password is set");
+        };
+        const owner = async () => {
+          const r = await authPost(base, "/api/auth/sign-up/email", { name: "Owner", email: a, password: "" });
+          if (!r.ok || cookieOf(r)) throw new Error(`owner sign-up -> ${r.status}, cookie ${cookieOf(r) ? "set" : "none"}`);
+          await expectMails(mails + 1, "owner sign-up");
+        };
+        if (attackerFirst) await attacker(), await owner();
+        else await owner(), await attacker();
+        if (config.turnstile) {
+          // The captcha refuses before any hook: no token, no mail.
+          if ((await bare("/api/auth/sign-up/email", { name: "X", email: a, password: P })).status !== 400) throw new Error("a sign-up without a captcha token was not refused");
+          await Bun.sleep(500);
+          await expectMails(mails, "a sign-up refused by the captcha");
+        }
+        if (await mailUrl(base, "Verify your email", a)) throw new Error(`${a} got a plain verify link`);
+        if ((await authPost(base, "/api/auth/send-verification-email", { email: a })).ok) throw new Error("send-verification-email minted a verify link");
+        const links = await mailUrls(base, SET_PW, a);
+        const set = await setPassword(base, links[attackerFirst ? links.length - 1 : 0]!, Q);
+        if (!set.ok) throw new Error(`owner set-password -> ${set.status}`);
+        const [p, q] = [await signInStatus(base, a, P), await signInStatus(base, a, Q)];
+        if (p !== 401 || q !== 200) throw new Error(`after the owner set Q: P -> ${p} (expected 401), Q -> ${q} (expected 200)`);
+        // A later sign-up over the verified user changes nothing and mails nothing.
+        await authPost(base, "/api/auth/sign-up/email", { name: "Late", email: a, password: P });
+        await Bun.sleep(500);
+        await expectMails(mails, "a sign-up over a verified user");
+        const [p2, q2] = [await signInStatus(base, a, P), await signInStatus(base, a, Q)];
+        if (p2 !== 401 || q2 !== 200) throw new Error(`a sign-up over a verified user changed it: P -> ${p2}, Q -> ${q2}`);
+      };
+      await takeover(true);
+      await takeover(false);
+      console.log("gate: invite-only password after verification: attacker first and owner first, the attacker's P gets 401 and the owner's Q 200; every mail is a set-password link, no verify link; a sign-up over a verified user changes nothing");
+      const signUpPage = await fetch(`${base}/sign-up`).then((r) => r.text());
+      if (!signUpPage.includes('autocomplete="email"') || signUpPage.includes('type="password"')) throw new Error("the invite-only /sign-up page must ask for email and no password");
+      console.log("gate: invite-only admits @example.com (any case) with no session and no kept password until the set-password link; lookalike, subdomain, two-@ and non-ASCII addresses get no session, no user row, no mail; a verified user signs in");
     }
     // --storage: routes are auth-gated and per-user. Keys are read back from the local R2 state (miniflare's _mf_objects) to prove what is stored.
     // Only the sqlite files with an _mf_objects table are R2's; any read error on one of them fails the gate.
@@ -356,7 +389,7 @@ try {
           if (!url) throw new Error(`no "${subject}" mail for ${email} in the dev inbox`);
           return url;
         };
-        await mailLink("Verify your email"); // sent on sign-up; required to sign in only with --invite-only
+        if (!config.inviteOnly) await mailLink("Verify your email"); // sent on sign-up, never required to sign in (--invite-only mails a set-password link instead)
         const request = await post("/api/auth/request-password-reset", { email, redirectTo: "/reset-password" });
         if (!request.ok) throw new Error(`request-password-reset -> ${request.status}`);
         const link = await mailLink("Reset your password");

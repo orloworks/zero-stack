@@ -112,19 +112,22 @@ in `AGENTS.md`.
   invite-only right now." })` unless `signupAllowed(env.SIGNUP_ALLOWLIST, user.email)`. The
   page, the raw API and any later sign-in method are all gated; a refused sign-up creates no
   user and sends no mail; existing users sign in as before. The gate checks a proven email, so
-  it implies `--email` and sets `emailAndPassword.requireEmailVerification: true` and
-  `emailVerification.autoSignInAfterVerification: true`: sign-up creates no session, an
-  unverified user cannot sign in, and the verification link signs the user in. This overrides
-  D8 (sign-in never waits on mail) for invite-only apps only; others are unchanged. The sign-up
-  page shows "Check your inbox to finish signing up." after an invited sign-up and after a
-  refused one, so it never reveals who is on the list (with verification on, Better Auth answers
-  a refused sign-up with a 200 and a placeholder user, and the page also maps a 403
-  `SIGNUP_INVITE_ONLY` to the same copy). Latest sign-up wins: a plugin hook (after the captcha
-  plugin) on `/sign-up/email` deletes an unverified user for that address (account and sessions
-  with it, via Better Auth's `internalAdapter.deleteUser`) before the sign-up creates a fresh one,
-  so the new password and a fresh link replace a squatter's; the older link is bound to the
-  deleted user id and gives no access. Verified users are never touched. `sendOnSignIn: true`
-  mails a fresh link when an unverified user signs in with the right password. The sign-in page
+  it implies `--email` and sets `emailAndPassword.requireEmailVerification: true`: sign-up
+  creates no session and an unverified user cannot sign in. This overrides D8 (sign-in never
+  waits on mail) for invite-only apps only; others are unchanged. The sign-up page shows "Check
+  your inbox to finish signing up." after an invited sign-up and after a refused one, so it never
+  reveals who is on the list (with verification on, Better Auth answers a refused sign-up with a
+  200 and a placeholder user, and the page also maps a 403 `SIGNUP_INVITE_ONLY` to the same
+  copy). Password after verification: the inbox owner picks the password. The sign-up page asks
+  for name and email only; an `invite-only` plugin in `auth.ts` (after the captcha plugin)
+  replaces any sign-up password with a random one nobody sees, so a password sent before the
+  inbox is proven (say, by a raw-API squatter) never signs in. On sign-up, a repeat sign-up and a
+  sign-in for an unverified user, the plugin mails a "Set your password" link, a Better Auth
+  reset token for the existing `/reset-password` page. There is no `emailVerification` config, so
+  no plain verify link is ever minted. A valid reset token marks the email verified (a plugin
+  hook before `/reset-password`), and the reset replaces the random password. Nothing is deleted,
+  so a repeat sign-up can't lock the owner out; verified users are never touched. Unused links
+  stay valid until they expire (an hour) and only ever reach the inbox. The sign-in page
   shows one message for `EMAIL_NOT_VERIFIED` and `INVALID_EMAIL_OR_PASSWORD`, so sign-in doesn't
   reveal list membership. The matcher refuses any email without exactly one `@`, with an empty
   local part, or with any non-ASCII character in the raw input (tested before trimming or
@@ -236,10 +239,11 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   revoked, migration present, `.env` gitignored; `--email` reset mail in the dev inbox, link,
   new password signs in, bad or used token rejected, earlier sessions revoked;
   `--turnstile` sign-up, sign-in (and reset) refused without a token, accepted with the dummy
-  token; `--invite-only` @example.com admitted (any case) but with no session until the dev-inbox
-  verification link is followed (sign-in refused before it, signs in after; the refused sign-in
-  mails a second link that also signs in), a squatter's sign-up followed by the owner's leaves
-  the squatter's old link useless, the squatter's password 401 and the owner's 200, lookalike domain
+  token; `--invite-only` @example.com admitted (any case) with no session and no kept password
+  until the dev-inbox set-password link is followed; in both orders (attacker first, owner
+  first) a raw-API attacker's password P is refused (the sign-in mails another set-password
+  link), the owner sets Q through a link, then P gets 401 and Q 200, no verify link is ever
+  mailed, a later sign-up over the verified user changes nothing; lookalike domain
   and subdomain leave no user row and no mail, an exact entry admits and a
   same-domain address is refused, an empty list refuses everyone, existing users still sign
   in (the list is changed by restarting the dev server on a new `.env`); `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
