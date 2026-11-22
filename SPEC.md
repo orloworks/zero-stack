@@ -1,4 +1,4 @@
-# zero-stack — Spec V4 (wave 1: auth add-ons and storage)
+# zero-stack — Spec V4 (wave 1: auth add-ons and storage; wave 2: admin)
 
 `create-zero-stack` scaffolds a Void (Cloudflare Workers) app by wrapping the official
 `create-void` and layering opinionated extras on top. Personal-first tool, published
@@ -16,7 +16,7 @@ src/
   pipeline.ts       # create-void run, installers, install, failure cleanup
   versions.ts       # pinned create-void / void / dep versions (hand-bumped)
   installers/       # tailwind, shadcn, zodRpc, auth, auth-ts (composes auth.ts), account-deletion,
-                    # email, turnstile, storage (anchored string replace)
+                    # email, turnstile, invite-only, admin, storage (anchored string replace)
 template/           # file slices copied by installers
 docs/cloudflare-routing.md   # single source, see Routing docs
 tests/
@@ -30,9 +30,9 @@ tests/
 3. Validate flags, fail fast with a one-line fix. Implied flags are declared once in
    `FEATURES` (`src/flags.ts`) and each is announced: `--shadcn` enables `--tailwind`;
    `--account-deletion`, `--email`, `--turnstile`, `--storage` and `--secrets` enable `--auth`;
-   `--invite-only` enables `--email` (and so `--auth`).
+   `--invite-only` and `--admin` enable `--email` (and so `--auth`).
    `--shadcn` requires `--framework react`; `--account-deletion`, `--email`,
-   `--turnstile` and `--invite-only` require `--framework svelte` (D33).
+   `--turnstile`, `--invite-only` and `--admin` require `--framework svelte` (D33).
 4. Run pinned `bunx create-void@<pin> <name> --toolchain vite-plus --framework <fw>
    --starter sqlite --deploy none --git`. It always installs and cannot be prevented.
 5. Apply installers by anchored string replace against the known generated output of the
@@ -58,6 +58,7 @@ tests/
 | `--email` | bool | Svelte only, implies `--auth`. Password reset and sign-up verification mail |
 | `--turnstile` | bool | Svelte only, implies `--auth`. Cloudflare Turnstile on sign-up, sign-in and password reset |
 | `--invite-only` | bool | Svelte only, implies `--email` and `--auth`. Sign-up limited to the `SIGNUP_ALLOWLIST` secret, with a verified email |
+| `--admin` | bool | Svelte only, implies `--email` and `--auth`. Admin area at `/admin`, see below |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes and helper |
 | `--secrets` | `infisical` (the only value) | Any framework, implies `--auth`. `secrets:pull` / `secrets:push` against Infisical `dev`, see below |
 
@@ -147,6 +148,45 @@ in `AGENTS.md`.
   (fail closed: a storage error aborts the deletion, code `STORAGE_PURGE_FAILED`, shown by the
   page as partial-purge copy) and sweeps again in `afterDelete`.
 
+- `--admin` (svelte): an admin area at `/admin` in the same app (spec #51; this is its first ticket, #52: guard, Users,
+  User detail, Audit log). Invites, onboarding, feature switches and settings are later tickets. An **admin** is a signed-in
+  user with a verified email on the `ADMIN_EMAILS` secret (the invite-only matcher, `src/signup-allowlist.ts`, copied when
+  `--invite-only` did not). It is optional with an empty default in the composed `env.ts` (unset or empty means no admins and
+  `/admin` 404s while the app serves); the local `.env` gets `ADMIN_EMAILS=@example.com`. There is no promote button.
+  - Every `/admin` page and `/api/admin/*` route is 404 for everyone else, signed out included: a global `middleware/10.admin.ts`
+    gates the paths, and each loader and route also calls `requireAdmin`.
+  - `auth.ts` gains Better Auth's `admin()` plugin (ban message "This account has been blocked. Contact the site owner.") and
+    an `admin-guard` plugin (`src/admin-guard.ts`): on `/admin/*` it 404s unless the path is on an allowlist (`list-users`,
+    `get-user`, `list-user-sessions`, `ban-user`, `unban-user`, `revoke-user-session`, `revoke-user-sessions`, `remove-user`;
+    `set-role`, `create-user`, `update-user`, `set-user-password`, `impersonate-user`, `stop-impersonating`, `has-permission`
+    and any future endpoint are refused) and the session user passes `isAdmin` right now; it is the only writer of
+    `user.role`, so a listed user who verifies after signing in, or an address added to the list, is admitted on the same
+    session, and a de-listed admin is refused at once. Void 1.8 does not cache sessions (probe P7), so the guard reads the
+    session fresh; `adminClient` works through `void/client/svelte` (P6). See `docs/facts.md`.
+  - **Audit.** `db/schema/admin.ts` (re-exported from `db/schema.ts`) holds `audit_entry`, whose user ids are `set null`
+    (history outlives the user; the one exception to the cascade rule). The guard's after-hook writes one entry per
+    successful ban, unban, session revoke and delete, server-side; a failed write answers 500 `AUDIT_WRITE_FAILED` (the
+    change stands; the page shows "Warning: this change was not recorded in the audit log."). `src/admin.ts` owns the row
+    shape (`auditRow`). Viewing is never recorded.
+  - **Delete** (U1, O1, E8, E16). With `--storage` the guard purges the user's files in its before-hook, after the admin and
+    not-self checks, and refuses the delete (500 `STORAGE_PURGE_FAILED`, user intact) if the purge fails; self-delete keeps
+    its `beforeDelete` purge. A shared `databaseHooks.user.delete.after` sweeps the files again and clears the deleted
+    user's email (and ban-reason text) from the audit log; the delete's own entry has no target id, email or free text. The
+    purge is composed when `(--account-deletion || --admin) && --storage`. The upload route deletes the object when the user
+    row is gone after the `put`.
+  - **Pages** (`pages/admin/`, one `admin.css`, no framework): Users (search by email or name through one read-only
+    `void/db` query, the U2 departure; 50 a page, newest first, "Showing 51–100 of 128"), User detail (status line from
+    `userStatus`, the fixing action, sessions with "This device", ban with an optional admin-only reason, delete with a typed
+    email, "View audit log"), Audit log (`?user=` filter). The Account page gets an Admin link for admins and, for a listed
+    but unverified user, "Your email is on the admin list but isn't verified yet." with a verification link. Success copy says
+    "requested", never "sent". Every form uses `runAction` (`src/lib/admin-action.ts`: pending, done, done-unaudited, error).
+  - **Send link**: `POST /api/admin/users/:id/send-link` calls `requestPasswordReset` on the server (no Turnstile token
+    needed) and audits it; with `--invite-only` an unverified user's link is mailed as "Set your password".
+  - `session.create.before` writes `lastSignInAt` (a `user.additionalFields` column) and nothing else.
+  - The CLI closes with "To use /admin, sign in with an email on ADMIN_EMAILS and verify it."; `AGENTS.md` gets an Admin
+    section. Generated tests: `tests/admin*.test.ts` (matcher, `userStatus`, the guard over a real Better Auth, the action
+    helper, D14 page checks) and, with `--storage`, `tests/upload-guard.test.ts`.
+
 Void imports `void/email` and `void/storage` lazily in generated helpers: its plugin loads
 `auth.ts` at startup and at build time, where a top-level import fails under `vp test`.
 
@@ -160,6 +200,8 @@ Void imports `void/email` and `void/storage` lazily in generated helpers: its pl
 - `--email`: set `email.from` in `void.config.ts` to an address on your mail domain; production
   delivery needs that domain (or Workers Paid on your Cloudflare account). Without it sends
   fail, are logged, and the user gets no mail.
+- `--admin`: set `ADMIN_EMAILS` for prod (`void secret put ADMIN_EMAILS`, or Infisical `prod` through the production route); dev uses the
+  `@example.com` placeholder. Unset or empty: no admins, `/admin` is a 404. The first admin signs in with a listed address and verifies it.
 - Always: `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` for the deployed origin.
 
 ## `--secrets infisical`
@@ -233,7 +275,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   `nice`, shared bun cache, scaffolds skipped when the hash of pins + template is
   unchanged. The matrix (`scripts/matrix.ts`) is every framework with all its valid flags,
   bare, and solo runs per add-on: `svelte-auth`, `svelte-account-deletion`, `svelte-email`,
-  `svelte-turnstile`, `svelte-invite-only`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
+  `svelte-turnstile`, `svelte-invite-only`, `svelte-admin`, `svelte-admin-storage`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
 - Gate checks per flag (`scripts/gate.ts`, HTTP against `vp dev`): `--auth` sign-up, sign-in,
   session, `/settings` signed in and out, wrong then right change-password, other session
   revoked, migration present, `.env` gitignored; `--email` reset mail in the dev inbox, link,
@@ -249,7 +291,13 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   verified user removed from the list still resets and signs in; lookalike domain
   and subdomain leave no user row and no mail, an exact entry admits and a
   same-domain address is refused, an empty list refuses everyone, existing users still sign
-  in (the list is changed by restarting the dev server on a new `.env`); `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
+  in (the list is changed by restarting the dev server on a new `.env`); `--admin` 404 for signed out, a non-admin, a listed but
+  unverified user, case and encoding variants of `/admin`, and the 7 refused endpoints (even for an admin), 200 for an admin; a listed user who verifies after
+  signing in, and a newly listed one, reach `list-users` on their existing session, a de-listed live session is 404 on pages and API, and an empty
+  `ADMIN_EMAILS` is 404 while `GET /` is 200; search by email (any case) and by name, the no-match copy, `%` not a wildcard, paging; ban ends sessions and sign-in
+  shows the blocked copy, unban restores it; revoke one then all sessions; send-link lands in the dev inbox and sets a password (with no Turnstile token, and as a
+  set-password link for an unverified invite-only user); self-ban and self-delete 400; delete removes the row, sessions and files and leaves no audit entry
+  holding the deleted email; the audit page newest first and `?user=`; `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
   without a session, upload and download under `users/<id>/`, escaping names rejected (keys
   read back from the local R2 state), object gone after account deletion. The
   `STORAGE_PURGE_FAILED` path is covered by string tests only, not over HTTP.

@@ -32,6 +32,7 @@ empty; on any failure it is deleted. The CLI writes only inside that directory.
 | `--email` | bool | Svelte only, implies `--auth`. Password reset and sign-up verification mail, dev inbox locally |
 | `--turnstile` | bool | Svelte only, implies `--auth`. Cloudflare Turnstile on sign-up, sign-in and password reset |
 | `--invite-only` | bool | Svelte only, implies `--email` and `--auth`. Only emails on the `SIGNUP_ALLOWLIST` secret (exact emails and `@domain` entries) can sign up, and they pick their password through a mailed set-password link, which also verifies the email (sign-in never waits on mail in other apps); a password sent with the sign-up is never kept; empty or missing list refuses everyone |
+| `--admin` | bool | Svelte only, implies `--email` and `--auth`. An admin area at `/admin` for the users on the `ADMIN_EMAILS` secret (verified email, checked live on every request; everyone else gets a 404): search users, ban and unban, send a reset link, view and revoke sessions, delete a user with their files, and an audit log of every change |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes (`/api/files/:name`) behind sign-in, purged on account deletion |
 
 The starter is fixed to sqlite (D1). `--auth` on react, vue and solid is the same as in
@@ -55,6 +56,9 @@ A `create-void` app (vite-plus toolchain, sqlite starter, git) plus your chosen 
   Cloudflare's test keys, and `auth.ts` refuses a test secret off localhost.
 - `--invite-only`: set `SIGNUP_ALLOWLIST` for prod (`void secret put SIGNUP_ALLOWLIST`, or Infisical `prod`).
   Dev uses `@example.com` (a placeholder). A missing or empty list refuses every sign-up.
+- `--admin`: set `ADMIN_EMAILS` for prod (`void secret put ADMIN_EMAILS`, or Infisical `prod`). Dev uses `@example.com`
+  (a placeholder: replace it before real users arrive). Unset or empty means no admins and `/admin` answers 404. To use
+  `/admin`, sign in with an email on `ADMIN_EMAILS` and verify it.
 - `--email`: set `email.from` in `void.config.ts` to an address on your mail domain (scaffolded
   as `noreply@example.com`); without a mail domain sends fail and are logged.
 - Set `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` for the deployed origin.
