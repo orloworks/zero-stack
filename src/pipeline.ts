@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeAgentFiles } from "./agent-files";
 import type { Config } from "./flags";
+import { installAdmin } from "./installers/admin";
 import { installAuth } from "./installers/auth";
 import { installStorage } from "./installers/storage";
 import { installShadcn } from "./installers/shadcn";
@@ -92,6 +93,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     if (config.shadcn) installShadcn(targetDir);
     if (config.auth) installAuth(targetDir, config);
     if (config.storage) installStorage(targetDir);
+    if (config.admin) installAdmin(targetDir, config); // after storage: it edits the upload route
     addAppScripts(targetDir, config);
     await exec([process.execPath, "install"], targetDir);
     // Leaves the auth migration generated, not applied to any database.

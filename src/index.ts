@@ -32,6 +32,7 @@ try {
   await scaffold(config, resolve(target));
   console.log(`\nDone. cd ${target} && bun dev`);
   if (config.auth && config.framework === "svelte") console.log("Account page: /settings (link it from your nav).");
+  if (config.admin) console.log("To use /admin, sign in with an email on ADMIN_EMAILS and verify it.");
 } catch (e) {
   console.error(`error: ${(e as Error).message}`);
   process.exit(1);
