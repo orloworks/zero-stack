@@ -6,6 +6,7 @@ import { adminGuard } from "../src/admin-guard";
 
 // The real Better Auth server API over an in-memory database: the guard's hooks run for auth.api calls exactly as for HTTP requests.
 const PW = "correct-horse-battery";
+const SLOW = 30_000; // a loaded machine: the default 5s is for tests that do not build a Better Auth instance
 function setup(opts: { purgeFails?: boolean; auditFails?: boolean } = {}) {
   const db: Record<string, any[]> = { user: [], session: [], account: [], verification: [] };
   const listed = new Set<string>();
@@ -16,7 +17,8 @@ function setup(opts: { purgeFails?: boolean; auditFails?: boolean } = {}) {
     secret: "test-secret-test-secret-test-secret-123",
     baseURL: "http://localhost:5173",
     database: memoryAdapter(db),
-    emailAndPassword: { enabled: true },
+    // The guard is under test, not password hashing (scrypt makes every sign-up slow, and slower still on a busy machine).
+    emailAndPassword: { enabled: true, password: { hash: async (p) => p, verify: async ({ hash, password }) => hash === password } },
     plugins: [
       admin(),
       adminGuard({
@@ -64,7 +66,7 @@ it("answers 404 to every allowlisted endpoint for signed out, non-admin and list
   for (const headers of [undefined, plain.headers, unverified.headers]) expect(await Promise.all(calls(headers).map(status))).toEqual(Array(8).fill(404));
   expect(t.audit).toEqual([]);
   expect(t.purged).toEqual([]);
-});
+}, SLOW);
 
 it("follows ADMIN_EMAILS live on an existing session, in both directions, and is the only writer of role (O3)", async () => {
   const t = setup();
@@ -79,7 +81,7 @@ it("follows ADMIN_EMAILS live on an existing session, in both directions, and is
   expect(owner.row.role).toBe("user");
   t.listed.add("owner@x.com"); // listed again, same session
   expect(await status(t.auth.api.listUsers({ headers: owner.headers, query: {} }))).toBe(200);
-});
+}, SLOW);
 
 it("refuses every endpoint off the allowlist, even for an admin", async () => {
   const t = setup();
@@ -99,7 +101,7 @@ it("refuses every endpoint off the allowlist, even for an admin", async () => {
   expect(await Promise.all(refused.map(status))).toEqual(Array(7).fill(404));
   expect(other.row.role).toBe("user");
   expect(t.db.user!.length).toBe(2);
-});
+}, SLOW);
 
 it("a ban writes one audit entry, and a self-ban is refused without one", async () => {
   const t = setup();
@@ -113,7 +115,7 @@ it("a ban writes one audit entry, and a self-ban is refused without one", async 
   expect(t.audit[1]).toMatchObject({ verb: "unban", oldValue: "banned", newValue: "active" });
   expect(await status(t.auth.api.banUser({ headers: boss.headers, body: { userId: boss.id } }))).toBe(400);
   expect(t.audit).toHaveLength(2);
-});
+}, SLOW);
 
 it("a failed audit write answers 500 AUDIT_WRITE_FAILED after the change was made", async () => {
   const t = setup({ auditFails: true });
@@ -122,7 +124,7 @@ it("a failed audit write answers 500 AUDIT_WRITE_FAILED after the change was mad
   const victim = await t.user("victim@x.com");
   expect(await code(t.auth.api.banUser({ headers: boss.headers, body: { userId: victim.id } }))).toBe("AUDIT_WRITE_FAILED");
   expect(t.db.user!.find((u) => u.id === victim.id)!.banned).toBe(true); // the change stands
-});
+}, SLOW);
 
 it("revoking a session audits the session's user, found from its token", async () => {
   const t = setup();
@@ -134,7 +136,7 @@ it("revoking a session audits the session's user, found from its token", async (
   expect(t.audit).toEqual([{ actor: { id: boss.id, email: "boss@x.com" }, verb: "revoke-session", target: { id: victim.id, email: "victim@x.com" } }]);
   expect(await status(t.auth.api.revokeUserSessions({ headers: boss.headers, body: { userId: victim.id } }))).toBe(200);
   expect(t.audit[1]).toMatchObject({ verb: "revoke-sessions", target: { id: victim.id } });
-});
+}, SLOW);
 
 it("delete purges the user's files first and refuses, leaving everything intact, when the purge fails (U1)", async () => {
   const t = setup({ purgeFails: true });
@@ -151,7 +153,7 @@ it("delete purges the user's files first and refuses, leaving everything intact,
   expect(t.db.user!.some((u) => u.id === victim.id)).toBe(false);
   // O1: no target id, no email, no free text beyond the action and the id
   expect(t.audit).toEqual([{ actor: { id: boss.id, email: "boss@x.com" }, verb: "delete-user", target: null, detail: `deleted user ${victim.id}` }]);
-});
+}, SLOW);
 
 it("a self-delete is refused before anything is purged", async () => {
   const t = setup();
@@ -160,4 +162,4 @@ it("a self-delete is refused before anything is purged", async () => {
   expect(await status(t.auth.api.removeUser({ headers: boss.headers, body: { userId: boss.id } }))).toBe(400);
   expect(t.purged).toEqual([]);
   expect(t.db.user!.some((u) => u.id === boss.id)).toBe(true);
-});
+}, SLOW);
