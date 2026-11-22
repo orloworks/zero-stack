@@ -144,15 +144,20 @@ try {
       body: JSON.stringify(body),
     });
   // Dev inbox: list rows carry subject, recipient and a detail link; the detail page shows the text body escaped. The token is read fresh (a restart may change it).
-  const mailUrl = async (b: string, subject: string, to: string) => {
+  const mailUrls = async (b: string, subject: string, to: string) => {
     const token = readFileSync(join(app, ".void/dev-trigger-token"), "utf8").trim();
     const inbox = (path: string) => fetch(`${b}/__void/inbox${path}`, { headers: { "x-void-dev-trigger": token } }).then((r) => r.text());
-    const row = (await inbox("")).split("<tr>").find((r) => r.includes(`>${subject}</a>`) && r.toLowerCase().includes(to.toLowerCase()));
-    const id = row?.match(/href="\/__void\/inbox\/([^/?"]+)\?/)?.[1];
-    if (!id) return null;
-    const url = (await inbox(`/${id}`)).match(/https?:\/\/[^\s<]+/)?.[0]?.replaceAll("&amp;", "&");
-    return url ? new URL(url) : null;
+    const ids = (await inbox("")).split("<tr>").filter((r) => r.includes(`>${subject}</a>`) && r.toLowerCase().includes(to.toLowerCase()))
+      .flatMap((r) => r.match(/href="\/__void\/inbox\/([^/?"]+)\?/)?.[1] ?? []);
+    const urls: URL[] = [];
+    for (const id of ids) {
+      const url = (await inbox(`/${id}`)).match(/https?:\/\/[^\s<]+/)?.[0]?.replaceAll("&amp;", "&");
+      if (url) urls.push(new URL(url));
+    }
+    return urls;
   };
+  const mailUrl = async (b: string, subject: string, to: string) => (await mailUrls(b, subject, to))[0] ?? null;
+  const follow = (b: string, u: URL) => fetch(b + u.pathname + u.search, { redirect: "manual" });
   const userRow = (address: string) =>
     sqliteFiles(join(app, ".void")).some((f) => {
       const d = new Database(f, { readonly: true });
@@ -229,6 +234,42 @@ try {
       for (const a of refused) await inviteRefused(base, a);
       await signUpVerified(base, `Upper-${Date.now()}@EXAMPLE.COM`); // a domain entry admits an upper-case match
       if (!(await authPost(base, "/api/auth/sign-in/email", { email: kept, password: gatePw })).ok) throw new Error("a verified user could not sign in");
+      // Latest sign-up wins: a squatter signs up an invited address, the owner signs up the same address, and only the owner's link and password survive.
+      // Both mails go to the owner's inbox; the squatter's (older) link is bound to the deleted user id, so it gives no access to the new account.
+      const squat = `squat-${Date.now()}@example.com`, squatPw = "squatter-password-1", ownerPw = "owner-password-12";
+      await authPost(base, "/api/auth/sign-up/email", { name: "Squatter", email: squat, password: squatPw });
+      const [oldLink] = await mailUrls(base, "Verify your email", squat);
+      if (!oldLink) throw new Error("no verification mail for the squatter's sign-up");
+      const owner = await authPost(base, "/api/auth/sign-up/email", { name: "Owner", email: squat, password: ownerPw });
+      if (!owner.ok || cookieOf(owner)) throw new Error(`owner sign-up over an unverified user -> ${owner.status}, cookie ${cookieOf(owner) ? "set" : "none"}`);
+      const fresh = (await mailUrls(base, "Verify your email", squat)).filter((u) => u.href !== oldLink.href);
+      if (fresh.length !== 1) throw new Error(`expected one fresh verification mail after the owner's sign-up, got ${fresh.length}`);
+      if (/session_token=/.test(cookieOf(await follow(base, oldLink)))) throw new Error("the squatter's old link gave a session");
+      if ((await authPost(base, "/api/auth/sign-in/email", { email: squat, password: ownerPw })).status !== 403) throw new Error("the old link verified the new account");
+      if (!/session_token=/.test(cookieOf(await follow(base, fresh[0]!)))) throw new Error("the owner's fresh link did not sign them in");
+      const [sq, ow] = await Promise.all([squatPw, ownerPw].map((password) => authPost(base, "/api/auth/sign-in/email", { email: squat, password })));
+      if (sq!.status !== 401) throw new Error(`the squatter's password -> ${sq!.status}, expected 401`);
+      if (ow!.status !== 200) throw new Error(`the owner's password -> ${ow!.status}, expected 200`);
+      // A verified user is never touched: a later sign-up for the address changes nothing.
+      await authPost(base, "/api/auth/sign-up/email", { name: "Late", email: squat, password: squatPw });
+      if ((await authPost(base, "/api/auth/sign-in/email", { email: squat, password: ownerPw })).status !== 200 || (await authPost(base, "/api/auth/sign-in/email", { email: squat, password: squatPw })).status !== 401)
+        throw new Error("a sign-up over a verified user changed it");
+      console.log("gate: invite-only latest sign-up wins: the squatter's old link gives no access, the squatter's password gets 401, the owner's 200, a verified user is untouched");
+      // Resend on sign-in: an owner who ignored the first mail signs in (refused) and gets a second link, which signs them in.
+      const lost = `lost-${Date.now()}@example.com`;
+      await authPost(base, "/api/auth/sign-up/email", { name: "Lost", email: lost, password: gatePw });
+      const first = await mailUrls(base, "Verify your email", lost);
+      if (first.length !== 1) throw new Error(`expected one verification mail after sign-up, got ${first.length}`);
+      if ((await authPost(base, "/api/auth/sign-in/email", { email: lost, password: gatePw })).status !== 403) throw new Error("sign-in before verifying was not refused");
+      // The mail is sent in the background of the sign-in request, so give the inbox a moment. Count mails, not links: two links minted in the same second are identical.
+      let mails: URL[] = [];
+      for (let i = 0; i < 20 && mails.length < 2; i++) {
+        await Bun.sleep(250);
+        mails = await mailUrls(base, "Verify your email", lost);
+      }
+      if (mails.length !== 2) throw new Error(`expected a second verification mail after sign-in, got ${mails.length} in all`);
+      if (!/session_token=/.test(cookieOf(await follow(base, mails[1]!)))) throw new Error("the resent link did not sign the user in");
+      console.log("gate: invite-only sign-in before verifying sends a second link, and following it signs the user in");
       console.log("gate: invite-only admits @example.com (any case) with no session until the mailed link signs in; lookalike, subdomain, two-@ and non-ASCII addresses get no session, no user row, no mail; a verified user signs in");
     }
     // --storage: routes are auth-gated and per-user. Keys are read back from the local R2 state (miniflare's _mf_objects) to prove what is stored.

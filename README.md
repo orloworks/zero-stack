@@ -31,7 +31,7 @@ empty; on any failure it is deleted. The CLI writes only inside that directory.
 | `--account-deletion` | bool | Svelte only, implies `--auth`. Delete-account section on the Account page, confirmed with the password (always required server-side) |
 | `--email` | bool | Svelte only, implies `--auth`. Password reset and sign-up verification mail, dev inbox locally |
 | `--turnstile` | bool | Svelte only, implies `--auth`. Cloudflare Turnstile on sign-up, sign-in and password reset |
-| `--invite-only` | bool | Svelte only, implies `--email` and `--auth`. Only emails on the `SIGNUP_ALLOWLIST` secret (exact emails and `@domain` entries) can sign up, and they must verify the email before they get a session (sign-in never waits on mail in other apps); empty or missing list refuses everyone |
+| `--invite-only` | bool | Svelte only, implies `--email` and `--auth`. Only emails on the `SIGNUP_ALLOWLIST` secret (exact emails and `@domain` entries) can sign up, and they must verify the email before they get a session (sign-in never waits on mail in other apps); empty or missing list refuses everyone; a repeat sign-up for an unverified address replaces the earlier one (latest wins), and a sign-in before verifying mails a fresh link |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes (`/api/files/:name`) behind sign-in, purged on account deletion |
 
 The starter is fixed to sqlite (D1). `--auth` on react, vue and solid is the same as in

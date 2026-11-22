@@ -404,14 +404,22 @@ test("svelte --invite-only gates user creation in auth.ts, ships the matcher and
   await scaffold({ ...cfg, framework: "svelte", auth: true, email: true, inviteOnly: true }, dir, exec);
   const read = (f: string) => readFileSync(join(dir, f), "utf8");
   const auth = read("auth.ts");
-  for (const t of ['import { APIError } from "better-auth/api"', 'import { signupAllowed } from "./src/signup-allowlist"', "databaseHooks", "signupAllowed(env.SIGNUP_ALLOWLIST, user.email)", 'code: "SIGNUP_INVITE_ONLY"', "Signups are invite-only right now.", "{ defaults, env }"]) expect(auth).toContain(t);
+  for (const t of ['import { signupAllowed } from "./src/signup-allowlist"', "databaseHooks", "signupAllowed(env.SIGNUP_ALLOWLIST, user.email)", 'code: "SIGNUP_INVITE_ONLY"', "Signups are invite-only right now.", "{ defaults, env }"]) expect(auth).toContain(t);
   expect(read("env.ts")).toContain("SIGNUP_ALLOWLIST: string(),");
   expect(read(".env")).toContain("\nSIGNUP_ALLOWLIST=@example.com\n");
   for (const f of ["src/signup-allowlist.ts", "tests/signup-allowlist.test.ts"]) expect(existsSync(join(dir, f))).toBe(true);
   expect(read("AGENTS.md")).toContain("SIGNUP_ALLOWLIST");
+  expect(read("AGENTS.md")).toContain("Latest sign-up wins");
   expect(read("AGENTS.md")).not.toContain("${"); // the invite-only section's interpolation must not print as code
   // The gate checks a proven email: verification is required and its link signs in. Sign-up shows one notice for invited and refused alike.
   for (const t of ["requireEmailVerification: true,", "autoSignInAfterVerification: true,"]) expect(auth).toContain(t);
+  // Latest sign-up wins (an unverified user is deleted before a repeat sign-up), a second link on sign-in, and one sign-in message for both refusals.
+  for (const t of ["sendOnSignIn: true,", 'id: "latest-signup-wins"', 'ctx.path === "/sign-up/email"', "internalAdapter.deleteUser(found.user.id)", "!found.user.emailVerified", 'import { APIError, createAuthMiddleware } from "better-auth/api"']) expect(auth).toContain(t);
+  const signIn = read("pages/sign-in.svelte");
+  expect(signIn).toContain("Wrong email or password, or the email isn't verified yet. If you just signed up, check your inbox for the link.");
+  expect(signIn.match(/"EMAIL_NOT_VERIFIED"|"INVALID_EMAIL_OR_PASSWORD"/g)).toHaveLength(2);
+  expect(readFileSync(join(off.dir, "pages/sign-in.svelte"), "utf8")).not.toContain("check your inbox");
+  expect(readFileSync(join(off.dir, "auth.ts"), "utf8")).not.toMatch(/sendOnSignIn|latest-signup-wins/);
   const page = read("pages/sign-up.svelte");
   expect(page).toContain("Check your inbox to finish signing up.");
   expect(page).not.toContain("invite-only");

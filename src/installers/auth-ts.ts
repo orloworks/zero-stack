@@ -45,7 +45,7 @@ const DELETE_PASSWORD_HOOK = `  hooks: {
     }),
   },`;
 
-// Gate on user creation (D-invite): every sign-up path goes through it. No row is written and no mail is sent when it throws.
+// Gate on user creation: every sign-up path goes through it. No row is written and no mail is sent when it throws.
 const INVITE_ONLY_HOOK = `  databaseHooks: {
     user: {
       create: {
@@ -56,6 +56,27 @@ const INVITE_ONLY_HOOK = `  databaseHooks: {
       },
     },
   },`;
+
+// Latest sign-up wins: a sign-up for an address that has an unverified user first deletes that user (its account and sessions with it), so the new password and
+// a fresh link replace whatever a squatter set. Verified users are never touched. Email-verification links are JWTs bound to the user id, not rows, so deleting the
+// user is what kills the older link (verify-email answers INVALID_TOKEN for a different id). A plugin, not options.hooks, so it runs after the captcha plugin
+// and an unverified sign-up cannot clear a pending user, and so it coexists with the account-deletion hook.
+const LATEST_SIGNUP_WINS = `{
+      id: "latest-signup-wins",
+      hooks: {
+        before: [
+          {
+            matcher: (ctx) => ctx.path === "/sign-up/email",
+            handler: createAuthMiddleware(async (ctx) => {
+              const email = ctx.body?.email;
+              if (typeof email !== "string" || !signupAllowed(env.SIGNUP_ALLOWLIST, email)) return;
+              const found = await ctx.context.internalAdapter.findUserByEmail(email);
+              if (found && !found.user.emailVerified) await ctx.context.internalAdapter.deleteUser(found.user.id);
+            }),
+          },
+        ],
+      },
+    }`;
 
 // The root auth.ts, written whole from the enabled features (one owner; add-ons contribute parts here, never patch the file).
 // Svelte only: react, vue and solid --auth keep v0.1 output (no auth.ts).
@@ -72,21 +93,28 @@ export function composeAuthTs(config: Config): string {
     sendResetPassword: ({ user, url }) => send(user.email, "Reset your password", url),
   },
   emailVerification: {
-    sendOnSignUp: true,${config.inviteOnly ? "\n    autoSignInAfterVerification: true," : ""}
+    sendOnSignUp: true,${config.inviteOnly ? "\n    sendOnSignIn: true,\n    autoSignInAfterVerification: true," : ""}
     sendVerificationEmail: ({ user, url }) => send(user.email, "Verify your email", url),
   },`,
         ]
       : []),
     // Better Auth's captcha plugin guards its default endpoints (sign-up, sign-in, request-password-reset); the guard refuses a test secret off localhost (D14).
-    ...(config.turnstile
-      ? ['  plugins: [captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })],']
+    ...(config.turnstile || config.inviteOnly
+      ? [
+          `  plugins: [${[
+            config.turnstile && 'captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })',
+            config.inviteOnly && LATEST_SIGNUP_WINS,
+          ]
+            .filter(Boolean)
+            .join(", ")}],`,
+        ]
       : []),
     ...(config.inviteOnly ? [INVITE_ONLY_HOOK] : []),
     // Better Auth skips the password for sessions under freshAge, so this hook requires it.
     ...(config.accountDeletion ? [config.storage ? STORAGE_DELETE_USER : "  user: { deleteUser: { enabled: true } },", DELETE_PASSWORD_HOOK] : []),
   ];
   const del = config.accountDeletion && config.storage;
-  const ba = config.accountDeletion ? 'import { APIError, createAuthMiddleware } from "better-auth/api";\n' : config.inviteOnly ? 'import { APIError } from "better-auth/api";\n' : "";
+  const ba = config.accountDeletion || config.inviteOnly ? 'import { APIError, createAuthMiddleware } from "better-auth/api";\n' : "";
   return `import { defineAuth } from "void/auth";
 ${ba}${config.turnstile ? 'import { captcha } from "better-auth/plugins";\n' : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.inviteOnly ? 'import { signupAllowed } from "./src/signup-allowlist";\n' : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}
 export default defineAuth(({ defaults${config.turnstile || config.inviteOnly ? ", env" : ""} }) => ({

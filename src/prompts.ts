@@ -26,13 +26,18 @@ export async function fillPrompts(
 ): Promise<FlagInput> {
   const out = { ...input };
   out.name ??= await ui.text("Project name");
-  const impliedOn = (key: string) => FEATURE_LIST.some((g) => g.requires === key && out[g.key]);
+  // On, or implied by a feature that is on, however many steps away (invite-only -> email -> auth).
+  const isOn = (key: string): boolean => !!out[key as keyof typeof out] || FEATURE_LIST.some((g) => g.requires === key && isOn(g.key));
+  const needsAuth = (key: string): boolean => {
+    const req = FEATURE_LIST.find((g) => g.key === key)?.requires;
+    return key === "auth" || (!!req && needsAuth(req));
+  };
   for (const f of FEATURE_LIST) {
     // Skipped when a feature already on implies this one, when the framework excludes it, or when auth (add-ons) is off.
     // shadcn is asked even when Tailwind was declined; choosing it implies Tailwind (validateFlags).
-    const implied = impliedOn(f.key);
+    const implied = FEATURE_LIST.some((g) => g.requires === f.key && isOn(g.key));
     const allowed = !f.frameworks || f.frameworks.includes(out.framework ?? "react");
-    if (out[f.key] === undefined && !implied && allowed && (f.requires !== "auth" || out.auth || impliedOn("auth")))
+    if (out[f.key] === undefined && !implied && allowed && (f.key === "auth" || !needsAuth(f.key) || isOn("auth")))
       (out as Record<string, unknown>)[f.key] = await ui.confirm(f.prompt);
   }
   return out as FlagInput;

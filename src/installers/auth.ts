@@ -35,7 +35,7 @@ export function installAuth(dir: string, config: Config): void {
   if (config.accountDeletion) installAccountDeletion(dir, config);
   if (config.email) installEmail(dir);
   if (config.turnstile) installTurnstile(dir, config);
-  if (config.inviteOnly) installInviteOnly(dir, config);
+  if (config.inviteOnly) installInviteOnly(dir);
 
   const gi = join(dir, ".gitignore");
   const lines = existsSync(gi) ? readFileSync(gi, "utf8").split("\n") : [];

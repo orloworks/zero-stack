@@ -42,3 +42,11 @@ it("refuses any email without exactly one @, and any non-ASCII email, even when 
   expect(signupAllowed("ünï@x.com", "ünï@x.com")).toBe(false);
   expect(signupAllowed("@x.com", "a@x.com")).toBe(true);
 });
+
+it("tests ASCII on the raw input, so normalising can't turn a lookalike into a match, and needs a local part", () => {
+  expect(signupAllowed("@x.com", "\u212Aate@x.com")).toBe(false); // Kelvin sign: toLowerCase gives ASCII k
+  expect(signupAllowed("@x.com", "\uFEFFa@x.com")).toBe(false); // BOM: trim would drop it
+  expect(signupAllowed("@x.com", "a@x.com\u3000")).toBe(false); // ideographic space: trim would drop it
+  expect(signupAllowed("@x.com", "@x.com")).toBe(false); // empty local part
+  expect(signupAllowed("@x.com", " @x.com")).toBe(false);
+});

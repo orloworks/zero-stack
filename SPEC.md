@@ -71,7 +71,7 @@ root `auth.ts`. On svelte, `--auth` also gains an Account page and a generated `
 Add `auth` to `void.config.ts`, a minimal sign-in/sign-up page for the chosen framework,
 the `@auth-schema` tsconfig alias, run `void db generate` so the migration is in the generated tree, ready for the user's first commit (create-void `--git` only runs `git init`),
 and write a gitignored root `.env` with a random `BETTER_AUTH_SECRET` and
-`BETTER_AUTH_URL=http://localhost:5173` (mode 0600; plus the Turnstile test secret with `--turnstile`). No `.env.example`: Void 1.8.0 refuses
+`BETTER_AUTH_URL=http://localhost:5173` (mode 0600; plus the Turnstile test secret with `--turnstile` and `SIGNUP_ALLOWLIST=@example.com` with `--invite-only`). No `.env.example`: Void 1.8.0 refuses
 to start when one exists (`env.ts` is the key list). Void reads one
 root `.env`; `.dev.vars` is unsupported. Social providers are out of scope.
 
@@ -119,8 +119,16 @@ in `AGENTS.md`.
   page shows "Check your inbox to finish signing up." after an invited sign-up and after a
   refused one, so it never reveals who is on the list (with verification on, Better Auth answers
   a refused sign-up with a 200 and a placeholder user, and the page also maps a 403
-  `SIGNUP_INVITE_ONLY` to the same copy). The matcher refuses any email without exactly one `@`
-  and any non-ASCII email. `SIGNUP_ALLOWLIST` is a required
+  `SIGNUP_INVITE_ONLY` to the same copy). Latest sign-up wins: a plugin hook (after the captcha
+  plugin) on `/sign-up/email` deletes an unverified user for that address (account and sessions
+  with it, via Better Auth's `internalAdapter.deleteUser`) before the sign-up creates a fresh one,
+  so the new password and a fresh link replace a squatter's; the older link is bound to the
+  deleted user id and gives no access. Verified users are never touched. `sendOnSignIn: true`
+  mails a fresh link when an unverified user signs in with the right password. The sign-in page
+  shows one message for `EMAIL_NOT_VERIFIED` and `INVALID_EMAIL_OR_PASSWORD`, so sign-in doesn't
+  reveal list membership. The matcher refuses any email without exactly one `@`, with an empty
+  local part, or with any non-ASCII character in the raw input (tested before trimming or
+  lowercasing). `SIGNUP_ALLOWLIST` is a required
   server secret (`string()` in the composed `env.ts`): exact emails and `@domain` entries
   separated by commas or whitespace, case-insensitive; `@x.com` matches exactly that domain
   (not `sub.x.com` or `evilx.com`); a missing or empty list refuses everyone (Void's required-env check turns an unset or empty value into a 500 on every request; a list with no entries refuses every sign-up). Matcher
@@ -229,7 +237,9 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   new password signs in, bad or used token rejected, earlier sessions revoked;
   `--turnstile` sign-up, sign-in (and reset) refused without a token, accepted with the dummy
   token; `--invite-only` @example.com admitted (any case) but with no session until the dev-inbox
-  verification link is followed (sign-in refused before it, signs in after), lookalike domain
+  verification link is followed (sign-in refused before it, signs in after; the refused sign-in
+  mails a second link that also signs in), a squatter's sign-up followed by the owner's leaves
+  the squatter's old link useless, the squatter's password 401 and the owner's 200, lookalike domain
   and subdomain leave no user row and no mail, an exact entry admits and a
   same-domain address is refused, an empty list refuses everyone, existing users still sign
   in (the list is changed by restarting the dev server on a new `.env`); `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401

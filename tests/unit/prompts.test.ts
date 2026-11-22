@@ -74,3 +74,13 @@ test("shadcn is asked even when Tailwind was declined, and choosing it implies T
   expect(t.asked).toContain("Add shadcn/ui?");
   expect(config).toMatchObject({ shadcn: true, tailwind: true });
 });
+
+test("implication is followed transitively: invite-only implies email implies auth", async () => {
+  const t = ui(yesAll);
+  await fillPrompts({ name: "x", framework: "svelte", inviteOnly: true }, t.ui);
+  for (const q of ["Add auth?", "Add email?", "Restrict sign-up to invited emails?"]) expect(t.asked).not.toContain(q);
+  const no = ui({ ...yesAll, "Add auth?": false });
+  const out = await fillPrompts({ name: "x", framework: "svelte" }, no.ui);
+  expect(no.asked).not.toContain("Restrict sign-up to invited emails?");
+  expect(validateFlags(out).config.inviteOnly).toBe(false);
+});
