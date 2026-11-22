@@ -6,12 +6,14 @@ import { editFile, replaceAnchor } from "../anchor";
 import { addPaths } from "./shared";
 import type { Config } from "../flags";
 import { composeAuthTs } from "./auth-ts";
+import { composeEnvTs } from "./env-ts";
 import { installAccountDeletion } from "./account-deletion";
 import { installEmail } from "./email";
 import { installTurnstile } from "./turnstile";
+import { installInviteOnly } from "./invite-only";
 
-export const authEnv = (config: Pick<Config, "turnstile">): string =>
-  `BETTER_AUTH_SECRET=${randomBytes(32).toString("base64url")}\nBETTER_AUTH_URL=http://localhost:5173\n${config.turnstile ? "TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA\n" : ""}`;
+export const authEnv = (config: Pick<Config, "turnstile" | "inviteOnly">): string =>
+  `BETTER_AUTH_SECRET=${randomBytes(32).toString("base64url")}\nBETTER_AUTH_URL=http://localhost:5173\n${config.turnstile ? "TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA\n" : ""}${config.inviteOnly ? "SIGNUP_ALLOWLIST=@example.com\n" : ""}`;
 
 // Runs after installShadcn. Pages are copied; `void db generate` runs later in the pipeline (needs deps).
 export function installAuth(dir: string, config: Config): void {
@@ -23,12 +25,17 @@ export function installAuth(dir: string, config: Config): void {
 
   addPaths(dir, { "@auth-schema": ["./.void/better-auth-schema.ts"] });
 
-  if (framework === "svelte") writeFileSync(join(dir, "auth.ts"), composeAuthTs(config));
+  if (framework === "svelte") {
+    writeFileSync(join(dir, "auth.ts"), composeAuthTs(config));
+    const envTs = composeEnvTs(config);
+    if (envTs) writeFileSync(join(dir, "env.ts"), envTs);
+  }
 
   cpSync(join(slice, "pages"), join(dir, "pages"), { recursive: true });
   if (config.accountDeletion) installAccountDeletion(dir, config);
   if (config.email) installEmail(dir);
   if (config.turnstile) installTurnstile(dir, config);
+  if (config.inviteOnly) installInviteOnly(dir);
 
   const gi = join(dir, ".gitignore");
   const lines = existsSync(gi) ? readFileSync(gi, "utf8").split("\n") : [];

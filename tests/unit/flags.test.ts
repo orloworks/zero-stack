@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { argv, FEATURE_LIST, parseFeature, validateFlags } from "../../src/flags";
 
-const base = { tailwind: false, shadcn: false, zodRpc: false, auth: false, accountDeletion: false, email: false, turnstile: false, storage: false, secrets: false };
+const base = { inviteOnly: false, tailwind: false, shadcn: false, zodRpc: false, auth: false, accountDeletion: false, email: false, turnstile: false, storage: false, secrets: false };
 
 test("defaults: react, every installer off, no notes", () => {
   expect(validateFlags({ name: "my-app" })).toEqual({
@@ -64,7 +64,7 @@ test("svelte-only add-ons imply auth and say so", () => {
 });
 
 test("svelte-only add-ons are rejected on other frameworks, naming svelte", () => {
-  for (const [flag, key] of [["account-deletion", "accountDeletion"], ["email", "email"], ["turnstile", "turnstile"]])
+  for (const [flag, key] of [["account-deletion", "accountDeletion"], ["email", "email"], ["turnstile", "turnstile"], ["invite-only", "inviteOnly"]])
     for (const framework of ["react", "vue", "solid"])
       expect(() => validateFlags({ name: "x", framework, [key]: true })).toThrow(
         `--${flag} requires --framework svelte (got ${framework}); drop --${flag} or use --framework svelte.`,
@@ -116,4 +116,12 @@ test("the CLI rejects --secrets vault and a bare --secrets before doing anything
 test("usage text shows the valued flag from argv()", () => {
   const r = rawArgs("a", "b");
   expect(r.stderr.toString()).toContain("[--secrets infisical]");
+});
+
+test("--invite-only implies email and, through it, auth, saying so, and is prompted", () => {
+  const r = validateFlags({ name: "x", framework: "svelte", inviteOnly: true });
+  expect(r.config).toMatchObject({ inviteOnly: true, email: true, auth: true });
+  expect(r.notes).toEqual(["--invite-only implies --email; enabling email.", "--email implies --auth; enabling auth."]);
+  expect(validateFlags({ name: "x", framework: "svelte", inviteOnly: true, email: true, auth: true }).notes).toEqual([]);
+  expect(FEATURE_LIST.find((f) => f.flag === "invite-only")).toMatchObject({ key: "inviteOnly", requires: "email", prompt: "Restrict sign-up to invited emails?" });
 });

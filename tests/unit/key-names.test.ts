@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseEnv } from "node:util";
 import { authEnv } from "../../src/installers/auth";
+import { composeEnvTs } from "../../src/installers/env-ts";
+import { validateFlags } from "../../src/flags";
 
 // Spec #38 "Key naming convention", rules 1, 5 and 6. Returns the rules a name breaks.
 const broken = (k: string): number[] => [
@@ -13,9 +15,9 @@ const broken = (k: string): number[] => [
 ];
 
 const templates = join(import.meta.dir, "../../template");
-const envTs = (dir: string): string[] =>
-  readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-    e.isDirectory() ? envTs(join(dir, e.name)) : e.name === "env.ts" ? [join(dir, e.name)] : []);
+// The env.ts of every flag set that has one: composed, never copied from a template.
+const composed = (): string[] =>
+  [{}, { turnstile: true }, { inviteOnly: true }, { turnstile: true, inviteOnly: true }].flatMap((o) => composeEnvTs(validateFlags({ name: "app", framework: "svelte", ...o }).config) ?? []);
 // Keys declared inside defineEnv({ ... }): bare, quoted ('a-b', "a-b") or computed (["A"]) keys, with or without a space before the value,
 // at a line start or after `{` or `,` (so a second key on the same line is seen too).
 const declared = (src: string) =>
@@ -33,21 +35,26 @@ test("the checker catches each broken rule", () => {
 });
 
 test("every key in a generated .env follows the naming convention, for every flag set", () => {
-  for (const turnstile of [false, true]) {
-    const keys = Object.keys(parseEnv(authEnv({ turnstile } as never)));
+  for (const [turnstile, inviteOnly] of [[false, false], [true, false], [false, true], [true, true]]) {
+    const keys = Object.keys(parseEnv(authEnv({ turnstile, inviteOnly })));
     expect(keys).toContain("BETTER_AUTH_SECRET");
+    expect(keys.includes("SIGNUP_ALLOWLIST")).toBe(inviteOnly);
     for (const k of keys) expect([k, broken(k)]).toEqual([k, []]);
   }
 });
 
-test("every key declared in a template env.ts follows the naming convention", () => {
-  const files = envTs(templates);
+test("every key declared in a composed env.ts follows the naming convention", () => {
+  const files = composed();
   expect(files.length).toBeGreaterThan(0);
-  for (const f of files) {
-    const keys = declared(readFileSync(f, "utf8"));
+  for (const src of files) {
+    const keys = declared(src);
     expect(keys.length).toBeGreaterThan(0);
-    for (const k of keys) expect([f, k, broken(k)]).toEqual([f, k, []]);
+    for (const k of keys) expect([k, broken(k)]).toEqual([k, []]);
   }
+});
+
+test("no template ships an env.ts (the composer is its only writer)", () => {
+  expect(Bun.spawnSync(["find", templates, "-name", "env.ts"]).stdout.toString()).toBe("");
 });
 
 test("the template push script enforces the same three rules as the checker above", () => {
@@ -64,7 +71,7 @@ test("declared() sees every spelling of a key in env.ts, and the checker rejects
 });
 
 test("adding a bad key to the Turnstile env.ts makes the naming check fail", () => {
-  const real = readFileSync(join(templates, "auth/turnstile/env.ts"), "utf8");
+  const real = composeEnvTs(validateFlags({ name: "app", framework: "svelte", turnstile: true }).config)!;
   expect(declared(real).filter((k) => broken(k).length)).toEqual([]);
   for (const line of ["'my-key': string(),", "VITE_API_SECRET:string(),", '["VOID_X"]: string(),'])
     expect(declared(real.replace("});", `  ${line}\n});`)).filter((k) => broken(k).length)).toHaveLength(1);
