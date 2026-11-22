@@ -110,7 +110,8 @@ try {
       env: { ...process.env, VOID_INSPECTOR_PORT: String(freePort()) },
     });
     let status = 0;
-    for (let i = 0; i < 120 && status !== 200; i++) {
+    // 3 min: a cold `vp dev` under parallel ci:full on a loaded machine (load avg 200+) missed 60s; a dead server still fails fast via exitCode.
+    for (let i = 0; i < 360 && status !== 200; i++) {
       await Bun.sleep(500);
       if (dev.exitCode !== null) throw new Error("vp dev exited early");
       status = await fetch(`http://localhost:${port}/`).then((r) => r.status, () => 0);

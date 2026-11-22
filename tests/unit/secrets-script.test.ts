@@ -107,14 +107,14 @@ test("pull refuses a multi-line export by line number, printing no fragment of t
   for (const frag of ["hunter2", "share", "NOTE"]) expect(r.out).not.toContain(frag);
 });
 
-test("pull refuses when the local .env has a line outside the format, by line number", () => {
-  for (const [, line] of OUTSIDE) {
+// One test per line: 19 spawns in a single test ran past bun's 5s timeout at load 150+.
+for (const [what, line] of OUTSIDE)
+  test(`pull refuses when the local .env has a line outside the format (${what}), by line number`, () => {
     const env = `A=1\n${line}`;
     const r = app(env, "A=1\nB=2\n")("pull");
-    expect([line, r.code, r.env, r.tmp, r.out.includes(".env line 2")]).toEqual([line, 1, env, false, true]);
+    expect([r.code, r.env, r.tmp, r.out.includes(".env line 2")]).toEqual([1, env, false, true]);
     expect(r.out).not.toContain("hunter2");
-  }
-});
+  });
 
 test("pull refuses an export that lacks a local key, naming it", () => {
   const r = app("A=1\nSTRIPE_SECRET_KEY=sk_local\n", "A='2'\n")("pull");
