@@ -1,13 +1,13 @@
 # Release checklist
 
-Do these in order on the release commit. Stop at the first failure.
+zero-stack is distributed from GitHub, not npm. Users run `bunx github:orloworks/zero-stack#v<version> <dir>`, and a release is a git tag. Do these in order. Stop at the first failure.
 
-1. `bun run ci:full` is green on the release commit (clean tree, version bumped in `package.json`).
-2. Manual deploy check (SPEC.md): scaffold with `--auth`, deploy the app to a throwaway
-   Cloudflare account, open it, and sign up. Sign-up must succeed.
-3. The `create-void` pin in `src/versions.ts` is current enough (compare with
-   `npm view create-void version`). If you bump it, re-run step 1.
-4. The name is free before the first publish: `npm view create-zero-stack` returns 404.
-5. `npm pack --dry-run` lists the template, skills and routing doc, and no tests, scripts,
-   `.ci-cache` or `.env`.
-6. Publish by hand from the owner's machine: `npm publish --access public`; `prepublishOnly` re-runs `ci:full`.
+1. On a release branch, bump `version` in `package.json`, add a `CHANGELOG.md` entry, and update the tag in the README's usage line.
+2. `bun scripts/ci-full.ts --force` is green on the release commit, with a clean tree.
+3. The `create-void` pin in `src/versions.ts` is current enough (compare with `npm view create-void version`). If you bump it, re-run step 2.
+4. Merge the release PR. Then tag the merge commit and create the release (neither triggers Actions):
+   `git tag v<version> <sha> && git push origin v<version> && gh release create v<version> --notes-file <notes>`
+5. Smoke-test the tag from an empty temp dir: `bunx github:orloworks/zero-stack#v<version> app --framework svelte --auth`, then run `bun run verify` in `app`.
+6. Optional, done by the owner: deploy that app to a throwaway Cloudflare account and sign up.
+
+A tag is never moved. A bad release gets a new patch version.

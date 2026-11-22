@@ -13,10 +13,10 @@ tool, published without support promises.
 ## Usage
 
 ```sh
-bun create zero-stack my-app
-# or
-bunx create-zero-stack my-app
+bunx github:orloworks/zero-stack#v0.3.0 my-app
 ```
+
+It runs straight from this public GitHub repo at a release tag: no npm package, no login. Without `#<tag>` you get whatever is on `main`.
 
 Run it without arguments in a terminal for prompts. The target directory must be new or
 empty; on any failure it is deleted. The CLI writes only inside that directory.

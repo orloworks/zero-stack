@@ -1,6 +1,6 @@
 {
   "name": "create-zero-stack",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Scaffold a Void (Cloudflare Workers) app: wraps create-void and adds Tailwind, shadcn, zod RPC and auth",
   "keywords": [
     "void",
