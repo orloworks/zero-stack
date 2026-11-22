@@ -46,16 +46,21 @@ const DELETE_PASSWORD_HOOK = `  hooks: {
   },`;
 
 // Gate on user creation: every sign-up path goes through it. No row is written and no mail is sent when it throws.
-const INVITE_ONLY_HOOK = `  databaseHooks: {
-    user: {
-      create: {
+const INVITE_ONLY_USER_CREATE = `      create: {
         before: async (user) => {
           if (!signupAllowed(env.SIGNUP_ALLOWLIST, user.email))
             throw new APIError("FORBIDDEN", { code: "SIGNUP_INVITE_ONLY", message: "Signups are invite-only right now." });
         },
-      },
-    },
-  },`;
+      },`;
+
+// databaseHooks is one object: each add-on contributes a part under user or session (already indented), and this is the only place the property is
+// written, so two add-ons can never emit a second databaseHooks key (a duplicate property: the last one wins at runtime).
+type DatabaseHookParts = { user: string[]; session: string[] };
+function databaseHooks(parts: DatabaseHookParts): string[] {
+  const section = (name: string, p: string[]) => (p.length ? `    ${name}: {\n${p.join("\n")}\n    },\n` : "");
+  const body = section("user", parts.user) + section("session", parts.session);
+  return body ? [`  databaseHooks: {\n${body}  },`] : [];
+}
 
 // Password after verification: the inbox owner picks the password, so a password chosen before the inbox is proven never signs in (an attacker who signs up an
 // invited address first, or after the owner, gets nothing). A plugin, so its hooks run after the captcha plugin and coexist with the account-deletion hook.
@@ -150,7 +155,7 @@ export function composeAuthTs(config: Config): string {
             .join(", ")}],`,
         ]
       : []),
-    ...(config.inviteOnly ? [INVITE_ONLY_HOOK] : []),
+    ...databaseHooks({ user: config.inviteOnly ? [INVITE_ONLY_USER_CREATE] : [], session: [] }),
     // Better Auth skips the password for sessions under freshAge, so this hook requires it.
     ...(config.accountDeletion ? [config.storage ? STORAGE_DELETE_USER : "  user: { deleteUser: { enabled: true } },", DELETE_PASSWORD_HOOK] : []),
   ];
