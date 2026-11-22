@@ -149,6 +149,8 @@ const INVITE_ONLY_PLUGIN = `{
       },
     }`;
 
+// With --admin and --invite-only, a link requested on the server (the admin's send-link route has no browser request behind it) for an unverified user is mailed
+// as "Set your password", matching the admin page's copy; a user's own "Forgot password" keeps the reset subject.
 // The root auth.ts, written whole from the enabled features (one owner; add-ons contribute parts here, never patch the file).
 // Svelte only: react, vue and solid --auth keep v0.1 output (no auth.ts).
 // The one top-level user option: deleteUser (--account-deletion) and additionalFields (--admin) are parts of it, never two keys.
@@ -168,7 +170,7 @@ export function composeAuthTs(config: Config): string {
     ...defaults.emailAndPassword,
     enabled: true,
     revokeSessionsOnPasswordReset: true,${config.inviteOnly ? "\n    requireEmailVerification: true," : ""}
-    sendResetPassword: ({ user, url }) => send(user.email, ${config.admin && config.inviteOnly ? 'user.emailVerified === false ? "Set your password" : "Reset your password"' : '"Reset your password"'}, url),
+    sendResetPassword: ${config.admin && config.inviteOnly ? '({ user, url }, request) => send(user.email, !request && user.emailVerified === false ? "Set your password" : "Reset your password", url)' : '({ user, url }) => send(user.email, "Reset your password", url)'},
   },${config.inviteOnly ? "" : `
   emailVerification: {
     sendOnSignUp: true,
