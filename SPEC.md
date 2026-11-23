@@ -305,7 +305,7 @@ finishing. No wrangler files, ever (Void migrates a root `wrangler.jsonc` itself
 command (exit 0 = done) and the env names the step covers. A step has a flag predicate, so a step that does not apply is never
 shown. Three composers read it: the `## Setup` table in `AGENTS.md`, `docs/setup.md`, and `scripts/setup-wizard.sh` (one stage per
 `human` step; a done step is detected by its verify command and skipped; typed values are read hidden, never printed, and go to
-`void secret put` by stdin, plus Infisical `prod` by stdin (`NAME=@/dev/stdin`, never a file) with `--secrets`; `void` is found through `node_modules/.bin`; a failed put is reported, not fatal). A step with `always` cannot be proven by a command (the Workers Paid upgrade) and is never skipped. A unit test fails when a flag adds an env name in `authEnv`
+`void secret put` by stdin, plus Infisical `prod` by stdin (`--file /dev/stdin` fed `NAME=value`, never a file on disk) with `--secrets`; `void` is found through `node_modules/.bin`; a failed put is reported, not fatal). The wizard never opens a browser: it prints links. A unit test fails when a flag adds an env name in `authEnv`
 or `env.ts` that no step covers. The gate checks the steps against the flags and runs `bash -n` on the wizard. Commands are Void
 1.8.0, `cf` and `infisical` only, never wrangler; Void-side browser driving stays in the agent's harness, not in the app.
 

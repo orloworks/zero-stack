@@ -62,7 +62,8 @@ test("the wizard exists when a human step applies, and has stages only for human
   expect(w).toContain("TOTAL=1");
   expect(w).not.toContain("infisical");
   const all = composeWizard(cfg(ALL))!;
-  expect(all).toContain("@/dev/stdin");
+  expect(all).toContain("--file /dev/stdin");
+  expect(all).not.toContain("=@/dev/stdin");
   expect(all).not.toContain("mktemp");
   expect(all).toContain('PATH="$PWD/node_modules/.bin:$PATH"');
 });
@@ -76,7 +77,8 @@ function wizardRun(c: ReturnType<typeof cfg>, input: string, listed: string, voi
   const fake = [
     "#!/bin/sh",
     'echo "$*" >> "$FAKE_LOG"',
-    '[ "$1 $2" = "secrets set" ] && { cat > "$FAKE_LOG.inf"; exit 0; }',
+    // The real CLI stores `NAME=@/dev/stdin` literally; only `--file /dev/stdin` reads stdin, so the fake refuses anything else.
+    '[ "$1 $2" = "secrets set" ] && case "$*" in *"--file /dev/stdin"*) cat > "$FAKE_LOG.inf"; exit 0;; *) exit 9;; esac',
     '[ "$1 $2" = "secret put" ] && [ -n "$PUT_FAILS" ] && exit 1',
     '[ "$1 $2" = "secret put" ] && { cat > "$FAKE_LOG.stdin"; echo "$3" >> "$FAKE_LOG.listed"; exit 0; }',
     '[ "$1 $2" = "secret list" ] && { echo "$LISTED"; cat "$FAKE_LOG.listed" 2>/dev/null; exit 0; }',
@@ -86,7 +88,7 @@ function wizardRun(c: ReturnType<typeof cfg>, input: string, listed: string, voi
   // `void` is a devDependency: the real one is in node_modules/.bin, not on PATH.
   const voidDir = voidOnPath ? bin : join(dir, "node_modules/.bin");
   mkdirSync(voidDir, { recursive: true });
-  for (const [d, n] of [[voidDir, "void"], [bin, "infisical"]] as const) { writeFileSync(join(d, n), fake); chmodSync(join(d, n), 0o755); }
+  for (const [d, n] of [[voidDir, "void"], [bin, "infisical"], [bin, "cf"]] as const) { writeFileSync(join(d, n), fake); chmodSync(join(d, n), 0o755); }
   // A browser opener that only logs: a test must never reach the real `open` (it opened the owner's browser once).
   for (const n of ["open", "xdg-open"]) { writeFileSync(join(bin, n), '#!/bin/sh\necho "$*" >> "$FAKE_LOG.open"\n'); chmodSync(join(bin, n), 0o755); }
   const log = join(dir, "calls.log");
@@ -157,9 +159,9 @@ test("--secrets also writes the value to Infisical prod, through stdin, not argv
   });
   const calls = readFileSync(join(r.dir, "calls.log"), "utf8");
   expect(again.exitCode).toBe(0);
-  expect(calls).toContain("secrets set ADMIN_EMAILS=@/dev/stdin --env=prod --silent");
+  expect(calls).toContain("secrets set --file /dev/stdin --env=prod --silent");
   expect(calls).not.toContain("boss@example.org");
-  expect(readFileSync(join(r.dir, "calls.log.inf"), "utf8")).toBe("boss@example.org");
+  expect(readFileSync(join(r.dir, "calls.log.inf"), "utf8")).toBe("ADMIN_EMAILS=boss@example.org\n");
 });
 
 // Kill the wizard while `infisical secrets set` hangs: no file anywhere under the run's TMPDIR or app dir may hold the value.

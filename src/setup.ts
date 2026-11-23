@@ -7,7 +7,7 @@ export type Who = "agent" | "agent-browser" | "human";
 
 // One setup step. `action` is markdown (commands in backticks); `verify` is a plain shell command whose exit code proves the step is done
 // (the wizard runs it to skip a done step). `covers` lists the env names the step puts in production. Human steps drive the wizard:
-// `capture` reads that secret name (hidden) and stores it, else `url` is printed for the person to open, else `exec` is run.
+// `capture` reads that secret name (hidden) and stores it, else `exec` is run.
 export type Step = {
   id: string;
   on: (c: Config) => boolean;
@@ -17,7 +17,6 @@ export type Step = {
   action: string | ((c: Config) => string);
   verify: string;
   covers?: string[];
-  url?: string;
   click?: string[];
   exec?: string;
   capture?: string;
@@ -67,7 +66,7 @@ export const STEPS: Step[] = [
     action: (c) => {
       const sec = "printf '%s' \"$out\" | jq -rj '(.result // .).secret'";
       const key = "printf '%s' \"$out\" | jq -r '(.result // .).sitekey'";
-      const inf = c.secrets ? ` ${sec} | infisical secrets set TURNSTILE_SECRET_KEY=@/dev/stdin --env=prod --silent; infisical secrets set "VITE_TURNSTILE_SITE_KEY=$(${key})" --env=prod --silent;` : "";
+      const inf = c.secrets ? ` { printf 'TURNSTILE_SECRET_KEY='; ${sec}; printf '\\n'; } | infisical secrets set --file /dev/stdin --env=prod --silent; infisical secrets set "VITE_TURNSTILE_SITE_KEY=$(${key})" --env=prod --silent;` : "";
       return `\`out=$(cf turnstile widgets create --body '{"name":"<app-name>","domains":["<app-host>"],"mode":"managed"}') && { ${sec} | void secret put TURNSTILE_SECRET_KEY || echo "put failed: rotate the secret, do not create another widget" >&2;${inf} ${key}; }\`${c.secrets ? " With Infisical, the secret and the site key also go in Infisical `prod` (done above), so the production route's `infisical run` exposes `VITE_TURNSTILE_SITE_KEY` to the build." : ""}`;
     },
     verify: `${SECRET_LIST} TURNSTILE_SECRET_KEY`, covers: ["TURNSTILE_SECRET_KEY", "VITE_TURNSTILE_SITE_KEY"],
@@ -104,8 +103,8 @@ export const STEPS: Step[] = [
   },
   {
     id: "email-setup", on: (c) => !!c.email, title: "Turn on Email Sending", who: "agent",
-    why: "Sends from your domain. Mail to any recipient needs the Workers Paid plan; if you don't have it, `void email setup` says so. The guide never opens the plans page for you.",
-    action: "`void email setup --platform cloudflare`", verify: "void email status >/dev/null 2>&1",
+    why: "Sends from your domain. Mail to any recipient needs the Workers Paid plan; if you don't have it, `void email setup` says so. After upgrading to Workers Paid, run `void email setup --platform cloudflare` again. The guide never opens the plans page for you.",
+    action: "`void email setup --platform cloudflare`", verify: `${EMAIL_STATUS} >/dev/null 2>&1`,
   },
   {
     id: "email-dns", on: (c) => !!c.email, title: "Check mail DNS is verified", who: "agent-browser",
@@ -137,14 +136,13 @@ ${rows.join("\n")}\n`;
 export function composeSetupDoc(c: Config): string {
   const body = stepsFor(c).map((s, i) => {
     const lines = [`## ${i + 1}. ${s.title}`, "", `Who: ${WHO[s.who]}`, "", s.why, "", `Do: ${act(s, c)}`];
-    if (s.url) lines.push("", `Open: ${s.url}`);
     if (s.click?.length) lines.push("", ...s.click.map((l) => `- ${l}`));
     lines.push("", `Verify (exit 0 when done): ${ver(s)}`);
     return lines.join("\n");
   });
   return `# Setup
 
-Every step from scaffold to production for the flags this app was made with, in order. "Agent" steps have a CLI or API an agent can run. "Agent with browser" steps are dashboard-only; an agent can drive your signed-in browser while you watch. "Human only" steps need you${hasHuman(c) ? `: run \`bash scripts/setup-wizard.sh\`, which opens the right page, says what to click, and stores values straight into ${c.secrets ? "Infisical and Void" : "Void"} without printing them` : ""}.
+Every step from scaffold to production for the flags this app was made with, in order. "Agent" steps have a CLI or API an agent can run. "Agent with browser" steps are dashboard-only; an agent can drive your signed-in browser while you watch. "Human only" steps need you${hasHuman(c) ? `: run \`bash scripts/setup-wizard.sh\`, which prints each link, says what to click, and stores values straight into ${c.secrets ? "Infisical and Void" : "Void"} without printing them` : ""}.
 
 ${body.join("\n\n")}
 `;
@@ -163,7 +161,7 @@ N=0
 TODO=()
 say()  { printf '  %s\\n' "$1"; }
 warn() { printf '  ! %s\\n' "$1"; }
-# The wizard never opens a browser itself: it prints the link for the person to open.
+# The wizard never opens a browser itself.
 # todo TITLE VERIFY: announce the stage; false when VERIFY already passes, so a re-run skips done steps.
 todo() {
   N=$((N + 1))
@@ -187,7 +185,7 @@ __INFISICAL__  printf '%s' "$v" | void secret put "$1" >/dev/null 2>&1 || { warn
 `;
 
 const INFISICAL = `  if [[ -f .infisical.yaml || -f .infisical.json ]]; then
-    printf '%s' "$v" | infisical secrets set "$1=@/dev/stdin" --env=prod --silent >/dev/null || { warn "Infisical refused it"; return; }
+    printf '%s=%s\\n' "$1" "$v" | infisical secrets set --file /dev/stdin --env=prod --silent >/dev/null || { warn "Infisical refused it"; return; }
   fi
 `;
 
@@ -200,7 +198,6 @@ export function composeWizard(c: Config): string | null {
     const verify = sq(s.verify);
     const body = [`say ${sq(s.why)}`, ...(s.click ?? []).map((l) => `say ${sq(l)}`)];
     if (s.capture) body.push(`put_secret ${s.capture}`);
-    else if (s.url) body.push(`say ${sq("Open: " + s.url)}`, `read -r -p "  Press Enter when done: " _ || true`);
     else body.push(`${s.exec} || warn "exited non-zero"`);
     return `  if todo ${t} ${verify}; then\n${body.map((l) => `    ${l}`).join("\n")}\n    check ${verify} ${t}\n  fi`;
   });

@@ -68,7 +68,7 @@ A `create-void` app (vite-plus toolchain, sqlite starter, git) plus your chosen 
   auth base URL and trusted origin from the request origin.
 
 Every generated app also gets a setup guide for the flags that are on: a `## Setup` table in `AGENTS.md`, the full steps in
-`docs/setup.md`, and `scripts/setup-wizard.sh` for the human-only steps (sign-ins, payment, typed allowlists). Each step says who
+`docs/setup.md`, and `scripts/setup-wizard.sh` for the human-only steps (sign-ins and typed allowlists). Each step says who
 can do it (Agent, Agent with browser, Human only) and a verify command. The wizard never prints what you type and can be re-run.
 
 Not included: data export, grace-period deletion, Stripe, orgs/admin/2FA (later waves), #17 referrals, #18 affiliate app.
