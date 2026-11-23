@@ -21,6 +21,8 @@ export type Step = {
   click?: string[];
   exec?: string;
   capture?: string;
+  // Cannot be proven by a command: the wizard never skips it and does not check it afterwards (the human confirms).
+  always?: boolean;
 };
 
 const WHO: Record<Who, string> = { agent: "Agent", "agent-browser": "Agent with browser", human: "Human only" };
@@ -37,14 +39,24 @@ export const STEPS: Step[] = [
     action: "`void cloudflare login`", exec: "void cloudflare login", verify: "void cloudflare status",
   },
   {
+    id: "cloudflare-connect", on: () => true, title: "Connect the app to Cloudflare", who: "agent",
+    why: "A new app has `.void/project.json` set to `platform: none`, and every `void secret` command refuses until a platform is saved. `void connect` saves it and pins the account. Not yet confirmed on a real account: that `void secret put` then works before the first deploy, on a Worker that does not exist yet. If it fails, the wizard reports the value as still to do instead of aborting; tell the owner.",
+    action: "`void connect --platform cloudflare`", verify: "grep -q cloudflare .void/project.json",
+  },
+  {
     id: "infisical-login", on: (c) => !!c.secrets, title: "Sign in to Infisical", who: "human",
     why: "The `infisical` CLI needs a session before the folder can be linked or production values stored.",
-    action: "`infisical login`", exec: "infisical login", verify: "infisical user get",
+    action: "`infisical login`", exec: "infisical login", verify: "infisical user get token >/dev/null 2>&1",
   },
   {
     id: "infisical-link", on: (c) => !!c.secrets, title: "Link this folder to an Infisical project", who: "agent",
     why: "`secrets:pull`, `secrets:push` and the production route read the link file.",
     action: "Run the `secret-sync` skill, or `infisical init --project-id <id>`", verify: "test -f .infisical.yaml -o -f .infisical.json",
+  },
+  {
+    id: "cf-login", on: (c) => !!c.turnstile || !!c.storage, title: "Sign in to the cf CLI", who: "human",
+    why: "The `cf` CLI has its own sign-in, separate from `void cloudflare login`. The Turnstile widget and the bucket check use it.",
+    action: "`cf auth login`", exec: "cf auth login", verify: "cf auth whoami | grep -Eq '\"authenticated\": *true'",
   },
   {
     id: "email-from", on: (c) => !!c.email, title: "Set the sending address", who: "agent",
@@ -53,8 +65,13 @@ export const STEPS: Step[] = [
   },
   {
     id: "turnstile-widget", on: (c) => !!c.turnstile, title: "Create the Turnstile widget and store its secret", who: "agent",
-    why: "Local dev uses Cloudflare's always-pass test keys, and `auth.ts` refuses to start with the test secret off localhost. The secret goes straight into `void secret put`, so it is never printed; only the public site key is, and it goes in the build shell of the deploy.",
-    action: "`w=$(mktemp) && cf turnstile widgets create --body '{\"name\":\"<app-name>\",\"domains\":[\"<app-host>\"],\"mode\":\"managed\"}' > \"$w\" && jq -rj '(.result // .).secret' \"$w\" | void secret put TURNSTILE_SECRET_KEY; jq -r '(.result // .).sitekey' \"$w\"; rm -f \"$w\"`",
+    why: "Needs `jq` and the `cf` sign-in. Local dev uses Cloudflare's always-pass test keys, and `auth.ts` refuses to start with the test secret off localhost. The widget JSON stays in a shell variable (never a file), the secret goes straight into `void secret put`, and only the public site key is printed; it goes in the build shell of the deploy. If the put fails, do not create another widget: the site key is printed, so run `cf turnstile widgets rotate-secret <site key>` and put the new secret.",
+    action: (c) => {
+      const sec = "printf '%s' \"$out\" | jq -rj '(.result // .).secret'";
+      const key = "printf '%s' \"$out\" | jq -r '(.result // .).sitekey'";
+      const inf = c.secrets ? ` ${sec} | infisical secrets set TURNSTILE_SECRET_KEY=@/dev/stdin --env=prod --silent; infisical secrets set "VITE_TURNSTILE_SITE_KEY=$(${key})" --env=prod --silent;` : "";
+      return `\`out=$(cf turnstile widgets create --body '{"name":"<app-name>","domains":["<app-host>"],"mode":"managed"}') && { ${sec} | void secret put TURNSTILE_SECRET_KEY || echo "put failed: rotate the secret, do not create another widget" >&2;${inf} ${key}; }\`${c.secrets ? " With Infisical, the secret and the site key also go in Infisical `prod` (done above), so the production route's `infisical run` exposes `VITE_TURNSTILE_SITE_KEY` to the build." : ""}`;
+    },
     verify: `${SECRET_LIST} TURNSTILE_SECRET_KEY`, covers: ["TURNSTILE_SECRET_KEY", "VITE_TURNSTILE_SITE_KEY"],
   },
   {
@@ -79,19 +96,19 @@ export const STEPS: Step[] = [
   },
   {
     id: "auth-secret", on: (c) => !!c.auth, title: "Check the Better Auth secret", who: "agent",
-    why: "Void creates `BETTER_AUTH_SECRET` on deploy if it is missing and reuses it later, so there is nothing to enter. `BETTER_AUTH_URL` is a local `.env` value; the Void docs do not say what sets it on the Worker.",
+    why: "Void creates `BETTER_AUTH_SECRET` on deploy if it is missing and reuses it later, so there is nothing to enter. `BETTER_AUTH_URL` is a local `.env` value only: Void sets the auth base URL and trusted origin from the request origin, so nothing sets or needs it in production.",
     action: "Nothing to run; confirm after the deploy", verify: `${SECRET_LIST} BETTER_AUTH_SECRET`, covers: ["BETTER_AUTH_SECRET", "BETTER_AUTH_URL"],
   },
   {
     id: "storage-bucket", on: (c) => !!c.storage, title: "Confirm the R2 bucket", who: "agent",
     why: "Void sees `void/storage` in the code and provisions the bucket on deploy; there is no separate step.",
-    action: "Nothing to run; confirm after the deploy", verify: "cf r2 buckets list",
+    action: "Nothing to run; confirm after the deploy", verify: "cf r2 buckets list --name-contains <app-name> | grep -q storage",
   },
   {
     id: "email-setup", on: (c) => !!c.email, title: "Upgrade for sending to any recipient", who: "human",
-    why: "On Workers Free, sending reaches only verified destinations. Arbitrary recipients need Workers Paid (a payment method) and Email Sending onboarding, which a normal deploy never retries.",
+    why: "No command proves Workers Paid (`void email status` also passes on Workers Free), so this step is never skipped. On Workers Free, sending reaches only verified destinations. Arbitrary recipients need Workers Paid (a payment method) and Email Sending onboarding, which a normal deploy never retries.",
     action: "Upgrade at the plans page, then `void email setup --platform cloudflare`", url: PLANS,
-    click: ["Pick Workers Paid and add a payment method if asked.", "Then run: void email setup --platform cloudflare"], verify: EMAIL_STATUS,
+    click: ["Pick Workers Paid and add a payment method if asked.", "Then run: void email setup --platform cloudflare"], verify: "false", always: true,
   },
   {
     id: "email-dns", on: (c) => !!c.email, title: "Check mail DNS is verified", who: "agent-browser",
@@ -105,13 +122,14 @@ const hasHuman = (c: Config) => stepsFor(c).some((s) => s.who === "human");
 const cell = (s: string) => s.replace(/\|/g, "\\|");
 const act = (s: Step, c: Config) => (typeof s.action === "function" ? s.action(c) : s.action);
 const code = (s: string) => "`" + s + "`";
+const ver = (s: Step) => (s.always ? "none: confirm by hand" : code(s.verify));
 
 // The `## Setup` section of AGENTS.md: a compact table, in order.
 export function composeSetupSection(c: Config): string {
-  const rows = stepsFor(c).map((s, i) => `| ${i + 1} | ${cell(s.title)} | ${WHO[s.who]} | ${cell(act(s, c))} | ${cell(code(s.verify))} |`);
+  const rows = stepsFor(c).map((s, i) => `| ${i + 1} | ${cell(s.title)} | ${WHO[s.who]} | ${cell(act(s, c))} | ${cell(ver(s))} |`);
   return `\n\n## Setup
 
-From scaffold to production, in order. Why each step is needed: \`docs/setup.md\`.${hasHuman(c) ? " Human-only steps go through \`scripts/setup-wizard.sh\` (the human runs it with \`!\`); it is re-runnable and skips what is done. Never ask for, read or print a secret value." : ""}
+From scaffold to production, in order. Why each step is needed: \`docs/setup.md\`.${hasHuman(c) ? " Human-only steps go through \`scripts/setup-wizard.sh\` (the human runs it with \`!\`); it is re-runnable and skips what is done. Do step 2 (connect) before it: its secret stages need a saved platform. Never ask for, read or print a secret value." : ""}
 
 | # | Step | Who | Action | Verify (exit 0 when done) |
 | - | ---- | --- | ------ | ------------------------- |
@@ -124,7 +142,7 @@ export function composeSetupDoc(c: Config): string {
     const lines = [`## ${i + 1}. ${s.title}`, "", `Who: ${WHO[s.who]}`, "", s.why, "", `Do: ${act(s, c)}`];
     if (s.url) lines.push("", `Open: ${s.url}`);
     if (s.click?.length) lines.push("", ...s.click.map((l) => `- ${l}`));
-    lines.push("", `Verify (exit 0 when done): ${code(s.verify)}`);
+    lines.push("", `Verify (exit 0 when done): ${ver(s)}`);
     return lines.join("\n");
   });
   return `# Setup
@@ -140,6 +158,8 @@ const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 // The wizard library: the \`wizard\` skill's helper names, trimmed to what these steps need (no .env or GitHub writes).
 const LIB = `set -euo pipefail
 cd "$(dirname "$0")/.."
+# void is a devDependency, not on PATH outside package scripts.
+PATH="$PWD/node_modules/.bin:$PATH"
 
 TOTAL=__TOTAL__
 N=0
@@ -147,8 +167,12 @@ TODO=()
 say()  { printf '  %s\\n' "$1"; }
 warn() { printf '  ! %s\\n' "$1"; }
 open_url() {
+  # Only a person at a terminal gets a browser: tests, agents and pipes (no TTY on stdin) or SETUP_WIZARD_NO_OPEN=1 just see the link.
+  if [ -n "\${SETUP_WIZARD_NO_OPEN:-}" ] || [ ! -t 0 ]; then printf '  open %s\\n' "$1"; return; fi
   printf '  opening %s\\n' "$1"
-  { command -v open >/dev/null 2>&1 && open "$1" || command -v xdg-open >/dev/null 2>&1 && xdg-open "$1"; } >/dev/null 2>&1 || warn "open it yourself: $1"
+  if command -v open >/dev/null 2>&1; then open "$1" >/dev/null 2>&1 || warn "open it yourself: $1"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1 || warn "open it yourself: $1"
+  else warn "open it yourself: $1"; fi
 }
 # todo TITLE VERIFY: announce the stage; false when VERIFY already passes, so a re-run skips done steps.
 todo() {
@@ -160,21 +184,20 @@ todo() {
 check() {
   if bash -c "$1" >/dev/null 2>&1; then say "done"; else warn "not detected yet"; TODO+=("$2"); fi
 }
-# put_secret NAME: read a value without echoing it, then store it. Only the entry count is printed.
+# put_secret NAME: read a value without echoing it, then store it. Only the entry count is printed. A failure is reported, not fatal;
+# the stage's check lists the step as still to do.
 put_secret() {
-  local v f
+  local v
   read -rs -p "  Value for $1 (hidden): " v || true
   printf '\\n'
-  if [[ -z "$v" || "$v" == *[\\'\\"\\\\$#]* ]]; then warn "empty, or has a quote, backslash, \\$ or #: skipped"; TODO+=("$1"); return; fi
-__INFISICAL__  printf '%s' "$v" | void secret put "$1" >/dev/null
+  if [[ -z "$v" || "$v" == *[\\'\\"\\\\$#]* ]]; then warn "empty, or has a quote, backslash, \\$ or #: skipped"; return; fi
+__INFISICAL__  printf '%s' "$v" | void secret put "$1" >/dev/null 2>&1 || { warn "void secret put $1 failed (is the app connected? see the Cloudflare connect step)"; return; }
   say "stored $1 (\${#v} characters)"
 }
 `;
 
 const INFISICAL = `  if [[ -f .infisical.yaml || -f .infisical.json ]]; then
-    f=$(mktemp); printf '%s=%s\\n' "$1" "$v" > "$f"
-    infisical secrets set --file "$f" --env=prod --silent >/dev/null || { rm -f "$f"; warn "Infisical refused it"; TODO+=("$1"); return; }
-    rm -f "$f"
+    printf '%s' "$v" | infisical secrets set "$1=@/dev/stdin" --env=prod --silent >/dev/null || { warn "Infisical refused it"; return; }
   fi
 `;
 
@@ -189,7 +212,7 @@ export function composeWizard(c: Config): string | null {
     if (s.capture) body.push(`put_secret ${s.capture}`);
     else if (s.url) body.push(`open_url ${sq(s.url)}`, `read -r -p "  Press Enter when done: " _ || true`);
     else body.push(`${s.exec} || warn "exited non-zero"`);
-    return `  if todo ${t} ${verify}; then\n${body.map((l) => `    ${l}`).join("\n")}\n    check ${verify} ${t}\n  fi`;
+    return `  if todo ${t} ${verify}; then\n${body.map((l) => `    ${l}`).join("\n")}${s.always ? "" : `\n    check ${verify} ${t}`}\n  fi`;
   });
   return `#!/usr/bin/env bash
 # Human-only setup steps (generated; the list is docs/setup.md). Re-run any time: a done step is skipped. Never prints what you type.

@@ -93,7 +93,7 @@ try {
   {
     const setupDoc = readFileSync(join(app, "docs/setup.md"), "utf8");
     const want: [string, boolean][] = [
-      ["void cloudflare login", true], ["void deploy", true], ["BETTER_AUTH_SECRET", !!config.auth], ["email.from", !!config.email],
+      ["void cloudflare login", true], ["void connect", true], ["void deploy", true], ["cf auth login", !!config.turnstile || !!config.storage], ["BETTER_AUTH_SECRET", !!config.auth], ["email.from", !!config.email],
       ["TURNSTILE_SECRET_KEY", !!config.turnstile], ["ADMIN_EMAILS", !!config.admin], ["R2 bucket", !!config.storage], ["infisical login", !!config.secrets],
     ];
     if (!agents.includes("## Setup")) throw new Error("AGENTS.md has no ## Setup section");
