@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "void/schema-d1";
+import { index, integer, primaryKey, sqliteTable, text } from "void/schema-d1";
 // Relative, not "@auth-schema": Void does not resolve that alias when drizzle-kit or the dev server loads the schema (docs/facts.md).
 import { userTable } from "../../.void/better-auth-schema";
 
@@ -20,4 +20,18 @@ export const auditEntry = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [index("audit_entry_created_at_idx").on(t.createdAt), index("audit_entry_target_created_at_idx").on(t.targetUserId, t.createdAt)],
+);
+
+// Where each user is in onboarding: one row per declared step they reached (src/onboarding.ts). "Signed up" and "Email verified" are derived from the user
+// row and never stored (E14). It is user-owned, so it cascades on user delete; only the audit table is the exception.
+export const onboardingStep = sqliteTable(
+  "onboarding_step",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => userTable.id, { onDelete: "cascade" }),
+    step: text("step").notNull(),
+    reachedAt: integer("reached_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.step] })],
 );
