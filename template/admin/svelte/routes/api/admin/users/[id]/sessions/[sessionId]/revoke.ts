@@ -14,7 +14,7 @@ export const POST = defineHandler(async (c) => {
     await getAuth(c).api.revokeUserSession({ body: { sessionToken: session.token }, headers: c.req.raw.headers });
   } catch (e) {
     if (!isAPIError(e)) throw e;
-    return c.json({ code: e.body?.code, message: e.body?.message }, e.statusCode as 400);
+    return new Response(JSON.stringify({ code: e.body?.code, message: e.body?.message }), { status: e.statusCode, headers: { "content-type": "application/json" } });
   }
   return c.json({ success: true });
 });

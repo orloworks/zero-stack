@@ -183,14 +183,45 @@ it("a userId that is not a string is refused with 400 before anything runs (the 
   expect(t.audit).toEqual([]);
 }, SLOW);
 
-it("a ban or unban that changes nothing writes no audit entry", async () => {
+const adminAndVictim = async () => {
   const t = setup();
   const boss = await t.user("boss@x.com");
   t.listed.add("boss@x.com");
   const victim = await t.user("victim@x.com");
-  expect(await status(t.auth.api.unbanUser({ headers: boss.headers, body: { userId: victim.id } }))).toBe(200); // not banned
+  return { t, boss, victim, h: boss.headers };
+};
+
+it("a re-ban with a new reason writes one banned -> banned entry", async () => {
+  const { t, victim, h } = await adminAndVictim();
+  await t.auth.api.banUser({ headers: h, body: { userId: victim.id, banReason: "a" } });
+  await t.auth.api.banUser({ headers: h, body: { userId: victim.id, banReason: "b" } });
+  expect(t.audit.map((a) => [a.verb, a.oldValue, a.newValue, a.detail])).toEqual([["ban", "active", "banned", "a"], ["ban", "banned", "banned", "b"]]);
+}, SLOW);
+
+it("banExpiresIn is refused 400 with no change and no entry", async () => {
+  const { t, victim, h } = await adminAndVictim();
+  expect(await code(t.auth.api.banUser({ headers: h, body: { userId: victim.id, banExpiresIn: 60 } }))).toBe("BAN_EXPIRY_NOT_SUPPORTED");
+  expect(await status(t.auth.api.banUser({ headers: h, body: { userId: victim.id, banExpiresIn: 0 } }))).toBe(400);
+  expect(t.db.user!.find((u) => u.id === victim.id)!.banned).toBeFalsy();
   expect(t.audit).toEqual([]);
-  await t.auth.api.banUser({ headers: boss.headers, body: { userId: victim.id } });
-  await t.auth.api.banUser({ headers: boss.headers, body: { userId: victim.id } }); // already banned
-  expect(t.audit.map((a) => a.verb)).toEqual(["ban"]);
+}, SLOW);
+
+it("an expired ban that is banned again records active -> banned", async () => {
+  const { t, victim, h } = await adminAndVictim();
+  await t.auth.api.banUser({ headers: h, body: { userId: victim.id } });
+  t.db.user!.find((u) => u.id === victim.id)!.banExpires = new Date(Date.now() - 1000);
+  await t.auth.api.banUser({ headers: h, body: { userId: victim.id } });
+  expect(t.audit[1]).toMatchObject({ verb: "ban", oldValue: "active", newValue: "banned" });
+}, SLOW);
+
+it("an unban of an active user writes one active -> active entry", async () => {
+  const { t, victim, h } = await adminAndVictim();
+  expect(await status(t.auth.api.unbanUser({ headers: h, body: { userId: victim.id } }))).toBe(200);
+  expect(t.audit.map((a) => [a.verb, a.oldValue, a.newValue])).toEqual([["unban", "active", "active"]]);
+}, SLOW);
+
+it("a ban and an unban in parallel write two entries", async () => {
+  const { t, victim, h } = await adminAndVictim();
+  await Promise.all([t.auth.api.banUser({ headers: h, body: { userId: victim.id } }), t.auth.api.unbanUser({ headers: h, body: { userId: victim.id } })]);
+  expect(t.audit.map((a) => a.verb).sort()).toEqual(["ban", "unban"]);
 }, SLOW);

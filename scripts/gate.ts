@@ -689,6 +689,12 @@ try {
       for (const t of ["Only admins see this.", "Active, last sign-in", `aria-label="Ban ${other}"`, "Danger zone", "Delete user permanently", `Type ${other} to confirm`, "Send reset link", 'tabindex="-1"']) if (!live.text.includes(t)) throw new Error(`user detail lacks ${t}`);
       if (JSON.stringify(refusedBody).includes("spam")) throw new Error("the ban reason reached the banned user");
       if (!auditRows().some((r) => r.verb === "ban" && r.target_email === victim && r.actor_email === boss && r.detail === "spam signup" && r.old_value === "active" && r.new_value === "banned")) throw new Error("no audit entry for the ban");
+      // B2: a re-ban writes its own entry (banned -> banned, new reason); banExpiresIn is refused (D12) with no change and no entry.
+      const banEntries = () => auditRows().filter((r) => r.verb === "ban").length;
+      const banned0 = banEntries();
+      if ((await call(b, "POST", "/api/auth/admin/ban-user", bossU.cookie, { userId: victimU.id, banReason: "second reason" })).status !== 200 || banEntries() !== banned0 + 1 || !auditRows().some((r) => r.verb === "ban" && r.detail === "second reason" && r.old_value === "banned" && r.new_value === "banned")) throw new Error("a re-ban did not write one banned -> banned entry");
+      if ((await call(b, "POST", "/api/auth/admin/ban-user", bossU.cookie, { userId: victimU.id, banReason: "x", banExpiresIn: 60 })).status !== 400 || banEntries() !== banned0 + 1) throw new Error("ban with banExpiresIn was not refused 400 with no entry");
+      console.log("gate: admin re-ban writes one banned -> banned entry; banExpiresIn is refused 400");
       if ((await call(b, "POST", "/api/auth/admin/unban-user", bossU.cookie, { userId: victimU.id })).status !== 200) throw new Error("unban-user failed");
       if (!(await signIn(b, victim)).ok) throw new Error("an unbanned user could not sign in");
       if (!auditRows().some((r) => r.verb === "unban" && r.target_email === victim)) throw new Error("no audit entry for the unban");
@@ -713,7 +719,11 @@ try {
       const st = refusals.map((r) => r.status);
       if (st[0] !== 403 || st[2] !== 403 || ![403, 404].includes(st[1]!) || ![403, 404].includes(st[3]!)) throw new Error(`no-Origin and cross-origin revoke/send-link -> ${st}, expected 403 for no Origin and 403 or 404 for a foreign one`);
       if (sessionsOf().length !== before.length || auditRows().length !== audited) throw new Error("a refused revoke or send-link changed a session or wrote an audit entry");
-      if ((await call(b, "POST", revokeUrl(victimU.id, bossU.id), bossU.cookie)).status !== 404 || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown or another user's session id was not 404");
+      const foreignSid = (rows("session", "SELECT id FROM session WHERE userId = ?", bossU.id) as { id: string }[])[0]?.id;
+      if (!foreignSid) throw new Error("the admin has no session row to use as another user's session id");
+      const sessionsBefore = sessionsOf().length;
+      const auditBefore = auditRows().length;
+      if ((await call(b, "POST", revokeUrl(victimU.id, foreignSid), bossU.cookie)).status !== 404 || sessionsOf().length !== sessionsBefore || auditRows().length !== auditBefore || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404 || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown or another user's session id was not 404");
       if ((await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), plainU.cookie)).status !== 404) throw new Error("a non-admin's revoke was not 404");
       const revoke = await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), bossU.cookie);
       if (revoke.status !== 200 || sessionsOf().length !== before.length - 1 || auditRows().filter((r) => r.verb === "revoke-session").length !== 1) throw new Error(`revoke by id -> ${revoke.status}, ${sessionsOf().length} of ${before.length} sessions left`);

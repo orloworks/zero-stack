@@ -165,8 +165,8 @@ in `AGENTS.md`.
     session, and a de-listed admin is refused at once. Void 1.8 does not cache sessions (probe P7), so the guard reads the
     session fresh; `adminClient` works through `void/client/svelte` (P6). See `docs/facts.md`.
   - **Audit.** `db/schema/admin.ts` (re-exported from `db/schema.ts`) holds `audit_entry`, whose user ids are `set null`
-    (history outlives the user; the one exception to the cascade rule). The guard's after-hook writes one entry per
-    successful ban, unban, session revoke and delete, server-side; a failed write answers 500 `AUDIT_WRITE_FAILED` (the
+    (history outlives the user; the one exception to the cascade rule). The guard's after-hook writes one entry for every
+    successful ban, unban, session revoke and delete (a repeat ban or unban included; the old value is the effective state, and a ban with `banExpiresIn` is refused 400), server-side; a failed write answers 500 `AUDIT_WRITE_FAILED` (the
     change stands; the page shows "Warning: this change was not recorded in the audit log."). `src/admin.ts` owns the row
     shape (`auditRow`). Viewing is never recorded.
   - **Delete** (U1, O1, E8, E16). With `--storage` the guard purges the user's files in its before-hook, after the admin and

@@ -61,17 +61,19 @@ export function adminGuard(opts: GuardOptions) {
             const verb = AUDITED[path];
             if (!verb) return;
             const actor = { id: user.id, email: user.email };
-            const body = (ctx.body ?? {}) as { userId?: unknown; sessionToken?: unknown; banReason?: unknown };
-            if (path !== "/admin/revoke-user-session" && body.userId !== undefined && typeof body.userId !== "string") {
-              // The plugin coerces userId with z.coerce.string(), so ["id"] would reach it as "id" past this guard: refuse anything else.
-              throw new APIError("BAD_REQUEST", { code: "INVALID_USER_ID", message: "userId must be a string" });
-            }
-            const userId = typeof body.userId === "string" ? body.userId : null;
+            const body = (ctx.body ?? {}) as { userId?: unknown; sessionToken?: unknown; banReason?: unknown; banExpiresIn?: unknown };
             if (path === "/admin/revoke-user-session") {
               const found = typeof body.sessionToken === "string" ? await ctx.context.internalAdapter.findSession(body.sessionToken) : null;
               if (found) pending.set(ctx.context, { actor, verb, target: { id: found.user.id, email: found.user.email } });
               return;
             }
+            if (body.userId !== undefined && typeof body.userId !== "string") {
+              // The plugin coerces userId with z.coerce.string(), so ["id"] would reach it as "id" past this guard: refuse anything else.
+              throw new APIError("BAD_REQUEST", { code: "INVALID_USER_ID", message: "userId must be a string" });
+            }
+            // D12: a ban has no expiry, so the audited state is always banned or active.
+            if (verb === "ban" && "banExpiresIn" in body) throw new APIError("BAD_REQUEST", { code: "BAN_EXPIRY_NOT_SUPPORTED", message: "A ban has no expiry" });
+            const userId = typeof body.userId === "string" ? body.userId : null;
             const target = userId ? await ctx.context.internalAdapter.findUserById(userId) : null;
             if (!target) return; // the plugin answers 404 or 400
             if (path === "/admin/remove-user") {
@@ -88,16 +90,16 @@ export function adminGuard(opts: GuardOptions) {
               pending.set(ctx.context, { actor, verb, target: null, detail: `deleted user ${target.id}` });
               return;
             }
-            const banned = !!(target as { banned?: boolean | null }).banned;
-            // A ban of a banned user or an unban of an active one changes nothing, so it writes nothing.
-            if ((verb === "ban" && banned) || (verb === "unban" && !banned)) return;
+            // Every successful ban and unban writes one entry, even a repeat: the old value is the effective state now (an expired ban is lifted).
+            const t = target as { banned?: boolean | null; banExpires?: Date | number | null };
+            const was = t.banned && (!t.banExpires || new Date(t.banExpires).getTime() > Date.now()) ? "banned" : "active";
             const reason = typeof body.banReason === "string" && body.banReason.trim() ? body.banReason.trim() : null;
             pending.set(ctx.context, {
               actor,
               verb,
               target: { id: target.id, email: target.email },
-              ...(verb === "ban" ? { detail: reason, oldValue: "active", newValue: "banned" } : {}),
-              ...(verb === "unban" ? { oldValue: "banned", newValue: "active" } : {}),
+              ...(verb === "ban" ? { detail: reason, oldValue: was, newValue: "banned" } : {}),
+              ...(verb === "unban" ? { oldValue: was, newValue: "active" } : {}),
             });
           }),
         },
