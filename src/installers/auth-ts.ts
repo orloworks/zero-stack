@@ -147,7 +147,7 @@ const invitePlugin = (db: boolean) => `{
                     await send(found.user.email, "Set your password", \`\${ctx.context.baseURL}/reset-password/\${token}?callbackURL=%2Freset-password\`);
                   } catch (e) {
                     // A link nobody got would block the next one for an hour (the unexpired-row check above); keep the send error if the delete fails too.
-                    await ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier).catch((d) => console.error("could not delete the unsent set-password link", d));
+                    await ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier).catch((d) => console.error("could not delete the unsent set-password link:", d instanceof Error ? d.name : "unknown error"));
                     throw e;
                   }
                 })(),

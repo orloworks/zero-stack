@@ -127,9 +127,12 @@ test("a failed set-password send leaves no unexpired reset-password row, and the
   ctx.context.internalAdapter.deleteVerificationByIdentifier = async () => { throw new Error("db down"); };
   const quiet = console.error;
   console.error = () => {};
-  await expect(handler(ctx)).rejects.toThrow("mail down");
-  console.error = quiet;
-  ctx.context.internalAdapter.deleteVerificationByIdentifier = del;
+  try {
+    await expect(handler(ctx)).rejects.toThrow("mail down");
+  } finally {
+    console.error = quiet;
+    ctx.context.internalAdapter.deleteVerificationByIdentifier = del;
+  }
   rows.length = 0;
   failing = false;
   await handler(ctx);

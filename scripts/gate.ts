@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { argv as featureArgv, FEATURE_LIST, validateFlags } from "../src/flags";
 import { killChildren, onTerminate, spawnTracked } from "../src/children";
 import { preflight, run, scaffold } from "../src/pipeline";
-import { TRUSTED_DEPENDENCIES } from "../src/versions";
+import { CREATE_VOID, TRUSTED_DEPENDENCIES } from "../src/versions";
 
 const root = mkdtempSync(join(tmpdir(), "zs-gate-"));
 const argv = process.argv.slice(2);
@@ -39,7 +39,8 @@ try {
   const { config } = validateFlags(input);
   // One retry when create-void's own install fails (better-sqlite3 or esbuild install scripts die under load); scaffold deletes the half-made app first.
   await scaffold(config, app).catch((e: Error) => {
-    if (!e.message.includes("create-void")) throw e;
+    // Only the create-void command itself, never an anchor error or a later step whose path happens to contain "create-void".
+    if (!(e.message.startsWith(`${process.execPath} x create-void@${CREATE_VOID} `) && e.message.endsWith(" failed"))) throw e;
     console.error(`gate: retrying once after: ${e.message}`);
     return scaffold(config, app);
   });
@@ -751,7 +752,10 @@ try {
       if (!foreignSid) throw new Error("the admin has no session row to use as another user's session id");
       const sessionsBefore = sessionsOf().length;
       const auditBefore = auditRows().length;
-      if ((await call(b, "POST", revokeUrl(victimU.id, foreignSid), bossU.cookie)).status !== 404 || sessionsOf().length !== sessionsBefore || auditRows().length !== auditBefore || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown or another user's session id was not 404");
+      if ((await call(b, "POST", revokeUrl(victimU.id, foreignSid), bossU.cookie)).status !== 404) throw new Error("revoke of another user's session id under the victim's URL was not 404");
+      if (sessionsOf().length !== sessionsBefore) throw new Error("a refused revoke changed the session count");
+      if (auditRows().length !== auditBefore) throw new Error("a refused revoke wrote an audit entry");
+      if ((await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown session id was not 404");
       if ((await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), plainU.cookie)).status !== 404) throw new Error("a non-admin's revoke was not 404");
       const revoke = await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), bossU.cookie);
       if (revoke.status !== 200 || sessionsOf().length !== before.length - 1 || auditRows().filter((r) => r.verb === "revoke-session").length !== 1) throw new Error(`revoke by id -> ${revoke.status}, ${sessionsOf().length} of ${before.length} sessions left`);

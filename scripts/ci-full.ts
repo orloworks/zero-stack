@@ -1,6 +1,6 @@
 // Every permutation through scripts/gate.ts: max 2 at once, under nice, bun's shared install cache,
 // skipped when nothing relevant changed since its last green run (.ci-cache/green.json, gitignored).
-// --force ignores that cache (prepublishOnly: publishing never trusts it).
+// --force ignores that cache (before a release, run it with --force).
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
