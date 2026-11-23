@@ -11,12 +11,13 @@ Run it with `bunx github:orloworks/zero-stack#v0.4.0 <dir>`.
   - **Onboarding:** steps are declared in code, with "n of m" progress.
   - **Feature switches:** global and per-user, with a kill switch (`src/access.ts`).
   - **Settings:** typed runtime settings, with reset (`src/settings.ts`).
+  - The generated app declares `better-sqlite3` and `drizzle-orm` as devDependencies, because its tests import them.
 - **Setup guide in every app:** a `## Setup` table in AGENTS.md and `docs/setup.md`, with each step marked as agent, agent with browser, or human. `scripts/setup-wizard.sh` covers the human-only steps. It stores values in Void or Infisical, never echoes them and never opens a browser.
 - **Security and correctness:**
   - auth rate limits are shared across Worker instances (stored in D1);
   - a failed invite mail is rolled back so it can be retried;
   - uploads are capped at 10 MB (413).
-- **CLI:** with no `--framework`, it asks for one (default svelte).
+- **CLI:** in an interactive run with no `--framework`, it asks for one (default svelte). Non-interactive runs are unchanged.
 - **Gate:** retries the known install and dev-proxy flakes once, and nothing else.
 
 ## v0.3.0 (2026-11-22)
