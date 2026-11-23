@@ -96,7 +96,7 @@ function databaseHooks(parts: DatabaseHookParts): string[] {
 //   has no unexpired set-password or reset link, so a new one goes out after the last expires or is used.
 // - reset-password: a valid token proves the inbox, so it marks an unverified user verified, if the list still holds the address; if not, the reset is refused
 //   with Better Auth's invalid-token error. Verified users reset as usual. The reset then replaces the random password.
-export const INVITE_ONLY_PLUGIN =`{
+export const INVITE_ONLY_PLUGIN = `{
       id: "invite-only",
       hooks: {
         before: [
@@ -144,8 +144,8 @@ export const INVITE_ONLY_PLUGIN =`{
                   try {
                     await send(found.user.email, "Set your password", \`\${ctx.context.baseURL}/reset-password/\${token}?callbackURL=%2Freset-password\`);
                   } catch (e) {
-                    // A link nobody got would block the next one for an hour (the unexpired-row check above).
-                    await ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier);
+                    // A link nobody got would block the next one for an hour (the unexpired-row check above); keep the send error if the delete fails too.
+                    await ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier).catch((d) => console.error("could not delete the unsent set-password link", d));
                     throw e;
                   }
                 })(),
@@ -159,7 +159,7 @@ export const INVITE_ONLY_PLUGIN =`{
 // With --admin and --invite-only, a link requested on the server (the admin's send-link route has no browser request behind it) for an unverified user is mailed
 // as "Set your password", matching the admin page's copy; a user's own "Forgot password" keeps the reset subject.
 // The root auth.ts, written whole from the enabled features (one owner; add-ons contribute parts here, never patch the file).
-// Svelte only: react, vue and solid --auth keep v0.1 output (no auth.ts).
+// react, vue and solid get only the shared rate limit (#58 D3); every add-on is svelte only.
 // The one top-level user option: deleteUser (--account-deletion) and additionalFields (--admin) are parts of it, never two keys.
 function userOption(config: Config): string[] {
   const deleteUser = config.accountDeletion ? (config.storage ? storageDeleteUser(!config.admin) : "    deleteUser: { enabled: true },") : "";

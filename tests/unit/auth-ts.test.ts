@@ -122,6 +122,15 @@ test("a failed set-password send leaves no unexpired reset-password row, and the
   };
   await expect(handler(ctx)).rejects.toThrow("mail down");
   expect(rows.filter((r) => r.expiresAt > new Date())).toEqual([]);
+  // A failing delete keeps the send error, not the delete's.
+  const del = ctx.context.internalAdapter.deleteVerificationByIdentifier;
+  ctx.context.internalAdapter.deleteVerificationByIdentifier = async () => { throw new Error("db down"); };
+  const quiet = console.error;
+  console.error = () => {};
+  await expect(handler(ctx)).rejects.toThrow("mail down");
+  console.error = quiet;
+  ctx.context.internalAdapter.deleteVerificationByIdentifier = del;
+  rows.length = 0;
   failing = false;
   await handler(ctx);
   expect(mails).toEqual([user.email]);
