@@ -5,6 +5,7 @@ import { writeAgentFiles } from "./agent-files";
 import type { Config } from "./flags";
 import { installAdmin } from "./installers/admin";
 import { installAuth } from "./installers/auth";
+import { ignoreLine } from "./installers/shared";
 import { installStorage } from "./installers/storage";
 import { installShadcn } from "./installers/shadcn";
 import { installTailwind } from "./installers/tailwind";
@@ -63,9 +64,7 @@ function addAppScripts(targetDir: string, config: Config): void {
       ts.include.push("scripts");
     });
     // The pull's temp file sits beside .env; .env itself is ignored by installAuth (secrets implies auth).
-    const gi = join(targetDir, ".gitignore");
-    const lines = existsSync(gi) ? readFileSync(gi, "utf8").split("\n") : [];
-    if (!lines.includes(".env.pull-tmp")) appendFileSync(gi, (lines.at(-1) === "" || !lines.length ? "" : "\n") + ".env.pull-tmp\n");
+    ignoreLine(targetDir, ".env.pull-tmp");
   }
 }
 

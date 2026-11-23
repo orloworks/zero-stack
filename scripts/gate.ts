@@ -37,7 +37,12 @@ try {
     ...Object.fromEntries(FEATURE_LIST.map((f) => [f.key, hasSeq(featureArgv(f)) || undefined])),
   };
   const { config } = validateFlags(input);
-  await scaffold(config, app);
+  // One retry when create-void's own install fails (better-sqlite3 or esbuild install scripts die under load); scaffold deletes the half-made app first.
+  await scaffold(config, app).catch((e: Error) => {
+    if (!e.message.includes("create-void")) throw e;
+    console.error(`gate: retrying once after: ${e.message}`);
+    return scaffold(config, app);
+  });
   const pkgJson = JSON.parse(readFileSync(join(app, "package.json"), "utf8"));
   if (JSON.stringify(pkgJson.trustedDependencies) !== JSON.stringify(TRUSTED_DEPENDENCIES))
     throw new Error(`package.json trustedDependencies is ${JSON.stringify(pkgJson.trustedDependencies)}`);
@@ -103,7 +108,13 @@ try {
     probe.stop(true);
     return p;
   };
-  const startDev = async () => {
+  // One retry with fresh ports when vp dev dies at start (another run took a port between freePort() and listen).
+  const startDev = () => startDevOnce().catch((e: Error) => {
+    if (e.message !== "vp dev exited early") throw e;
+    console.error("gate: vp dev exited early, retrying once with fresh ports");
+    return startDevOnce();
+  });
+  const startDevOnce = async () => {
     const port = freePort();
     dev = spawnTracked([vp, "dev", "--port", String(port), "--strictPort"], {
       cwd: app, stdio: ["ignore", "inherit", "inherit"],
@@ -733,7 +744,7 @@ try {
       if (!foreignSid) throw new Error("the admin has no session row to use as another user's session id");
       const sessionsBefore = sessionsOf().length;
       const auditBefore = auditRows().length;
-      if ((await call(b, "POST", revokeUrl(victimU.id, foreignSid), bossU.cookie)).status !== 404 || sessionsOf().length !== sessionsBefore || auditRows().length !== auditBefore || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404 || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown or another user's session id was not 404");
+      if ((await call(b, "POST", revokeUrl(victimU.id, foreignSid), bossU.cookie)).status !== 404 || sessionsOf().length !== sessionsBefore || auditRows().length !== auditBefore || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown or another user's session id was not 404");
       if ((await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), plainU.cookie)).status !== 404) throw new Error("a non-admin's revoke was not 404");
       const revoke = await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), bossU.cookie);
       if (revoke.status !== 200 || sessionsOf().length !== before.length - 1 || auditRows().filter((r) => r.verb === "revoke-session").length !== 1) throw new Error(`revoke by id -> ${revoke.status}, ${sessionsOf().length} of ${before.length} sessions left`);

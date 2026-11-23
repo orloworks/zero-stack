@@ -18,8 +18,10 @@ bunx github:orloworks/zero-stack#v0.3.0 my-app
 
 It runs straight from this public GitHub repo at a release tag: no npm package, no login. Without `#<tag>` you get whatever is on `main`.
 
-Run it without arguments in a terminal for prompts (the first asks for the framework, default svelte; without a terminal and without `--framework` it builds react). The target directory must be new or
-empty; on any failure it is deleted. The CLI writes only inside that directory.
+Run it without arguments in a terminal for prompts: after the project name it asks for the framework
+(default svelte). Without a terminal and without `--framework` it builds react. The target directory
+must be new or empty; on any failure, a directory it created is deleted, and a pre-existing empty one
+is emptied. The CLI writes only inside that directory.
 
 | Flag | Values | Notes |
 |---|---|---|

@@ -111,12 +111,12 @@ test("production route: syncs only the unfiltered keys, then deploys", async () 
   expect([r.code, r.synced, r.calls]).toEqual([0, "A_KEY='1'\n", ["infisical export --env=prod", "void secret sync", "infisical run --env=prod"]]);
 });
 
-test("production route: an export line other than KEY='…' (no ' or \\ inside) reaches neither the sync nor the deploy", async () => {
-  for (const bad of ["DB_PASSWORD='p'ss'\n", "A_KEY='1'\nVITE_PUBLIC_PEM='line1\nSTOLEN_KEY=x'\n", "A_KEY=1\n", "A_KEY='a\\'b'\n", "A_KEY='1'\r\n", "K='a\rb'\n", "DB_PASSWORD='pa$word'\n"]) {
+// One test per line: 7 route runs in one test overran bun's 5s timeout at load 110+.
+for (const bad of ["DB_PASSWORD='p'ss'\n", "A_KEY='1'\nVITE_PUBLIC_PEM='line1\nSTOLEN_KEY=x'\n", "A_KEY=1\n", "A_KEY='a\\'b'\n", "A_KEY='1'\r\n", "K='a\rb'\n", "DB_PASSWORD='pa$word'\n"])
+  test(`production route: an export line other than KEY='…' (no ' or \\ inside) reaches neither the sync nor the deploy (${JSON.stringify(bad)})`, async () => {
     const r = await route({ FAKE_EXPORT: bad });
-    expect([bad, r.code, r.calls, r.synced]).toEqual([bad, 1, ["infisical export --env=prod"], ""]);
-  }
-});
+    expect([r.code, r.calls, r.synced]).toEqual([1, ["infisical export --env=prod"], ""]);
+  });
 
 test("production route: skips the sync when the filtered file is empty, then deploys", async () => {
   const r = await route({ FAKE_EXPORT: "VITE_X='2'\nVITE_Y='3'\n" });

@@ -72,7 +72,7 @@ export function adminGuard(opts: GuardOptions) {
               throw new APIError("BAD_REQUEST", { code: "INVALID_USER_ID", message: "userId must be a string" });
             }
             // D12: a ban has no expiry, so the audited state is always banned or active.
-            if (verb === "ban" && "banExpiresIn" in body) throw new APIError("BAD_REQUEST", { code: "BAN_EXPIRY_NOT_SUPPORTED", message: "A ban has no expiry" });
+            if (verb === "ban" && typeof body === "object" && body !== null && "banExpiresIn" in body) throw new APIError("BAD_REQUEST", { code: "BAN_EXPIRY_NOT_SUPPORTED", message: "A ban has no expiry" });
             const userId = typeof body.userId === "string" ? body.userId : null;
             const target = userId ? await ctx.context.internalAdapter.findUserById(userId) : null;
             if (!target) return; // the plugin answers 404 or 400
@@ -91,6 +91,7 @@ export function adminGuard(opts: GuardOptions) {
               return;
             }
             // Every successful ban and unban writes one entry, even a repeat: the old value is the effective state now (an expired ban is lifted).
+            // shortcut: read here, written in the after-hook, so concurrent changes to one user can log out of order; make it atomic if an app needs a strict history.
             const t = target as { banned?: boolean | null; banExpires?: Date | number | null };
             const was = t.banned && (!t.banExpires || new Date(t.banExpires).getTime() > Date.now()) ? "banned" : "active";
             const reason = typeof body.banReason === "string" && body.banReason.trim() ? body.banReason.trim() : null;

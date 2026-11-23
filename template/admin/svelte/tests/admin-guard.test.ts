@@ -220,7 +220,14 @@ it("an unban of an active user writes one active -> active entry", async () => {
   expect(t.audit.map((a) => [a.verb, a.oldValue, a.newValue])).toEqual([["unban", "active", "active"]]);
 }, SLOW);
 
-it("a ban and an unban in parallel write two entries", async () => {
+it("a ban-user body that is not an object is a 400 with no entry, not a 500", async () => {
+  const { t, h } = await adminAndVictim();
+  expect(await status(t.auth.api.banUser({ headers: h, body: "just-a-string" as never }))).toBe(400);
+  expect(t.audit).toEqual([]);
+}, SLOW);
+
+// Entry order and old values under concurrency are not promised (#52 Amended); only one entry per successful call.
+it("a ban and an unban in parallel write one entry each", async () => {
   const { t, victim, h } = await adminAndVictim();
   await Promise.all([t.auth.api.banUser({ headers: h, body: { userId: victim.id } }), t.auth.api.unbanUser({ headers: h, body: { userId: victim.id } })]);
   expect(t.audit.map((a) => a.verb).sort()).toEqual(["ban", "unban"]);
