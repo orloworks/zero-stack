@@ -5,7 +5,7 @@
   import { type ActionState, runAction, UNAUDITED_WARNING } from "../../../src/lib/admin-action";
   import type { Props } from "./[id].server";
 
-  let { user, isMe, isAdmin, kind, status, sessions, back }: Props = $props();
+  let { user, isMe, isAdmin, kind, status, sessions, onboarding, back }: Props = $props();
   const router = useRouter();
 
   const idle: ActionState = { status: "idle" };
@@ -126,6 +126,17 @@
   {#if sessionsOne.status === "error"}<p role="alert">{sessionsOne.message}</p>{/if}
   {#if sessionsAll.status === "error"}<p role="alert">{sessionsAll.message}</p>{/if}
 </section>
+
+{#if onboarding}
+  <section aria-labelledby="onboarding-title">
+    <h2 id="onboarding-title">{`Onboarding: ${onboarding.text}`}</h2>
+    <ul>
+      {#each onboarding.steps as s (s.label)}
+        <li>{s.label}: {s.done ? "Done" : "Not yet"}{#if s.at}<span class="hint"> (<time datetime={s.at.toISOString()}>{s.at.toISOString().slice(0, 10)}</time>)</span>{/if}</li>
+      {/each}
+    </ul>
+  </section>
+{/if}
 
 <p><a href={`/admin/audit?user=${encodeURIComponent(user.email)}`}>View audit log</a></p>
 

@@ -1,5 +1,5 @@
 // Pure display helpers for the admin pages (no server imports, so a page component can use them in the browser).
-export type Verb = "ban" | "unban" | "revoke-session" | "revoke-sessions" | "delete-user" | "send-link";
+export type Verb = "ban" | "unban" | "revoke-session" | "revoke-sessions" | "delete-user" | "send-link" | "invite" | "revoke-invite" | "send-invite";
 
 const VERBS: Record<Verb, string> = {
   ban: "banned",
@@ -8,6 +8,9 @@ const VERBS: Record<Verb, string> = {
   "revoke-sessions": "revoked all sessions of",
   "delete-user": "deleted",
   "send-link": "requested a link for",
+  invite: "invited",
+  "revoke-invite": "removed the invite for",
+  "send-invite": "requested an invite email for",
 };
 
 // "[admin email] [verb] [target]: [old → new]"; the time is rendered by the page.

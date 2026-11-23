@@ -44,6 +44,9 @@
 
 .admin label { display: block; margin: 0.75rem 0 0.25rem; }
 .admin input[type="text"], .admin input[type="search"], .admin input[type="email"] { width: 100%; max-width: 28rem; box-sizing: border-box; font: inherit; padding: 0.4rem 0.5rem; }
+.admin fieldset { border: 0; margin: 0; padding: 0; }
+.admin legend { padding: 0; }
+.admin .choice { display: inline-block; margin-right: 1.5rem; }
 .admin button { font: inherit; padding: 0.4rem 0.8rem; cursor: pointer; }
 .admin button:disabled { cursor: wait; opacity: 0.6; }
 .admin .hint { color: var(--a-muted); font-size: 0.9rem; margin: 0.25rem 0 0; }

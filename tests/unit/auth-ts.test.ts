@@ -127,11 +127,29 @@ test("a failed set-password send leaves no unexpired reset-password row, and the
   ctx.context.internalAdapter.deleteVerificationByIdentifier = async () => { throw new Error("db down"); };
   const quiet = console.error;
   console.error = () => {};
-  await expect(handler(ctx)).rejects.toThrow("mail down");
-  console.error = quiet;
-  ctx.context.internalAdapter.deleteVerificationByIdentifier = del;
+  try {
+    await expect(handler(ctx)).rejects.toThrow("mail down");
+  } finally {
+    console.error = quiet;
+    ctx.context.internalAdapter.deleteVerificationByIdentifier = del;
+  }
   rows.length = 0;
   failing = false;
   await handler(ctx);
   expect(mails).toEqual([user.email]);
+});
+
+// E10: with --admin and --invite-only the three call sites read the env list and the database invites through inviteAllowed; without --admin nothing changes.
+test("--admin --invite-only swaps all three signup re-checks to inviteAllowed, and the matcher import goes with them", () => {
+  const src = compose({ admin: true, inviteOnly: true });
+  expect(src).toContain('import { inviteAllowed } from "./src/invites";');
+  expect(src.match(/inviteAllowed\(/g)).toHaveLength(3);
+  expect(src.match(/if \(!\(await inviteAllowed\(user\.email, env\.SIGNUP_ALLOWLIST\)\)\)/g)).toHaveLength(2); // user-create hook, and the reset-password re-check
+  expect(src).toContain("!(await inviteAllowed(found.user.email, env.SIGNUP_ALLOWLIST))"); // the set-password mail after-hook
+  expect(src).not.toContain("signupAllowed");
+  expect(src.match(/^  databaseHooks:/gm)).toHaveLength(1);
+  const plain = compose({ inviteOnly: true });
+  expect(plain).not.toContain("inviteAllowed");
+  expect(plain.match(/signupAllowed\(env\.SIGNUP_ALLOWLIST/g)).toHaveLength(3);
+  expect(compose({ admin: true })).not.toContain("inviteAllowed");
 });

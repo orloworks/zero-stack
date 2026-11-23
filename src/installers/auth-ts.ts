@@ -46,9 +46,11 @@ const DELETE_PASSWORD_HOOK = `  hooks: {
   },`;
 
 // Gate on user creation: every sign-up path goes through it. No row is written and no mail is sent when it throws.
-const INVITE_ONLY_USER_CREATE = `      create: {
+// With --admin the list is the env secret OR the invites in the database (E10): every call site asks inviteAllowed (given the secret from defineAuth's env, as ADMIN_EMAILS is) instead of the bare matcher.
+const allowed = (db: boolean, email: string) => (db ? `(await inviteAllowed(${email}, env.SIGNUP_ALLOWLIST))` : `signupAllowed(env.SIGNUP_ALLOWLIST, ${email})`);
+const inviteOnlyUserCreate = (db: boolean) => `      create: {
         before: async (user) => {
-          if (!signupAllowed(env.SIGNUP_ALLOWLIST, user.email))
+          if (!${allowed(db, "user.email")})
             throw new APIError("FORBIDDEN", { code: "SIGNUP_INVITE_ONLY", message: "Signups are invite-only right now." });
         },
       },`;
@@ -96,7 +98,7 @@ function databaseHooks(parts: DatabaseHookParts): string[] {
 //   has no unexpired set-password or reset link, so a new one goes out after the last expires or is used.
 // - reset-password: a valid token proves the inbox, so it marks an unverified user verified, if the list still holds the address; if not, the reset is refused
 //   with Better Auth's invalid-token error. Verified users reset as usual. The reset then replaces the random password.
-export const INVITE_ONLY_PLUGIN = `{
+const invitePlugin = (db: boolean) => `{
       id: "invite-only",
       hooks: {
         before: [
@@ -112,7 +114,7 @@ export const INVITE_ONLY_PLUGIN = `{
               if (!found || found.expiresAt <= new Date()) return;
               const user = await ctx.context.internalAdapter.findUserById(found.value);
               if (!user || user.emailVerified) return;
-              if (!signupAllowed(env.SIGNUP_ALLOWLIST, user.email)) throw new APIError("BAD_REQUEST", { code: "INVALID_TOKEN", message: "Invalid token" });
+              if (!${allowed(db, "user.email")}) throw new APIError("BAD_REQUEST", { code: "INVALID_TOKEN", message: "Invalid token" });
               await ctx.context.internalAdapter.updateUser(user.id, { emailVerified: true });
             }),
           },
@@ -125,7 +127,7 @@ export const INVITE_ONLY_PLUGIN = `{
               if (isAPIError(returned) && !(ctx.path === "/sign-in/email" && returned.body?.code === "INVALID_EMAIL_OR_PASSWORD")) return;
               const email = ctx.body?.email;
               const found = typeof email === "string" && (await ctx.context.internalAdapter.findUserByEmail(email.toLowerCase()));
-              if (!found || found.user.emailVerified || !signupAllowed(env.SIGNUP_ALLOWLIST, found.user.email)) return;
+              if (!found || found.user.emailVerified || !${allowed(db, "found.user.email")}) return;
               const unexpired = await ctx.context.adapter.findOne({
                 model: "verification",
                 where: [
@@ -145,7 +147,7 @@ export const INVITE_ONLY_PLUGIN = `{
                     await send(found.user.email, "Set your password", \`\${ctx.context.baseURL}/reset-password/\${token}?callbackURL=%2Freset-password\`);
                   } catch (e) {
                     // A link nobody got would block the next one for an hour (the unexpired-row check above); keep the send error if the delete fails too.
-                    await ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier).catch((d) => console.error("could not delete the unsent set-password link", d));
+                    await ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier).catch((d) => console.error("could not delete the unsent set-password link:", d instanceof Error ? d.name : "unknown error"));
                     throw e;
                   }
                 })(),
@@ -155,6 +157,7 @@ export const INVITE_ONLY_PLUGIN = `{
         ],
       },
     }`;
+export const INVITE_ONLY_PLUGIN = invitePlugin(false);
 
 // With --admin and --invite-only, a link requested on the server (the admin's send-link route has no browser request behind it) for an unverified user is mailed
 // as "Set your password", matching the admin page's copy; a user's own "Forgot password" keeps the reset subject.
@@ -192,7 +195,7 @@ export function composeAuthTs(config: Config): string {
       ? [
           `  plugins: [${[
             config.turnstile && 'captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })',
-            config.inviteOnly && INVITE_ONLY_PLUGIN,
+            config.inviteOnly && invitePlugin(!!config.admin),
             config.admin && `admin({ bannedUserMessage: "${BANNED_MESSAGE}" })`,
             config.admin && `adminGuard({ isAdmin: (user) => isAdmin(env.ADMIN_EMAILS, user), audit: recordAudit${config.storage ? ", purge: purgeUserFiles" : ""} })`,
           ]
@@ -201,7 +204,7 @@ export function composeAuthTs(config: Config): string {
         ]
       : []),
     ...databaseHooks({
-      user: [...(config.inviteOnly ? [INVITE_ONLY_USER_CREATE] : []), ...(config.admin ? [adminUserDelete(!!config.storage)] : [])],
+      user: [...(config.inviteOnly ? [inviteOnlyUserCreate(!!config.admin)] : []), ...(config.admin ? [adminUserDelete(!!config.storage)] : [])],
       session: config.admin ? [ADMIN_SESSION_CREATE] : [],
     }),
     ...userOption(config),
@@ -211,7 +214,7 @@ export function composeAuthTs(config: Config): string {
   const del = (config.accountDeletion || config.admin) && config.storage;
   const ba = config.accountDeletion || config.inviteOnly ? `import { APIError, createAuthMiddleware${config.inviteOnly ? ", isAPIError" : ""} } from "better-auth/api";\n` : "";
   return `import { defineAuth } from "void/auth";
-${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? 'import { signupAllowed } from "./src/signup-allowlist";\n' : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}
+${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}
 export default defineAuth(({ defaults${config.turnstile || config.inviteOnly || config.admin ? ", env" : ""} }) => ({
   ...defaults,
 ${options.map((o) => o + "\n").join("")}}));

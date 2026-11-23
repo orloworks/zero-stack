@@ -30,5 +30,8 @@ test("--invite-only declares SIGNUP_ALLOWLIST, alone and beside Turnstile's keys
 test("--admin declares ADMIN_EMAILS as optional with an empty default, beside the invite-only key", () => {
   expect(composeEnvTs(cfg({ admin: true }))).toContain('export default defineEnv({\n  ADMIN_EMAILS: string().default(""),\n});\n');
   const both = composeEnvTs(cfg({ admin: true, inviteOnly: true }))!;
-  expect(both).toContain("  SIGNUP_ALLOWLIST: string(),\n  ADMIN_EMAILS: string().default(\"\"),\n"); // U4 (an optional SIGNUP_ALLOWLIST) is the invites ticket's
+  // U4: with --admin the invites live in the database too, so the secret is optional (empty admits no one by itself); alone it stays required.
+  expect(both).toContain("  SIGNUP_ALLOWLIST: string().default(\"\"),\n  ADMIN_EMAILS: string().default(\"\"),\n");
+  expect(composeEnvTs(cfg({ inviteOnly: true }))).toContain("  SIGNUP_ALLOWLIST: string(),\n");
+  expect(composeEnvTs(cfg({ inviteOnly: true }))).not.toContain(".default(");
 });

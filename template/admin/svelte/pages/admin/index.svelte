@@ -3,7 +3,7 @@
   import { UNAUDITED_WARNING } from "../../src/lib/admin-action";
   import type { Props } from "./index.server";
 
-  let { users, total, q, page, pageSize, deleted, unaudited, loadError }: Props = $props();
+  let { users, total, q, page, pageSize, deleted, unaudited, loadError, invite, onboarding }: Props = $props();
 
   let heading = $state<HTMLElement>();
   // After a delete's redirect, focus moves to the heading.
@@ -44,6 +44,11 @@
   <p>Just you so far.</p>
 {:else if users.length === 0}
   <p>{q ? `No account for ${q}.` : "No users on this page."}</p>
+  {#if invite === "not-invited"}
+    <p>{`${q} is not invited.`} <a href={`/admin/invites?email=${encodeURIComponent(q)}`}>Invite them</a></p>
+  {:else if invite === "invited"}
+    <p>Invited, but hasn't signed up yet.</p>
+  {/if}
 {:else}
   <table>
     <caption>Users, newest first</caption>
@@ -52,6 +57,7 @@
         <th scope="col">Email</th>
         <th scope="col" class="wide">Name</th>
         <th scope="col">Status</th>
+        {#if onboarding}<th scope="col" class="wide">Onboarding</th>{/if}
         <th scope="col" class="wide">Signed up</th>
         <th scope="col" class="wide">Last sign-in</th>
       </tr>
@@ -62,6 +68,7 @@
           <td><a href={detail(u.id)}>{u.email}</a></td>
           <td class="wide">{u.name}</td>
           <td class={`status-${u.status.word.toLowerCase()}`}>{u.status.word}</td>
+          {#if onboarding}<td class="wide">{u.onboarding}</td>{/if}
           <td class="wide"><time datetime={u.createdAt.toISOString()}>{date(u.createdAt)}</time></td>
           <td class="wide">{#if u.lastSignInAt}<time datetime={u.lastSignInAt.toISOString()}>{date(u.lastSignInAt)}</time>{:else}Never{/if}</td>
         </tr>

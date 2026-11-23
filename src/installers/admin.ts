@@ -9,6 +9,17 @@ const here = join(template, "admin");
 const ACCOUNT = "pages/settings.svelte";
 const ACCOUNT_SERVER = "pages/settings.server.ts";
 
+// With --invite-only, invites live in the database (E10): the invite table, src/invites.ts (inviteAllowed, add, revoke, send), the Invites page and its routes, their tests,
+// and the real src/invite-state.ts over the base app's stub. The auth.ts swap to inviteAllowed and the optional SIGNUP_ALLOWLIST come from the composers.
+function installInvites(dir: string): void {
+  const src = join(here, "invite-only");
+  cpSync(src, dir, { recursive: true, force: false, errorOnExist: true, filter: (f) => !f.endsWith("src/invite-state.ts") });
+  cpSync(join(src, "src/invite-state.ts"), join(dir, "src/invite-state.ts"));
+  editFile(dir, "db/schema.ts", (s) => replaceAnchor(s, 'export * from "./schema/admin";\n', 'export * from "./schema/admin";\nexport * from "./schema/invites";\n', "db/schema.ts"));
+  const layout = "pages/admin/layout.svelte";
+  editFile(dir, layout, (s) => replaceAnchor(s, '    { href: "/admin/audit", label: "Audit log" },\n', '    { href: "/admin/invites", label: "Invites" },\n    { href: "/admin/audit", label: "Audit log" },\n', layout));
+}
+
 // --admin on svelte: the admin module and guard, the schema, the pages, their tests, and edits at anchors in the Account page and the schema.
 // The auth.ts and env.ts parts come from the composers; ADMIN_EMAILS in .env from authEnv. Runs after installAuth and installStorage (their pages and routes exist).
 export function installAdmin(dir: string, config: Config): void {
@@ -29,6 +40,7 @@ export function installAdmin(dir: string, config: Config): void {
 
   // db/schema.ts is Void's; the admin tables live beside it and are re-exported so `@schema` and `void db generate` see them.
   editFile(dir, "db/schema.ts", (s) => replaceAnchor(s, 'import { integer, sqliteTable, text } from "void/schema-d1";\n', 'import { integer, sqliteTable, text } from "void/schema-d1";\n\nexport * from "./schema/admin";\n', "db/schema.ts"));
+  if (config.inviteOnly) installInvites(dir); // after the schema edit it extends
 
   // Account page: an Admin link for admins, a verify hint for a listed owner whose email is not verified yet (D9).
   editFile(dir, ACCOUNT_SERVER, (s) => {

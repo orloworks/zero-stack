@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { argv as featureArgv, FEATURE_LIST, validateFlags } from "../src/flags";
 import { killChildren, onTerminate, spawnTracked } from "../src/children";
 import { preflight, run, scaffold } from "../src/pipeline";
-import { TRUSTED_DEPENDENCIES } from "../src/versions";
+import { CREATE_VOID, TRUSTED_DEPENDENCIES } from "../src/versions";
 
 const root = mkdtempSync(join(tmpdir(), "zs-gate-"));
 const argv = process.argv.slice(2);
@@ -39,7 +39,8 @@ try {
   const { config } = validateFlags(input);
   // One retry when create-void's own install fails (better-sqlite3 or esbuild install scripts die under load); scaffold deletes the half-made app first.
   await scaffold(config, app).catch((e: Error) => {
-    if (!e.message.includes("create-void")) throw e;
+    // Only the create-void command itself, never an anchor error or a later step whose path happens to contain "create-void".
+    if (!(e.message.startsWith(`${process.execPath} x create-void@${CREATE_VOID} `) && e.message.endsWith(" failed"))) throw e;
     console.error(`gate: retrying once after: ${e.message}`);
     return scaffold(config, app);
   });
@@ -586,9 +587,12 @@ try {
   if (config.admin) {
     // --admin: /admin and /api/auth/admin/* answer to ADMIN_EMAILS (verified, live) and nobody else. The list is read at startup, so each list change restarts the dev server.
     const envFile = join(app, ".env"), original = readFileSync(envFile, "utf8");
-    const withAdmins = async (list: string) => {
+    // `signup`: leave the scaffold's SIGNUP_ALLOWLIST (undefined), set it, or remove the key (null; only with --invite-only, where it is optional).
+    const withAdmins = async (list: string, signup?: string | null) => {
       await killChildren();
-      writeFileSync(envFile, original.replace(/^ADMIN_EMAILS=.*$/m, `ADMIN_EMAILS=${list}`));
+      let text = original.replace(/^ADMIN_EMAILS=.*$/m, `ADMIN_EMAILS=${list}`);
+      if (signup !== undefined) text = signup === null ? text.replace(/^SIGNUP_ALLOWLIST=.*\n/m, "") : text.replace(/^SIGNUP_ALLOWLIST=.*$/m, `SIGNUP_ALLOWLIST=${signup}`);
+      writeFileSync(envFile, text);
       return `http://localhost:${(await startDev()).port}`;
     };
     // Rows in the app database (user, audit_entry, ...): the one sqlite file that has `table`.
@@ -748,7 +752,10 @@ try {
       if (!foreignSid) throw new Error("the admin has no session row to use as another user's session id");
       const sessionsBefore = sessionsOf().length;
       const auditBefore = auditRows().length;
-      if ((await call(b, "POST", revokeUrl(victimU.id, foreignSid), bossU.cookie)).status !== 404 || sessionsOf().length !== sessionsBefore || auditRows().length !== auditBefore || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown or another user's session id was not 404");
+      if ((await call(b, "POST", revokeUrl(victimU.id, foreignSid), bossU.cookie)).status !== 404) throw new Error("revoke of another user's session id under the victim's URL was not 404");
+      if (sessionsOf().length !== sessionsBefore) throw new Error("a refused revoke changed the session count");
+      if (auditRows().length !== auditBefore) throw new Error("a refused revoke wrote an audit entry");
+      if ((await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown session id was not 404");
       if ((await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), plainU.cookie)).status !== 404) throw new Error("a non-admin's revoke was not 404");
       const revoke = await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), bossU.cookie);
       if (revoke.status !== 200 || sessionsOf().length !== before.length - 1 || auditRows().filter((r) => r.verb === "revoke-session").length !== 1) throw new Error(`revoke by id -> ${revoke.status}, ${sessionsOf().length} of ${before.length} sessions left`);
@@ -815,12 +822,16 @@ try {
         if ((await upload(b, del.cookie, "theirs.txt", "bye")) !== 201) throw new Error("the doomed user's upload failed");
         if (!r2Keys().includes(`users/${del.id}/theirs.txt`)) throw new Error("the doomed user's file is not in R2");
       }
+      onUser(doomed, "INSERT INTO onboarding_step (user_id, step, reached_at) VALUES (?, 'example-step', 1700000000000)");
+      if (!rows("onboarding_step", "SELECT 1 FROM onboarding_step WHERE user_id = ?", del.id).length) throw new Error("no onboarding row to cascade");
       await call(b, "POST", "/api/auth/admin/ban-user", bossU.cookie, { userId: del.id, banReason: `note about ${doomed}` });
       const removed = await call(b, "POST", "/api/auth/admin/remove-user", bossU.cookie, { userId: del.id });
       if (removed.status !== 200) throw new Error(`remove-user -> ${removed.status}`);
       if (rows("user", "SELECT 1 FROM user WHERE id = ?", del.id).length || (await sessionUser(b, del.cookie))) throw new Error("the deleted user row or session is still there");
       if (config.storage && r2Keys().some((k) => k.startsWith(`users/${del.id}/`))) throw new Error("the deleted user's files are still in R2");
       await noMail(doomed);
+      if (rows("onboarding_step", "SELECT 1 FROM onboarding_step WHERE user_id = ?", del.id).length) throw new Error("onboarding rows survived the user's deletion");
+      console.log("gate: admin delete removes the user's onboarding rows");
       const entry = auditRows().find((r) => r.verb === "delete-user");
       if (!entry || entry.target_user_id !== null || entry.target_email !== null || entry.actor_email !== boss || !String(entry.detail).includes(del.id)) throw new Error(`the delete audit entry is wrong: ${JSON.stringify(entry)}`);
       if (!auditRows().some((r) => r.verb === "ban" && r.target_email === null && r.detail === null && r.target_user_id === null)) throw new Error("the deleted user's earlier audit rows were not redacted to a null email and detail");
@@ -841,6 +852,109 @@ try {
       if (!(await acct(bossU.cookie)).includes('href="/admin"')) throw new Error("an admin's Account page lacks the Admin link");
       if ((await acct(plainU.cookie)).includes('href="/admin"') || (await acct(plainU.cookie)).includes("admin list")) throw new Error("a non-admin's Account page mentions admin");
       if (ownerU && !(await acct(ownerU.cookie)).includes("Your email is on the admin list but isn't verified yet.")) throw new Error("a listed, unverified user's Account page lacks the hint");
+
+      // Onboarding (E14): "signed up" and "email verified" come from the user row, declared steps from onboarding_step; the list shows "n of m" and user detail the steps.
+      const steps = 3; // signed up, email verified, and the scaffold's one declared step
+      const listed = await html(b, `/admin?q=${encodeURIComponent(other)}`, bossU.cookie);
+      if (!listed.text.includes('<th scope="col" class="wide">Onboarding</th>') || !listed.text.includes(`>2 of ${steps}</td>`)) throw new Error("the Users list lacks the Onboarding column or a verified user's 2 of 3");
+      onUser(other, "INSERT INTO onboarding_step (user_id, step, reached_at) VALUES (?, 'example-step', 1700000000000)");
+      if (!(await html(b, `/admin?q=${encodeURIComponent(other)}`, bossU.cookie)).text.includes(`>${steps} of ${steps}</td>`)) throw new Error("a reached step did not show 3 of 3 in the list");
+      const otherPage = (await html(b, `/admin/users/${otherU.id}`, bossU.cookie)).text;
+      for (const t of [`Onboarding: ${steps} of ${steps}`, "Signed up: Done", "Email verified: Done", "example-step: Done"]) if (!otherPage.includes(t)) throw new Error(`user detail lacks ${t}`);
+      if (!(await html(b, `/admin/users/${victimU.id}`, bossU.cookie)).text.includes("example-step: Not yet")) throw new Error("an unreached step did not say Not yet");
+      console.log(`gate: admin onboarding: the Users list shows "n of m" (2 of ${steps}, then ${steps} of ${steps} after a step), user detail lists the steps with Done and Not yet`);
+
+      if (config.inviteOnly) {
+        // Invites in the database (U4, E10): no SIGNUP_ALLOWLIST at all, so the database is the only list and the app still fails closed.
+        b = await withAdmins(boss, null);
+        const invitedMail = addr("invited"), refusedMail = addr("neither"), domainMail = `dom-${ts}@corp.test`, revokedMail = addr("revoked"), pendMail = addr("pend"), ghostIn = addr("ghostin"), ghostOut = `ghost-${ts}@nowhere.test`;
+        const api = (method: string, path: string, cookie = bossU.cookie, body?: object) => call(b, method, path, cookie, body);
+        const addInvite = (kind: string, value: string) => api("POST", "/api/admin/invites", bossU.cookie, { kind, value });
+        const inviteId = (entry: string) => String(rows("invite", "SELECT id FROM invite WHERE entry = ?", entry.toLowerCase())[0]?.id);
+        const said = async (r: Response) => (await r.json()) as { message: string; notes?: string[] };
+        if (!(await html(b, "/admin/invites", bossU.cookie)).text.includes("Invites you add here appear below.")) throw new Error("the empty Invites page lacks its empty state");
+        await inviteRefused(b, refusedMail); // neither source: refused
+        const add = await addInvite("email", invitedMail.toUpperCase());
+        if (add.status !== 200 || (await said(add)).message !== `Invited ${invitedMail}.`) throw new Error(`add invite -> ${add.status}`);
+        await signUpVerified(b, invitedMail); // admitted at once, no restart
+        const domain = await addInvite("domain", "Corp.Test");
+        if (domain.status !== 200 || (await said(domain)).message !== "Invited anyone at @corp.test.") throw new Error(`add domain invite -> ${domain.status}`);
+        await signUpVerified(b, domainMail);
+        for (const a of [`x-${ts}@sub.corp.test`, `x-${ts}@evilcorp.test`, `x-${ts}@corp.test.evil.test`]) await inviteRefused(b, a);
+        // Validation, duplicates, and who may call it.
+        if ((await addInvite("email", "not-an-email")).status !== 400 || (await addInvite("domain", "a@x.com")).status !== 400 || (await addInvite("email", invitedMail)).status !== 409) throw new Error("a bad or duplicate invite was not refused 400 / 409");
+        for (const [who, cookie] of [["signed out", ""], ["non-admin", plainU.cookie]] as const)
+          for (const [method, path] of [["GET", "/admin/invites"], ["POST", "/api/admin/invites"], ["POST", `/api/admin/invites/${inviteId(invitedMail)}/revoke`], ["POST", `/api/admin/invites/${inviteId(invitedMail)}/send`]] as const)
+            if ((await api(method, path, cookie, method === "POST" ? { kind: "email", value: addr("x") } : undefined)).status !== 404) throw new Error(`${who}: ${method} ${path} was not 404`);
+        const evilOrigin = await fetch(`${b}/api/admin/invites`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.test", cookie: bossU.cookie }, body: JSON.stringify({ kind: "email", value: addr("evil") }) });
+        // No Origin: our 403. A foreign Origin: Void drops the session before our route runs (404); our 403 is the backstop. Either way nothing is added.
+        const noOrigin = await fetch(`${b}/api/admin/invites`, { method: "POST", headers: { "content-type": "application/json", cookie: bossU.cookie }, body: JSON.stringify({ kind: "email", value: addr("evil") }) });
+        if (noOrigin.status !== 403 || ![403, 404].includes(evilOrigin.status) || rows("invite", "SELECT 1 FROM invite WHERE entry LIKE 'evil-%'").length) throw new Error(`add invite with no Origin -> ${noOrigin.status}, a foreign one -> ${evilOrigin.status}`);
+        console.log("gate: admin invites with no SIGNUP_ALLOWLIST: an exact and a domain invite admit at once without a restart, a lookalike and no source are refused, bad input 400, duplicate 409, non-admin 404, no or foreign Origin refused");
+
+        // Revoke: refused again; the existing account is untouched; the notes.
+        await addInvite("email", revokedMail);
+        const revoked = await api("POST", `/api/admin/invites/${inviteId(revokedMail)}/revoke`);
+        const revokedBody = await said(revoked);
+        if (revoked.status !== 200 || revokedBody.message !== "Invite removed." || revokedBody.notes?.join("|") !== "Existing accounts are not affected. Ban the user to block them.") throw new Error(`revoke -> ${revoked.status} ${JSON.stringify(revokedBody)}`);
+        await inviteRefused(b, revokedMail);
+        if ((await api("POST", `/api/admin/invites/${inviteId(invitedMail)}/revoke`)).status !== 200 || !(await signIn(b, invitedMail)).ok) throw new Error("revoking an invite touched the existing account");
+        if ((await api("POST", "/api/admin/invites/does-not-exist/revoke")).status !== 404) throw new Error("revoking a missing invite was not 404");
+        console.log("gate: admin invite revoke: refused again, the existing account still signs in, the note says existing accounts are not affected");
+
+        // The reset-password re-check reads the database: a pending user's set-password link stops working when their database invite is revoked.
+        await addInvite("email", pendMail);
+        await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: pendMail, password: "" });
+        const [pendLink] = await waitMails(b, SET_PW, pendMail, 1);
+        if (!pendLink) throw new Error("no set-password mail for a database-invited sign-up");
+        await api("POST", `/api/admin/invites/${inviteId(pendMail)}/revoke`);
+        const pendSet = await setPassword(b, pendLink, "pending-password-1");
+        if (pendSet.ok || isVerified(pendMail)) throw new Error(`a revoked pending user's set-password link -> ${pendSet.status}, verified ${isVerified(pendMail)}`);
+        console.log("gate: admin invite: the reset-password re-check reads the database (a revoked pending user's link is refused and does not verify)");
+
+        // Send invite: mail for an exact email, nothing for a domain.
+        const sendTo = addr("sendto");
+        await addInvite("email", sendTo);
+        const sentInvite = await api("POST", `/api/admin/invites/${inviteId(sendTo)}/send`);
+        if (sentInvite.status !== 200 || (await said(sentInvite)).message !== `Invite email requested for ${sendTo}.`) throw new Error(`send invite -> ${sentInvite.status}`);
+        const [inviteMail] = await waitMails(b, "Your invitation", sendTo, 1);
+        if (!inviteMail || inviteMail.pathname !== "/sign-up") throw new Error(`the invite mail is missing or does not link to /sign-up: ${inviteMail}`);
+        if ((await api("POST", `/api/admin/invites/${inviteId("@corp.test")}/send`)).status !== 400) throw new Error("send invite for a domain was not 400");
+        console.log("gate: admin send-invite mails the sign-up link to an exact email and refuses a domain");
+
+        // Every change wrote its audit entry (same batch), and the audit page words them.
+        for (const [verb, target] of [["invite", invitedMail], ["invite", "@corp.test"], ["revoke-invite", revokedMail], ["send-invite", sendTo]] as const)
+          if (!auditRows().some((r) => r.verb === verb && r.target_email === target && r.actor_email === boss)) throw new Error(`no ${verb} audit entry for ${target}`);
+        const invAudit = (await html(b, "/admin/audit", bossU.cookie)).text;
+        for (const t of [`${boss} invited ${invitedMail}`, `${boss} removed the invite for ${revokedMail}`, `${boss} requested an invite email for ${sendTo}`]) if (!invAudit.includes(t)) throw new Error(`/admin/audit lacks ${t}`);
+        console.log("gate: admin invite add, revoke and send each wrote an audit entry");
+
+        // The page, and the Users search for an address with no account.
+        const invPage = (await html(b, `/admin/invites?email=${encodeURIComponent(ghostOut)}`, bossU.cookie)).text;
+        for (const t of ["Exact email", "Whole domain", "<caption>", 'scope="col"', `aria-label="Revoke ${sendTo}"`, `aria-label="Send invite email to ${sendTo}"`, "@corp.test", "From the SIGNUP_ALLOWLIST secret (edit the secret to change)", "The secret is empty.", `value="${ghostOut}"`]) if (!invPage.includes(t)) throw new Error(`/admin/invites lacks ${t}`);
+        if (invPage.includes('aria-label="Send invite email to @corp.test"')) throw new Error("a domain row offers Send invite");
+        if (!(await html(b, "/admin", bossU.cookie)).text.includes('href="/admin/invites"')) throw new Error("the admin nav lacks Invites");
+        await addInvite("email", ghostIn);
+        const notInvited = (await html(b, `/admin?q=${encodeURIComponent(ghostOut)}`, bossU.cookie)).text;
+        for (const t of [`No account for ${ghostOut}.`, `${ghostOut} is not invited.`, `/admin/invites?email=${encodeURIComponent(ghostOut)}`, "Invite them"]) if (!notInvited.includes(t)) throw new Error(`the not-invited search lacks ${t}`);
+        const invitedNoAccount = (await html(b, `/admin?q=${encodeURIComponent(ghostIn)}`, bossU.cookie)).text;
+        if (!invitedNoAccount.includes(`No account for ${ghostIn}.`) || !invitedNoAccount.includes("Invited, but hasn't signed up yet.") || invitedNoAccount.includes("is not invited")) throw new Error("the invited-but-no-account search lacks its copy");
+        console.log("gate: admin Invites page lists what was added (domain rows have no Send invite), a search with no account says not invited with an Invite them link, or invited but not signed up");
+
+        // The secret still admits, is shown read-only, and revoking a covered entry says so.
+        const secretMail = `secret-${ts}@partner.test`;
+        b = await withAdmins(boss, secretMail.toUpperCase());
+        await signUpVerified(b, secretMail);
+        await signUpVerified(b, `dom2-${ts}@corp.test`); // the database invite still admits beside the secret
+        await inviteRefused(b, `other-${ts}@partner.test`);
+        if (!(await html(b, "/admin/invites", bossU.cookie)).text.includes(`<li>${secretMail}</li>`)) throw new Error("the secret's entry is not listed read-only");
+        await addInvite("email", secretMail);
+        const covered = await api("POST", `/api/admin/invites/${inviteId(secretMail)}/revoke`);
+        const coveredBody = await said(covered);
+        if (covered.status !== 200 || coveredBody.notes?.[0] !== "Still invited through SIGNUP_ALLOWLIST.") throw new Error(`revoking a secret-covered invite -> ${covered.status} ${JSON.stringify(coveredBody)}`);
+        console.log("gate: admin invites with a SIGNUP_ALLOWLIST: a secret entry still admits beside the database, is listed read-only, and revoking a covered invite says Still invited through SIGNUP_ALLOWLIST.");
+        b = await withAdmins(`${boss},${owner2}`);
+      }
 
       // De-listed on a live session and an empty list. Restart on a list without boss (and with plain): boss's session is 404 on page and API at once; plain's live session now reaches list-users.
       b = await withAdmins(plain);

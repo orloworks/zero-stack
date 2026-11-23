@@ -1,4 +1,4 @@
-import { appendFileSync, cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
