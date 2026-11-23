@@ -32,5 +32,9 @@ it("describeAudit reads '[admin] [verb] [target]: [old → new]' and survives a 
   const row = { actorEmail: "a@x.com", verb: "ban", targetEmail: "u@x.com", detail: "spam", oldValue: "active", newValue: "banned" };
   expect(describeAudit(row)).toBe("a@x.com banned u@x.com: active → banned (spam)");
   expect(describeAudit({ ...row, actorEmail: null, targetEmail: null, detail: null })).toBe("A deleted admin banned a deleted user: active → banned");
+  const sw = { ...row, verb: "set-feature", targetEmail: null, detail: "beta", oldValue: "off", newValue: "kill" };
+  expect(describeAudit(sw)).toBe("a@x.com set feature beta: off → kill");
+  expect(describeAudit({ ...sw, verb: "set-override", targetEmail: "u@x.com", oldValue: "default", newValue: "on" })).toBe("a@x.com set feature beta for u@x.com: default → on");
+  expect(describeAudit({ ...sw, verb: "set-override", targetEmail: null, detail: null, oldValue: "default", newValue: "on" })).toBe("a@x.com set feature a feature for a deleted user: default → on");
   expect(describeAudit({ ...row, verb: "delete-user", targetEmail: null, detail: "deleted user u1", oldValue: null, newValue: null })).toBe("a@x.com deleted a user");
 });

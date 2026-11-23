@@ -9,6 +9,7 @@
   // The nav is one array; later admin pages append to it.
   const NAV = [
     { href: "/admin", label: "Users" },
+    { href: "/admin/features", label: "Features" },
     { href: "/admin/audit", label: "Audit log" },
   ];
 

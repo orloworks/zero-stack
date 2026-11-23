@@ -17,7 +17,7 @@ function installInvites(dir: string): void {
   cpSync(join(src, "src/invite-state.ts"), join(dir, "src/invite-state.ts"));
   editFile(dir, "db/schema.ts", (s) => replaceAnchor(s, 'export * from "./schema/admin";\n', 'export * from "./schema/admin";\nexport * from "./schema/invites";\n', "db/schema.ts"));
   const layout = "pages/admin/layout.svelte";
-  editFile(dir, layout, (s) => replaceAnchor(s, '    { href: "/admin/audit", label: "Audit log" },\n', '    { href: "/admin/invites", label: "Invites" },\n    { href: "/admin/audit", label: "Audit log" },\n', layout));
+  editFile(dir, layout, (s) => replaceAnchor(s, '    { href: "/admin", label: "Users" },\n', '    { href: "/admin", label: "Users" },\n    { href: "/admin/invites", label: "Invites" },\n', layout));
 }
 
 // --admin on svelte: the admin module and guard, the schema, the pages, their tests, and edits at anchors in the Account page and the schema.

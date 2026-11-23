@@ -3,9 +3,10 @@
   import { auth } from "void/client";
   import { adminAuth } from "../../../src/lib/admin-client";
   import { type ActionState, runAction, UNAUDITED_WARNING } from "../../../src/lib/admin-action";
+  import { SAVED } from "../../../src/lib/admin-display";
   import type { Props } from "./[id].server";
 
-  let { user, isMe, isAdmin, kind, status, sessions, onboarding, back }: Props = $props();
+  let { user, isMe, isAdmin, kind, status, sessions, onboarding, features, back }: Props = $props();
   const router = useRouter();
 
   const idle: ActionState = { status: "idle" };
@@ -19,6 +20,25 @@
   let revokedCount = $state(0);
   let reason = $state("");
   let typed = $state("");
+
+  // svelte-ignore state_referenced_locally
+  let choice = $state<Record<string, string>>(Object.fromEntries(features.map((f) => [f.name, f.override])));
+  let overrides = $state<Record<string, ActionState>>({});
+  const overridePending = (name: string) => overrides[name]?.status === "pending";
+  const overrideSaved = (name: string) => overrides[name]?.status === "done" || overrides[name]?.status === "done-unaudited";
+  const overrideFailure = (name: string) => {
+    const r = overrides[name];
+    return r?.status === "error" ? r.message : "";
+  };
+  async function saveOverride(e: SubmitEvent, name: string) {
+    e.preventDefault();
+    const out = await runAction(
+      (s) => (overrides[name] = s),
+      () => fetch(`/api/admin/users/${user.id}/features/${encodeURIComponent(name)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ state: choice[name] }) }),
+      "Couldn't save the override.",
+    );
+    if (out.status !== "error") refresh();
+  }
 
   const pending = (s: ActionState) => s.status === "pending";
   const refresh = () => router.refresh();
@@ -137,6 +157,28 @@
     </ul>
   </section>
 {/if}
+
+<section aria-labelledby="features-title">
+  <h2 id="features-title">Feature overrides</h2>
+  {#if features.length === 0}
+    <p>Nothing declared yet. Add features in <code>src/access.ts</code>.</p>
+  {:else}
+    {#each features as f (f.name)}
+      <form onsubmit={(e) => saveOverride(e, f.name)}>
+        <label for={`override-${f.name}`}>{f.name}</label>
+        <select id={`override-${f.name}`} name={f.name} bind:value={choice[f.name]} aria-describedby={`effective-${f.name}`}>
+          <option value="default">Use global</option>
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+        <button type="submit" aria-label={`Save ${f.name} for ${user.email}`} disabled={overridePending(f.name)}>{overridePending(f.name) ? "Saving…" : "Save"}</button>
+        <p id={`effective-${f.name}`} class="hint">Effective: {f.effective}</p>
+        {#if overrideSaved(f.name)}<p role="status">{SAVED}</p>{/if}
+        {#if overrideFailure(f.name)}<p role="alert">{overrideFailure(f.name)}</p>{/if}
+      </form>
+    {/each}
+  {/if}
+</section>
 
 <p><a href={`/admin/audit?user=${encodeURIComponent(user.email)}`}>View audit log</a></p>
 

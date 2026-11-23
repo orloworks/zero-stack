@@ -1,5 +1,5 @@
 // Pure display helpers for the admin pages (no server imports, so a page component can use them in the browser).
-export type Verb = "ban" | "unban" | "revoke-session" | "revoke-sessions" | "delete-user" | "send-link" | "invite" | "revoke-invite" | "send-invite";
+export type Verb = "ban" | "unban" | "revoke-session" | "revoke-sessions" | "delete-user" | "send-link" | "invite" | "revoke-invite" | "send-invite" | "set-feature" | "set-override";
 
 const VERBS: Record<Verb, string> = {
   ban: "banned",
@@ -11,11 +11,18 @@ const VERBS: Record<Verb, string> = {
   invite: "invited",
   "revoke-invite": "removed the invite for",
   "send-invite": "requested an invite email for",
+  "set-feature": "set feature",
+  "set-override": "set feature",
 };
+
+export const SAVED = "Saved. Applies on the user's next page load.";
 
 // "[admin email] [verb] [target]: [old → new]"; the time is rendered by the page.
 export function describeAudit(r: { actorEmail: string | null; verb: string; targetEmail: string | null; detail: string | null; oldValue: string | null; newValue: string | null }) {
   const change = r.oldValue && r.newValue ? `: ${r.oldValue} → ${r.newValue}` : "";
+  // A feature switch keeps the feature's name in `detail`; an override also names the user.
+  if (r.verb === "set-feature") return `${r.actorEmail ?? "A deleted admin"} ${VERBS["set-feature"]} ${r.detail ?? "a feature"}${change}`;
+  if (r.verb === "set-override") return `${r.actorEmail ?? "A deleted admin"} ${VERBS["set-override"]} ${r.detail ?? "a feature"} for ${r.targetEmail ?? "a deleted user"}${change}`;
   const reason = r.verb === "ban" && r.detail ? ` (${r.detail})` : "";
   const target = r.verb === "delete-user" ? "a user" : (r.targetEmail ?? "a deleted user");
   return `${r.actorEmail ?? "A deleted admin"} ${VERBS[r.verb as Verb] ?? r.verb} ${target}${change}${reason}`;
