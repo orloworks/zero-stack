@@ -13,7 +13,7 @@ tool, published without support promises.
 ## Usage
 
 ```sh
-bunx github:orloworks/zero-stack#v0.3.0 my-app
+bunx github:orloworks/zero-stack#v0.4.0 my-app
 ```
 
 It runs straight from this public GitHub repo at a release tag: no npm package, no login. Without `#<tag>` you get whatever is on `main`.
