@@ -142,7 +142,7 @@ in `AGENTS.md`.
   editing without the gate, never emptying the list.
 - `--storage` (any framework): `src/storage.ts` (per-user keys `users/<id>/<name>` that reject
   escaping names, `purgeUserFiles`) and `tests/storage.test.ts`. With auth (always, via the
-  implied flag) `routes/api/files/[name].ts` adds PUT (streamed, needs Content-Length), GET
+  implied flag) `routes/api/files/[name].ts` adds PUT (streamed, needs Content-Length, 413 over `MAX_BYTES` = 10 MB), GET
   and DELETE of the signed-in user's own files, each behind `requireAuth`. No route ships
   without auth. With `--account-deletion`, `auth.ts` purges the user's files in `beforeDelete`
   (fail closed: a storage error aborts the deletion, code `STORAGE_PURGE_FAILED`, shown by the
@@ -299,7 +299,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   shows the blocked copy, unban restores it; revoke one then all sessions; send-link lands in the dev inbox and sets a password (with no Turnstile token, and as a
   set-password link for an unverified invite-only user); self-ban and self-delete 400; delete removes the row, sessions and files and leaves no audit entry
   holding the deleted email; the audit page newest first and `?user=`; `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
-  without a session, upload and download under `users/<id>/`, escaping names rejected (keys
+  without a session, upload and download under `users/<id>/`, escaping names rejected, exactly 10 MB stored and 10 MB + 1 byte refused 413 with nothing stored (keys
   read back from the local R2 state), object gone after account deletion. The
   `STORAGE_PURGE_FAILED` path is covered by string tests only, not over HTTP.
 - Each wave also gets one manual svelte `/qa-only` browser pass (gstack browse) on the

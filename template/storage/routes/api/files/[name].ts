@@ -15,7 +15,7 @@ export const PUT = defineHandler(async (c) => {
   const body = c.req.raw.body;
   const length = c.req.header("content-length");
   if (!body || !length) return new Response("Send the file as the request body with a Content-Length.", { status: 411 });
-  // The runtime holds the body to its Content-Length, so checking the header caps what reaches R2.
+  // The runtime holds the body to its Content-Length, so checking the header caps what reaches R2. `!(n <= MAX)` also refuses a non-numeric length.
   if (!(Number(length) <= MAX_BYTES)) return new Response(`Files are limited to ${MAX_BYTES} bytes.`, { status: 413 });
   await storage.put(key, body, { httpMetadata: { contentType: c.req.header("content-type") } });
   return new Response(null, { status: 201 });

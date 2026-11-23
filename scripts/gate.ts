@@ -385,11 +385,16 @@ try {
         const r = await file(bad, { method: "PUT", body: "x", headers: { cookie } });
         if (r.status < 400 || r.status >= 500) throw new Error(`PUT ${bad} -> ${r.status}, expected a 4xx`);
       }
-      const big = await file("big.bin", { method: "PUT", body: new Uint8Array(10 * 1024 * 1024 + 1), headers: { cookie } });
-      if (big.status !== 413) throw new Error(`a 10 MB + 1 byte upload -> ${big.status}, expected 413`);
+      const exact = await file("exact.bin", { method: "PUT", body: new Uint8Array(10 * 1024 * 1024), headers: { cookie } });
+      if (exact.status !== 201 || (await file("exact.bin", { method: "DELETE", headers: { cookie } })).status !== 204) throw new Error(`an upload of exactly 10 MB -> ${exact.status}, expected 201`);
+      // vp dev's proxy (vite -> miniflare via undici) answers 500 "fetch failed" in about 1 of 10 runs when the Worker replies before reading
+      // the whole upload; the Worker said 413. Retry only that, and check below that nothing was stored either way.
+      let big = 0;
+      for (let i = 0; i < 4 && big !== 413; i++) big = (await file("big.bin", { method: "PUT", body: new Uint8Array(10 * 1024 * 1024 + 1), headers: { cookie } })).status;
+      if (big !== 413) throw new Error(`a 10 MB + 1 byte upload -> ${big}, expected 413`);
       const keys = r2Keys();
       if (keys.join() !== `users/${storageUser}/a.txt`) throw new Error(`R2 holds ${JSON.stringify(keys)}, expected only users/${storageUser}/a.txt`);
-      console.log("gate: storage routes 401 without a session; upload/download under users/<id>/; escaping names rejected; over 10 MB is 413 and stores nothing");
+      console.log("gate: storage routes 401 without a session; upload/download under users/<id>/; escaping names rejected; exactly 10 MB stored; over 10 MB is 413 and stores nothing");
     }
     // Route pages for the enabled features; the loader is a file, not a route, so it is checked separately.
     const routes = ["sign-in", "sign-up", ...(config.framework === "svelte" ? ["settings"] : []), ...(config.email ? ["forgot-password", "reset-password"] : [])];
