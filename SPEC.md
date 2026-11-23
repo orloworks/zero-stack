@@ -149,7 +149,7 @@ in `AGENTS.md`.
   page as partial-purge copy) and sweeps again in `afterDelete`.
 
 - `--admin` (svelte): an admin area at `/admin` in the same app (spec #51; tickets #52: guard, Users,
-  User detail, Audit log, #53: invites and onboarding, and #54: feature switches). Settings is a later ticket. An **admin** is a signed-in
+  User detail, Audit log, #53: invites and onboarding, #54: feature switches, and #55: settings). An **admin** is a signed-in
   user with a verified email on the `ADMIN_EMAILS` secret (the invite-only matcher, `src/signup-allowlist.ts`, copied when
   `--invite-only` did not). It is optional with an empty default in the composed `env.ts` (unset or empty means no admins and
   `/admin` 404s while the app serves); the local `.env` gets `ADMIN_EMAILS=@example.com`. There is no promote button.
@@ -215,6 +215,21 @@ in `AGENTS.md`.
     log) is a `<fieldset>` radio group per feature with its own Save; user detail has a select per feature and the effective result. Copy: "Saved. Applies on the
     user's next page load." and "Nothing declared yet. Add features in `src/access.ts`." `routes/api/example-feature.ts` is the gated example the gate drives.
     Tests: `tests/access.test.ts` (exports, precedence table over every combination, fail-closed) and `tests/access-pages.test.ts`.
+  - **Settings** (`--admin`, #55; D16, E3, story 81-82, 54-56, 73). `src/settings.ts` exports exactly `SETTINGS`, `setting(key)` and `adminSettings(c)`. A setting is declared in
+    `SETTINGS` as a key, a `type` (`text`, `number` with optional `min` and `max`, `boolean`, `choice` with `values`), a `default` and a `description` (the scaffold ships four
+    examples and `routes/api/example-settings.ts` that reads them). `await setting("key")` is typed from the declaration and returns the stored value, or the default when
+    nothing is stored or the stored text no longer fits (wrong type, out of range, not in the set: the Settings page says "Stored value is invalid; using the default.");
+    a database failure throws. The pure parse and validate (`src/lib/setting-value.ts`: text up to 1000 characters, number with inclusive bounds, boolean, choice, undeclared key
+    refused) is shared by the getter, the admin saves and the page's display. `setting` (key primary, value as text, updated at) lives in `db/schema/admin.ts`; rows for
+    undeclared keys are ignored. `adminSettings(c)` is admin only and bound to the admin: `set(key, value)` parses against the declaration (400 with the message, 400 for an
+    undeclared key) and upserts the row with its audit entry (`set-setting`, old value then new) in one `db.batch`; `reset(key)` deletes the row with its audit entry
+    (`reset-setting`, old value then the default) in one `db.batch` whose audit insert only runs while the row it describes still exists, so a reset that finds no row or loses a race
+    to another request writes nothing and answers 404. Routes: `POST /api/admin/settings/:key` (`{ value }`) and `DELETE /api/admin/settings/:key`, admin and same-origin. The
+    Settings page (nav: Users, Invites, Features, Settings, Audit log) is one form per setting with its label, description, "Default: X" and its own Save: a checkbox plus Save for
+    on/off (never save-on-tap), `type="number"` with `min` and `max`, a `<select>` for a choice, and "Reset to default" once a stored value differs; the form is `novalidate`, so the
+    server's message ("Enter a number from 1 to 100.") is the inline error. Copy: "Saved. Applies on the user's next page load." and "Nothing declared yet. Add settings in
+    `src/settings.ts`." A setting is never a secret (AGENTS.md says so). Tests: `tests/settings.test.ts` (exports, defaults valid, text, number bounds, boolean, choice, undeclared
+    key, stale value) and `tests/settings-pages.test.ts`.
   - `session.create.before` writes `lastSignInAt` (a `user.additionalFields` column) and nothing else.
   - The CLI closes with "To use /admin, sign in with an email on ADMIN_EMAILS and verify it."; `AGENTS.md` gets an Admin
     section. Generated tests: `tests/admin*.test.ts` (matcher, `userStatus`, the guard over a real Better Auth, the action
@@ -331,7 +346,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   `ADMIN_EMAILS` is 404 while `GET /` is 200; search by email (any case) and by name, the no-match copy, `%` not a wildcard, paging; ban ends sessions and sign-in
   shows the blocked copy, unban restores it; revoke one then all sessions; send-link lands in the dev inbox and sets a password (with no Turnstile token, and as a
   set-password link for an unverified invite-only user); self-ban and self-delete 400; delete removes the row, sessions and files and leaves no audit entry
-  holding the deleted email; the audit page newest first and `?user=`; onboarding "n of m" in the list and the steps on user detail, and onboarding rows gone with the user; feature switches: nothing set is off (401 signed out, 403 signed in), global on and off, an override in both directions, the kill switch beats an override on, the pages show the effective result and reason, an undeclared row is dropped, refused changes write no audit entry and every change is audited; `--admin --invite-only` with no `SIGNUP_ALLOWLIST`: a database invite (exact and domain) admits at once with no restart, a lookalike and no source are refused, revoke refuses again and leaves the existing account, the reset-password re-check reads the database, send-invite lands in the dev inbox, every change is audited, a search with no account says not invited or invited, and with a secret the secret still admits, shows read-only and a revoke of a covered entry says "Still invited through SIGNUP_ALLOWLIST."; `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
+  holding the deleted email; the audit page newest first and `?user=`; onboarding "n of m" in the list and the steps on user detail, and onboarding rows gone with the user; feature switches: nothing set is off (401 signed out, 403 signed in), global on and off, an override in both directions, the kill switch beats an override on, the pages show the effective result and reason, an undeclared row is dropped, refused changes write no audit entry and every change is audited; settings: the getters return the declared defaults, a save of each type is read back and audited with the old and new value, an out-of-range number, a wrong type, a value outside the set, an undeclared key, a non-admin and a missing or foreign Origin are refused with no audit entry, reset restores the default with one entry, a reset at the default and the loser of two concurrent resets write nothing, an invalid stored value reads as the default and is flagged, an undeclared row is dropped; `--admin --invite-only` with no `SIGNUP_ALLOWLIST`: a database invite (exact and domain) admits at once with no restart, a lookalike and no source are refused, revoke refuses again and leaves the existing account, the reset-password re-check reads the database, send-invite lands in the dev inbox, every change is audited, a search with no account says not invited or invited, and with a secret the secret still admits, shows read-only and a revoke of a covered entry says "Still invited through SIGNUP_ALLOWLIST."; `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
   without a session, upload and download under `users/<id>/`, escaping names rejected, exactly 10 MB stored and 10 MB + 1 byte refused 413 with nothing stored (keys
   read back from the local R2 state), object gone after account deletion. The
   `STORAGE_PURGE_FAILED` path is covered by string tests only, not over HTTP.

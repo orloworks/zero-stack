@@ -629,7 +629,7 @@ try {
     const upload = (b: string, cookie: string, name: string, body: string) => fetch(`${b}/api/files/${name}`, { method: "PUT", body, headers: { cookie, "content-type": "text/plain" } }).then((r) => r.status);
     const signIn = (b: string, address: string, password = gatePw) => authPost(b, "/api/auth/sign-in/email", { email: address, password });
     // The 404 matrix: pages, the plugin's endpoints and our own admin route.
-    const adminPaths = (id: string): [string, string][] => [["GET", "/admin"], ["GET", "/admin/audit"], ["GET", `/admin/users/${id}`], ["GET", "/admin/users"], ["GET", "/api/auth/admin/list-users"], ["GET", `/api/auth/admin/get-user?id=${id}`], ["POST", `/api/admin/users/${id}/send-link`], ["GET", "/admin/features"]];
+    const adminPaths = (id: string): [string, string][] => [["GET", "/admin"], ["GET", "/admin/audit"], ["GET", `/admin/users/${id}`], ["GET", "/admin/users"], ["GET", "/api/auth/admin/list-users"], ["GET", `/api/auth/admin/get-user?id=${id}`], ["POST", `/api/admin/users/${id}/send-link`], ["GET", "/admin/features"], ["GET", "/admin/settings"]];
     const expectAll = async (b: string, who: string, cookie: string, id: string, want: (m: string, p: string) => number) => {
       for (const [m, p] of adminPaths(id)) {
         const r = await call(b, m, p, cookie, m === "POST" ? { userId: id } : undefined);
@@ -948,6 +948,84 @@ try {
         const log = (await html(b, "/admin/audit", bossU.cookie)).text;
         for (const t of [`${boss} set feature ${F}: on → kill`, `${boss} set feature ${F} for ${feat}: default → on`]) if (!log.includes(t)) throw new Error(`/admin/audit lacks ${t}`);
         console.log("gate: features: every global change and override wrote an audit entry with its old and new value");
+      }
+
+      // Settings (#55): typed runtime settings. The scaffold declares four examples (text, number 1..100 default 10, on/off, a choice) and routes/api/example-settings.ts reads them.
+      {
+        const N = "example-number", set = (key: string, value: unknown, cookie = bossU.cookie) => call(b, "POST", `/api/admin/settings/${key}`, cookie, { value });
+        const del = (key: string, cookie = bossU.cookie) => call(b, "DELETE", `/api/admin/settings/${key}`, cookie);
+        const read = async () => (await (await call(b, "GET", "/api/example-settings", plainU.cookie)).json()) as { text: string; number: number; toggle: boolean; choice: string };
+        const changes = () => auditRows().filter((r) => r.verb === "set-setting" || r.verb === "reset-setting");
+        const need = (cond: boolean, what: string) => { if (!cond) throw new Error(`settings: ${what}`); };
+        const SAVED_COPY = "Saved. Applies on the user's next page load.";
+        // Nothing stored: every getter returns its declared default. Signed out is 401.
+        need((await call(b, "GET", "/api/example-settings")).status === 401, "the example route answered a signed-out request");
+        need(JSON.stringify(await read()) === JSON.stringify({ text: "Hello", number: 10, toggle: false, choice: "medium" }), "the getters did not return the declared defaults");
+        let page = (await html(b, "/admin/settings", bossU.cookie)).text;
+        for (const t of ["<h1", 'href="/admin/settings"', N, "A number between 1 and 100.", "Default: 10", "Default: Off", "Default: medium", "Default: Hello", 'type="number"', 'min="1"', 'max="100"', 'type="checkbox"', "<select", `aria-label="Save ${N}"`, "<form"]) need(page.includes(t), `/admin/settings lacks ${t}`);
+        need(!page.includes("Reset to default") && !page.includes("Stored value is invalid"), "the page offered a reset with nothing stored");
+        // Save: the value is read back, the page offers a reset, and the audit entry has the old and new value.
+        const saved = await set(N, 25);
+        need(saved.status === 200 && ((await saved.json()) as { message: string }).message === SAVED_COPY, "saving a number did not answer 200 with the success copy");
+        need((await read()).number === 25, "the getter did not return the saved number");
+        need((await set("example-text", "Hi there")).status === 200 && (await set("example-toggle", true)).status === 200 && (await set("example-choice", "large")).status === 200, "saving a text, an on/off and a choice setting failed");
+        const now = await read();
+        need(now.text === "Hi there" && now.toggle === true && now.choice === "large", `the getters returned ${JSON.stringify(now)} after saving every type`);
+        page = (await html(b, "/admin/settings", bossU.cookie)).text;
+        need(page.includes(`aria-label="Reset ${N} to default"`) && page.includes("Reset to default") && page.includes('value="25"'), "the page does not show the saved number and its Reset to default");
+        const logged = (verb: string, key: string, old: string, now: string) => changes().some((r) => r.verb === verb && r.detail === key && r.old_value === old && r.new_value === now);
+        need(logged("set-setting", N, "10", "25") && logged("set-setting", "example-toggle", "false", "true") && logged("set-setting", "example-choice", "medium", "large"), `the audit log lacks a save: ${JSON.stringify(changes().map((r) => [r.verb, r.detail, r.old_value, r.new_value]))}`);
+        console.log("gate: settings: the getters return the declared defaults, a save of each type is read back, shown with its reset, and audited with the old and new value");
+        // Refusals: out of range 400 (both ends), a wrong type, an undeclared key, a missing user's rights, no or a foreign Origin. Nothing is written and the value stands.
+        const before = auditRows().length;
+        const fetchOrigin = (method: string, key: string, origin?: string) => fetch(`${b}/api/admin/settings/${key}`, { method, headers: { ...(origin && { origin }), "content-type": "application/json", cookie: bossU.cookie }, body: method === "POST" ? JSON.stringify({ value: 30 }) : undefined });
+        const refused: [string, number, number | number[]][] = [
+          ["number over the max", (await set(N, 101)).status, 400],
+          ["number under the min", (await set(N, 0)).status, 400],
+          ["number as text", (await set(N, "abc")).status, 400],
+          ["number missing", (await call(b, "POST", `/api/admin/settings/${N}`, bossU.cookie, {})).status, 400],
+          ["on/off as text", (await set("example-toggle", "maybe")).status, 400],
+          ["choice outside the set", (await set("example-choice", "huge")).status, 400],
+          ["text over 1000 characters", (await set("example-text", "x".repeat(1001))).status, 400],
+          ["undeclared key", (await set("ghost", 1)).status, 400],
+          ["undeclared key reset", (await del("ghost")).status, 400],
+          ["non-admin save", (await set(N, 30, plainU.cookie)).status, 404],
+          ["non-admin reset", (await del(N, plainU.cookie)).status, 404],
+          ["signed-out save", (await set(N, 30, "")).status, 404],
+          ["no Origin save", (await fetchOrigin("POST", N)).status, 403],
+          ["no Origin reset", (await fetchOrigin("DELETE", N)).status, 403],
+          ["foreign Origin save", (await fetchOrigin("POST", N, "https://evil.test")).status, [403, 404]],
+          ["foreign Origin reset", (await fetchOrigin("DELETE", N, "https://evil.test")).status, [403, 404]],
+        ];
+        for (const [what, got, want] of refused) if (Array.isArray(want) ? !want.includes(got) : got !== want) throw new Error(`settings: ${what} answered ${got}, expected ${want}`);
+        const refusal = (await set(N, 101).then((r) => r.json())) as { message: string };
+        need(refusal.message === "Enter a number from 1 to 100.", `the out-of-range message was "${refusal.message}"`);
+        need((await read()).number === 25 && auditRows().length === before, "a refused setting change wrote an audit entry or changed the value");
+        need((await html(b, "/admin/settings", plainU.cookie)).status === 404, "a non-admin reached /admin/settings");
+        console.log("gate: settings: an out-of-range number, a wrong type, a value outside the set, an undeclared key, a non-admin and a missing or foreign Origin are refused and write no audit entry");
+        // Reset to the default: one entry, the getter returns the default again, the page stops offering the reset. A second reset has nothing to do and writes nothing.
+        const n = changes().length;
+        need((await del(N)).status === 200 && (await read()).number === 10, "reset did not restore the default");
+        need(changes().length === n + 1 && logged("reset-setting", N, "25", "10"), "reset did not write exactly one audit entry");
+        need(!(await html(b, "/admin/settings", bossU.cookie)).text.includes(`aria-label="Reset ${N} to default"`), "the page still offers a reset at the default");
+        const again = await del(N);
+        need(again.status === 404 && changes().length === n + 1, `a reset at the default answered ${again.status} or wrote an entry`);
+        // Two resets of one setting at once: one wins and writes one entry, the other answers 404 and writes nothing.
+        await set(N, 30);
+        const m = changes().length;
+        const race = (await Promise.all([del(N), del(N)])).map((r) => r.status).sort();
+        need(race.join() === "200,404" && changes().length === m + 1 && (await read()).number === 10, `two concurrent resets answered ${race.join()} and left ${changes().length - m} entries`);
+        console.log("gate: settings: reset restores the default with one audit entry, a reset at the default and the loser of two concurrent resets write nothing");
+        // A stored value that no longer fits (here out of range, as after a declaration changed) reads as the default and says so; reset clears it. A row for an undeclared key is dropped.
+        onUser(boss, "INSERT OR REPLACE INTO setting (key, value, updated_at) SELECT 'example-number', '999', 1700000000000 WHERE ? IS NOT NULL");
+        onUser(boss, "INSERT OR REPLACE INTO setting (key, value, updated_at) SELECT 'ghost', 'x', 1700000000000 WHERE ? IS NOT NULL");
+        need((await read()).number === 10, "an out-of-range stored value was returned instead of the default");
+        const stale = (await html(b, "/admin/settings", bossU.cookie)).text;
+        need(stale.includes("Stored value is invalid; using the default.") && stale.includes(`aria-label="Reset ${N} to default"`) && !stale.includes("ghost"), "the page did not flag the stored value as invalid, or showed an undeclared row");
+        need((await del(N)).status === 200 && !(await html(b, "/admin/settings", bossU.cookie)).text.includes("Stored value is invalid"), "reset did not clear the invalid stored value");
+        const log = (await html(b, "/admin/audit", bossU.cookie)).text;
+        for (const t of [`${boss} set setting ${N}: 10 → 25`, `${boss} reset setting ${N}: 25 → 10`]) need(log.includes(t), `/admin/audit lacks ${t}`);
+        console.log("gate: settings: an invalid stored value reads as the default and is flagged, an undeclared row is dropped, and the audit log reads \"set setting\" and \"reset setting\"");
       }
 
       if (config.inviteOnly) {
