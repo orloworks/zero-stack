@@ -41,7 +41,7 @@ it("inputs are labelled, field errors are tied to their input, and success and e
   expect(detail).toContain('<label for="delete-confirm">');
   expect(detail).toMatch(/aria-describedby=\{del\.status === "error" \? "delete-error"/);
   expect(detail).toContain('id="delete-error" role="alert"');
-  for (const f of pages) for (const input of read(f).match(/<input\b[^>]*>/g) ?? []) expect([f, input]).toEqual([f, expect.stringMatching(/\bid="/)]);
+  for (const f of pages) for (const input of read(f).match(/<input\b[^>]*>/g) ?? []) expect([f, input]).toEqual([f, expect.stringMatching(/\bid=["{]/)]);
   expect(detail).toContain('role="status"');
 });
 

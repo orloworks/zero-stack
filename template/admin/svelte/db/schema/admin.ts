@@ -35,3 +35,33 @@ export const onboardingStep = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.step] })],
 );
+
+// The global state of a declared feature (src/access.ts): "on", "off" or "kill". No row means off. Rows for features no longer declared are ignored, so deleting a
+// feature is a code change only. Pages and routes call src/access.ts, never this table.
+export const featureSwitch = sqliteTable("feature_switch", {
+  feature: text("feature").primaryKey(),
+  state: text("state").notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+// One user's override of a feature: "on" or "off". No row means "use global". User-owned, so it cascades on user delete.
+export const featureOverride = sqliteTable(
+  "feature_override",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => userTable.id, { onDelete: "cascade" }),
+    feature: text("feature").notNull(),
+    state: text("state").notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.feature] })],
+);
+
+// The stored value of a declared setting (src/settings.ts), as text. No row means the declared default. Rows for settings no longer declared, or whose value no longer
+// fits the declaration, are ignored. Pages and routes call src/settings.ts, never this table.
+export const setting = sqliteTable("setting", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});

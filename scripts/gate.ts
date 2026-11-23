@@ -629,7 +629,7 @@ try {
     const upload = (b: string, cookie: string, name: string, body: string) => fetch(`${b}/api/files/${name}`, { method: "PUT", body, headers: { cookie, "content-type": "text/plain" } }).then((r) => r.status);
     const signIn = (b: string, address: string, password = gatePw) => authPost(b, "/api/auth/sign-in/email", { email: address, password });
     // The 404 matrix: pages, the plugin's endpoints and our own admin route.
-    const adminPaths = (id: string): [string, string][] => [["GET", "/admin"], ["GET", "/admin/audit"], ["GET", `/admin/users/${id}`], ["GET", "/admin/users"], ["GET", "/api/auth/admin/list-users"], ["GET", `/api/auth/admin/get-user?id=${id}`], ["POST", `/api/admin/users/${id}/send-link`]];
+    const adminPaths = (id: string): [string, string][] => [["GET", "/admin"], ["GET", "/admin/audit"], ["GET", `/admin/users/${id}`], ["GET", "/admin/users"], ["GET", "/api/auth/admin/list-users"], ["GET", `/api/auth/admin/get-user?id=${id}`], ["POST", `/api/admin/users/${id}/send-link`], ["GET", "/admin/features"], ["GET", "/admin/settings"]];
     const expectAll = async (b: string, who: string, cookie: string, id: string, want: (m: string, p: string) => number) => {
       for (const [m, p] of adminPaths(id)) {
         const r = await call(b, m, p, cookie, m === "POST" ? { userId: id } : undefined);
@@ -825,6 +825,7 @@ try {
       onUser(doomed, "INSERT INTO onboarding_step (user_id, step, reached_at) VALUES (?, 'example-step', 1700000000000)");
       if (!rows("onboarding_step", "SELECT 1 FROM onboarding_step WHERE user_id = ?", del.id).length) throw new Error("no onboarding row to cascade");
       await call(b, "POST", "/api/auth/admin/ban-user", bossU.cookie, { userId: del.id, banReason: `note about ${doomed}` });
+      if ((await call(b, "POST", `/api/admin/users/${del.id}/features/example-feature`, bossU.cookie, { state: "on" })).status !== 200) throw new Error("setting the doomed user's override failed");
       const removed = await call(b, "POST", "/api/auth/admin/remove-user", bossU.cookie, { userId: del.id });
       if (removed.status !== 200) throw new Error(`remove-user -> ${removed.status}`);
       if (rows("user", "SELECT 1 FROM user WHERE id = ?", del.id).length || (await sessionUser(b, del.cookie))) throw new Error("the deleted user row or session is still there");
@@ -835,6 +836,7 @@ try {
       const entry = auditRows().find((r) => r.verb === "delete-user");
       if (!entry || entry.target_user_id !== null || entry.target_email !== null || entry.actor_email !== boss || !String(entry.detail).includes(del.id)) throw new Error(`the delete audit entry is wrong: ${JSON.stringify(entry)}`);
       if (!auditRows().some((r) => r.verb === "ban" && r.target_email === null && r.detail === null && r.target_user_id === null)) throw new Error("the deleted user's earlier audit rows were not redacted to a null email and detail");
+      if (!auditRows().some((r) => r.verb === "set-override" && r.target_email === null && r.detail === "example-feature")) throw new Error("deleting a user erased the feature name from their override entry");
       console.log("gate: admin delete removes the user row, sessions" + (config.storage ? " and files" : "") + "; no audit entry holds the deleted email or free text; the delete entry has no target");
 
       // Audit page: newest first, filter by the affected user, "View audit log" on user detail.
@@ -863,6 +865,170 @@ try {
       for (const t of [`Onboarding: ${steps} of ${steps}`, "Signed up: Done", "Email verified: Done", "example-step: Done"]) if (!otherPage.includes(t)) throw new Error(`user detail lacks ${t}`);
       if (!(await html(b, `/admin/users/${victimU.id}`, bossU.cookie)).text.includes("example-step: Not yet")) throw new Error("an unreached step did not say Not yet");
       console.log(`gate: admin onboarding: the Users list shows "n of m" (2 of ${steps}, then ${steps} of ${steps} after a step), user detail lists the steps with Done and Not yet`);
+
+      // Feature switches (#54): precedence over HTTP. The scaffold declares "example-feature" and gates routes/api/example-feature.ts on it.
+      {
+        const F = "example-feature", feat = addr("feat"), featU = await mk(b, feat);
+        const gated = (cookie = "") => call(b, "GET", "/api/example-feature", cookie);
+        const setGlobal = (state: unknown) => call(b, "POST", `/api/admin/features/${F}`, bossU.cookie, { state });
+        const setUser = (u: { id: string }, state: unknown) => call(b, "POST", `/api/admin/users/${u.id}/features/${F}`, bossU.cookie, { state });
+        const expectGate = async (what: string, who: string, cookie: string, want: number) => {
+          const got = (await gated(cookie)).status;
+          if (got !== want) throw new Error(`features: ${what}: ${who} got ${got}, expected ${want}`);
+        };
+        const auditCount = () => auditRows().length;
+        // Nothing set: off for everyone; signed out is 401, signed in is 403.
+        await expectGate("nothing set", "signed out", "", 401);
+        await expectGate("nothing set", "a user", featU.cookie, 403);
+        // Global on and off.
+        if ((await setGlobal("on")).status !== 200) throw new Error("features: setting the global state on failed");
+        await expectGate("global on", "a user", featU.cookie, 200);
+        await expectGate("global on", "signed out", "", 401);
+        const onBody = (await (await gated(featU.cookie)).json()) as { features: string[] };
+        if (!onBody.features.includes(F)) throw new Error("features(c) did not list a feature that is on");
+        if ((await setGlobal("off")).status !== 200) throw new Error("features: setting the global state off failed");
+        await expectGate("global off", "a user", featU.cookie, 403);
+        // An override in both directions: on beats global off for that user only; off beats global on.
+        if ((await setUser(featU, "on")).status !== 200) throw new Error("features: setting an override on failed");
+        await expectGate("override on, global off", "the user", featU.cookie, 200);
+        await expectGate("override on, global off", "another user", plainU.cookie, 403);
+        await setGlobal("on");
+        if ((await setUser(featU, "off")).status !== 200) throw new Error("features: setting an override off failed");
+        await expectGate("override off, global on", "the user", featU.cookie, 403);
+        await expectGate("override off, global on", "another user", plainU.cookie, 200);
+        // The kill switch beats an override on, for everyone.
+        await setUser(featU, "on");
+        await expectGate("override on, global on", "the user", featU.cookie, 200);
+        if ((await setGlobal("kill")).status !== 200) throw new Error("features: setting the kill switch failed");
+        await expectGate("kill switch", "the user with an override on", featU.cookie, 403);
+        await expectGate("kill switch", "another user", plainU.cookie, 403);
+        // The pages show the result and the reason, computed by decide().
+        const killed = (await html(b, `/admin/users/${featU.id}`, bossU.cookie)).text;
+        for (const t of ["Feature overrides", "Use global", `id="override-${F}"`, "Effective: Off: kill switch applies to everyone", `aria-label="Save ${F} for ${feat}"`]) if (!killed.includes(t)) throw new Error(`user detail lacks ${t} under the kill switch`);
+        await setGlobal("on");
+        if (!(await html(b, `/admin/users/${featU.id}`, bossU.cookie)).text.includes("Effective: On: user override")) throw new Error("user detail does not say On: user override");
+        await setUser(featU, "default");
+        if (!(await html(b, `/admin/users/${featU.id}`, bossU.cookie)).text.includes("Effective: On: on for everyone")) throw new Error("user detail does not follow the global state once the override is reset");
+        await expectGate("override reset, global on", "the user", featU.cookie, 200);
+        const page = (await html(b, "/admin/features", bossU.cookie)).text;
+        for (const t of ["<h1", F, "<fieldset>", "<legend", 'type="radio"', "Everyone, except users set to off", "No one, except users set to on", "No one. User settings are ignored.", `aria-label="Save ${F}"`, 'href="/admin/features"']) if (!page.includes(t)) throw new Error(`/admin/features lacks ${t}`);
+        console.log("gate: features: nothing set is off (401 signed out, 403 signed in), global on and off, an override in both directions, the kill switch beats an override on, and the pages show the effective result and reason");
+        // A row for a feature that is no longer declared is dropped: it neither reaches features(c) nor the pages, and nothing fails.
+        onUser(feat, "INSERT INTO feature_switch (feature, state, updated_at) SELECT 'ghost', 'on', 1700000000000 WHERE ? IS NOT NULL");
+        onUser(feat, "INSERT INTO feature_override (user_id, feature, state, updated_at) VALUES (?, 'ghost', 'on', 1700000000000)");
+        const ghost = (await (await gated(featU.cookie)).json()) as { features: string[] };
+        if (ghost.features.join() !== F) throw new Error(`features(c) with an undeclared row returned ${ghost.features.join()}`);
+        const ghostPage = await html(b, "/admin/features", bossU.cookie), ghostUser = await html(b, `/admin/users/${featU.id}`, bossU.cookie);
+        if (ghostPage.status !== 200 || ghostUser.status !== 200 || ghostPage.text.includes("ghost") || ghostUser.text.includes("ghost")) throw new Error("an undeclared feature row reached a page");
+        if ((await setGlobal("on")).status !== 200) throw new Error("an undeclared row broke set()");
+        console.log("gate: features: an undeclared feature row and override are dropped");
+        // Refusals write nothing: a bad state, an undeclared feature, a missing user, a non-admin, no or a foreign Origin.
+        const before = auditCount();
+        const refused: [string, number][] = [
+          [`bad state: ${(await setGlobal("sometimes")).status}`, 400],
+          [`no state: ${(await setGlobal(undefined)).status}`, 400],
+          [`kill as an override: ${(await setUser(featU, "kill")).status}`, 400],
+          [`undeclared feature: ${(await call(b, "POST", "/api/admin/features/ghost", bossU.cookie, { state: "on" })).status}`, 400],
+          [`missing user: ${(await call(b, "POST", `/api/admin/users/not-a-user/features/${F}`, bossU.cookie, { state: "on" })).status}`, 404],
+          [`non-admin global: ${(await call(b, "POST", `/api/admin/features/${F}`, plainU.cookie, { state: "off" })).status}`, 404],
+          [`non-admin override: ${(await call(b, "POST", `/api/admin/users/${featU.id}/features/${F}`, plainU.cookie, { state: "off" })).status}`, 404],
+          [`signed out: ${(await call(b, "POST", `/api/admin/features/${F}`, "", { state: "off" })).status}`, 404],
+          [`foreign Origin: ${(await fetch(`${b}/api/admin/features/${F}`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.test", cookie: bossU.cookie }, body: JSON.stringify({ state: "off" }) })).status}`, 403],
+          [`no Origin: ${(await fetch(`${b}/api/admin/features/${F}`, { method: "POST", headers: { "content-type": "application/json", cookie: bossU.cookie }, body: JSON.stringify({ state: "off" }) })).status}`, 403],
+        ];
+        // A foreign Origin is 403 or 404 (Better Auth ignores the session cookie on it, so the admin looks signed out); either way nothing runs.
+        for (const [what, want] of refused) if (Number(what.split(": ")[1]) !== want && !(what.startsWith("foreign Origin") && what.endsWith("404"))) throw new Error(`features: ${what}, expected ${want}`);
+        await expectGate("after the refusals", "the user", featU.cookie, 200);
+        if (auditCount() !== before) throw new Error("a refused feature change wrote an audit entry");
+        if ((await html(b, "/admin/features", plainU.cookie)).status !== 404) throw new Error("a non-admin reached /admin/features");
+        console.log("gate: features: a bad state, an undeclared feature, a missing user, a non-admin and a missing or foreign Origin are refused and write no audit entry");
+        // Every change is audited, in the same batch as the change, with the old and new value.
+        const audited = auditRows().filter((r) => r.verb === "set-feature" || r.verb === "set-override");
+        const has = (verb: string, old: string, now: string) => audited.some((r) => r.verb === verb && r.detail === F && r.old_value === old && r.new_value === now);
+        if (!has("set-feature", "off", "on") || !has("set-feature", "on", "kill") || !has("set-override", "default", "on") || !has("set-override", "on", "default") || !has("set-override", "on", "off")) throw new Error(`features: the audit log lacks an entry: ${JSON.stringify(audited.map((r) => [r.verb, r.old_value, r.new_value]))}`);
+        if (!audited.some((r) => r.verb === "set-override" && r.target_email === feat)) throw new Error("an override entry does not name the user");
+        const log = (await html(b, "/admin/audit", bossU.cookie)).text;
+        for (const t of [`${boss} set feature ${F}: on → kill`, `${boss} set feature ${F} for ${feat}: default → on`]) if (!log.includes(t)) throw new Error(`/admin/audit lacks ${t}`);
+        console.log("gate: features: every global change and override wrote an audit entry with its old and new value");
+      }
+
+      // Settings (#55): typed runtime settings. The scaffold declares four examples (text, number 1..100 default 10, on/off, a choice) and routes/api/example-settings.ts reads them.
+      {
+        const N = "example-number", set = (key: string, value: unknown, cookie = bossU.cookie) => call(b, "POST", `/api/admin/settings/${key}`, cookie, { value });
+        const del = (key: string, cookie = bossU.cookie) => call(b, "DELETE", `/api/admin/settings/${key}`, cookie);
+        const read = async () => (await (await call(b, "GET", "/api/example-settings", plainU.cookie)).json()) as { text: string; number: number; toggle: boolean; choice: string };
+        const changes = () => auditRows().filter((r) => r.verb === "set-setting" || r.verb === "reset-setting");
+        const need = (cond: boolean, what: string) => { if (!cond) throw new Error(`settings: ${what}`); };
+        const SAVED_COPY = "Saved. Applies on the user's next page load.";
+        // Nothing stored: every getter returns its declared default. Signed out is 401.
+        need((await call(b, "GET", "/api/example-settings")).status === 401, "the example route answered a signed-out request");
+        need(JSON.stringify(await read()) === JSON.stringify({ text: "Hello", number: 10, toggle: false, choice: "medium" }), "the getters did not return the declared defaults");
+        let page = (await html(b, "/admin/settings", bossU.cookie)).text;
+        for (const t of ["<h1", 'href="/admin/settings"', N, "A number between 1 and 100.", "Default: 10", "Default: Off", "Default: medium", "Default: Hello", 'type="number"', 'min="1"', 'max="100"', 'type="checkbox"', "<select", `aria-label="Save ${N}"`, "<form"]) need(page.includes(t), `/admin/settings lacks ${t}`);
+        need(!page.includes("Reset to default") && !page.includes("Stored value is invalid"), "the page offered a reset with nothing stored");
+        // Save: the value is read back, the page offers a reset, and the audit entry has the old and new value.
+        const saved = await set(N, 25);
+        need(saved.status === 200 && ((await saved.json()) as { message: string }).message === SAVED_COPY, "saving a number did not answer 200 with the success copy");
+        need((await read()).number === 25, "the getter did not return the saved number");
+        need((await set("example-text", "Hi there")).status === 200 && (await set("example-toggle", true)).status === 200 && (await set("example-choice", "large")).status === 200, "saving a text, an on/off and a choice setting failed");
+        const now = await read();
+        need(now.text === "Hi there" && now.toggle === true && now.choice === "large", `the getters returned ${JSON.stringify(now)} after saving every type`);
+        page = (await html(b, "/admin/settings", bossU.cookie)).text;
+        need(page.includes(`aria-label="Reset ${N} to default"`) && page.includes("Reset to default") && page.includes('value="25"'), "the page does not show the saved number and its Reset to default");
+        const logged = (verb: string, key: string, old: string, now: string) => changes().some((r) => r.verb === verb && r.detail === key && r.old_value === old && r.new_value === now);
+        need(logged("set-setting", N, "10", "25") && logged("set-setting", "example-toggle", "false", "true") && logged("set-setting", "example-choice", "medium", "large"), `the audit log lacks a save: ${JSON.stringify(changes().map((r) => [r.verb, r.detail, r.old_value, r.new_value]))}`);
+        console.log("gate: settings: the getters return the declared defaults, a save of each type is read back, shown with its reset, and audited with the old and new value");
+        // Refusals: out of range 400 (both ends), a wrong type, an undeclared key, a missing user's rights, no or a foreign Origin. Nothing is written and the value stands.
+        const before = auditRows().length;
+        const fetchOrigin = (method: string, key: string, origin?: string) => fetch(`${b}/api/admin/settings/${key}`, { method, headers: { ...(origin && { origin }), "content-type": "application/json", cookie: bossU.cookie }, body: method === "POST" ? JSON.stringify({ value: 30 }) : undefined });
+        const refused: [string, number, number | number[]][] = [
+          ["number over the max", (await set(N, 101)).status, 400],
+          ["number under the min", (await set(N, 0)).status, 400],
+          ["number as text", (await set(N, "abc")).status, 400],
+          ["number missing", (await call(b, "POST", `/api/admin/settings/${N}`, bossU.cookie, {})).status, 400],
+          ["on/off as text", (await set("example-toggle", "maybe")).status, 400],
+          ["choice outside the set", (await set("example-choice", "huge")).status, 400],
+          ["text over 1000 characters", (await set("example-text", "x".repeat(1001))).status, 400],
+          ["undeclared key", (await set("ghost", 1)).status, 400],
+          ["undeclared key reset", (await del("ghost")).status, 400],
+          ["non-admin save", (await set(N, 30, plainU.cookie)).status, 404],
+          ["non-admin reset", (await del(N, plainU.cookie)).status, 404],
+          ["signed-out save", (await set(N, 30, "")).status, 404],
+          ["no Origin save", (await fetchOrigin("POST", N)).status, 403],
+          ["no Origin reset", (await fetchOrigin("DELETE", N)).status, 403],
+          ["foreign Origin save", (await fetchOrigin("POST", N, "https://evil.test")).status, [403, 404]],
+          ["foreign Origin reset", (await fetchOrigin("DELETE", N, "https://evil.test")).status, [403, 404]],
+        ];
+        for (const [what, got, want] of refused) if (Array.isArray(want) ? !want.includes(got) : got !== want) throw new Error(`settings: ${what} answered ${got}, expected ${want}`);
+        const refusal = (await set(N, 101).then((r) => r.json())) as { message: string };
+        need(refusal.message === "Enter a number from 1 to 100.", `the out-of-range message was "${refusal.message}"`);
+        need((await read()).number === 25 && auditRows().length === before, "a refused setting change wrote an audit entry or changed the value");
+        need((await html(b, "/admin/settings", plainU.cookie)).status === 404, "a non-admin reached /admin/settings");
+        console.log("gate: settings: an out-of-range number, a wrong type, a value outside the set, an undeclared key, a non-admin and a missing or foreign Origin are refused and write no audit entry");
+        // Reset to the default: one entry, the getter returns the default again, the page stops offering the reset. A second reset has nothing to do and writes nothing.
+        const n = changes().length;
+        need((await del(N)).status === 200 && (await read()).number === 10, "reset did not restore the default");
+        need(changes().length === n + 1 && logged("reset-setting", N, "25", "10"), "reset did not write exactly one audit entry");
+        need(!(await html(b, "/admin/settings", bossU.cookie)).text.includes(`aria-label="Reset ${N} to default"`), "the page still offers a reset at the default");
+        const again = await del(N);
+        need(again.status === 404 && changes().length === n + 1, `a reset at the default answered ${again.status} or wrote an entry`);
+        // Two resets of one setting at once: one wins and writes one entry, the other answers 404 and writes nothing.
+        await set(N, 30);
+        const m = changes().length;
+        const race = (await Promise.all([del(N), del(N)])).map((r) => r.status).sort();
+        need(race.join() === "200,404" && changes().length === m + 1 && (await read()).number === 10, `two concurrent resets answered ${race.join()} and left ${changes().length - m} entries`);
+        console.log("gate: settings: reset restores the default with one audit entry, a reset at the default and the loser of two concurrent resets write nothing");
+        // A stored value that no longer fits (here out of range, as after a declaration changed) reads as the default and says so; reset clears it. A row for an undeclared key is dropped.
+        onUser(boss, "INSERT OR REPLACE INTO setting (key, value, updated_at) SELECT 'example-number', '999', 1700000000000 WHERE ? IS NOT NULL");
+        onUser(boss, "INSERT OR REPLACE INTO setting (key, value, updated_at) SELECT 'ghost', 'x', 1700000000000 WHERE ? IS NOT NULL");
+        need((await read()).number === 10, "an out-of-range stored value was returned instead of the default");
+        const stale = (await html(b, "/admin/settings", bossU.cookie)).text;
+        need(stale.includes("Stored value is invalid; using the default.") && stale.includes(`aria-label="Reset ${N} to default"`) && !stale.includes("ghost"), "the page did not flag the stored value as invalid, or showed an undeclared row");
+        need((await del(N)).status === 200 && !(await html(b, "/admin/settings", bossU.cookie)).text.includes("Stored value is invalid"), "reset did not clear the invalid stored value");
+        const log = (await html(b, "/admin/audit", bossU.cookie)).text;
+        for (const t of [`${boss} set setting ${N}: 10 → 25`, `${boss} reset setting ${N}: 25 → 10`]) need(log.includes(t), `/admin/audit lacks ${t}`);
+        console.log("gate: settings: an invalid stored value reads as the default and is flagged, an undeclared row is dropped, and the audit log reads \"set setting\" and \"reset setting\"");
+      }
 
       if (config.inviteOnly) {
         // Invites in the database (U4, E10): no SIGNUP_ALLOWLIST at all, so the database is the only list and the app still fails closed.
@@ -921,6 +1087,37 @@ try {
         if (!inviteMail || inviteMail.pathname !== "/sign-up") throw new Error(`the invite mail is missing or does not link to /sign-up: ${inviteMail}`);
         if ((await api("POST", `/api/admin/invites/${inviteId("@corp.test")}/send`)).status !== 400) throw new Error("send invite for a domain was not 400");
         console.log("gate: admin send-invite mails the sign-up link to an exact email and refuses a domain");
+        // A resend inside a minute is refused (429) and neither mails nor records anything.
+        const resend = await api("POST", `/api/admin/invites/${inviteId(sendTo)}/send`);
+        if (resend.status !== 429 || (await said(resend)).message !== "An invite was just sent. Try again in a minute.") throw new Error(`a resend within a minute -> ${resend.status}`);
+        if (auditRows().filter((r) => r.verb === "send-invite" && r.target_email === sendTo).length !== 1) throw new Error("a refused resend wrote an audit entry");
+        console.log("gate: admin send-invite refuses a resend within a minute (429) and records nothing");
+        // Four sends at once: the slot is claimed before mailing, so exactly one mails and records; the rest are 429.
+        const burstTo = addr("burst");
+        await addInvite("email", burstTo);
+        const burst = await Promise.all(Array.from({ length: 4 }, () => api("POST", `/api/admin/invites/${inviteId(burstTo)}/send`).then((r) => r.status)));
+        if (burst.filter((s) => s === 200).length !== 1 || burst.filter((s) => s === 429).length !== 3) throw new Error(`four concurrent sends -> ${burst}, expected one 200 and three 429`);
+        if (auditRows().filter((r) => r.verb === "send-invite" && r.target_email === burstTo).length !== 1) throw new Error("four concurrent sends did not write exactly one send-invite entry");
+        console.log("gate: admin send-invite: four sends at once mail and record once (the rest 429)");
+
+        // Concurrent requests: four revokes of one invite write exactly one entry (the others are 404); four adds of one entry make one row and one entry (the others are 409, never 500).
+        const raceMail = addr("race"), dupMail = addr("dup"), viaDomain = `via-${ts}@corp.test`;
+        await addInvite("email", raceMail);
+        const raceId = inviteId(raceMail);
+        const revokes = await Promise.all([1, 2, 3, 4].map(() => api("POST", `/api/admin/invites/${raceId}/revoke`)));
+        const adds = await Promise.all([1, 2, 3, 4].map(() => addInvite("email", dupMail)));
+        const tally = (rs: Response[]) => rs.map((r) => r.status).sort().join();
+        if (tally(revokes) !== "200,404,404,404") throw new Error(`four concurrent revokes -> ${tally(revokes)}`);
+        if (tally(adds) !== "200,409,409,409") throw new Error(`four concurrent adds -> ${tally(adds)}`);
+        const count = (verb: string, target: string) => auditRows().filter((r) => r.verb === verb && r.target_email === target).length;
+        if (count("revoke-invite", raceMail) !== 1 || count("invite", dupMail) !== 1 || rows("invite", "SELECT 1 FROM invite WHERE entry = ?", dupMail).length !== 1) throw new Error("concurrent requests wrote more than one entry or row");
+        console.log("gate: admin invites under concurrency: four revokes write one entry (the rest 404), four duplicate adds make one row and one entry (the rest 409)");
+
+        // Revoking an exact email that a remaining domain invite still admits says so.
+        await addInvite("email", viaDomain);
+        const viaBody = await said(await api("POST", `/api/admin/invites/${inviteId(viaDomain)}/revoke`));
+        if (viaBody.notes?.join("|") !== "Still invited through @corp.test.|Existing accounts are not affected. Ban the user to block them.") throw new Error(`revoke under a domain invite -> ${JSON.stringify(viaBody)}`);
+        console.log("gate: admin invite revoke of an email covered by a domain invite says Still invited through @corp.test.");
 
         // Every change wrote its audit entry (same batch), and the audit page words them.
         for (const [verb, target] of [["invite", invitedMail], ["invite", "@corp.test"], ["revoke-invite", revokedMail], ["send-invite", sendTo]] as const)

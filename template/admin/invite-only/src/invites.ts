@@ -12,13 +12,29 @@ export const INVITED_DOMAIN = (entry: string) => `Invited anyone at ${entry}.`;
 export const INVITE_REMOVED = "Invite removed.";
 export const INVITE_EMAIL_REQUESTED = (entry: string) => `Invite email requested for ${entry}.`;
 export const STILL_INVITED = "Still invited through SIGNUP_ALLOWLIST.";
+export const STILL_INVITED_DOMAIN = (domain: string) => `Still invited through ${domain}.`;
+export const RESEND_TOO_SOON = "An invite was just sent. Try again in a minute.";
+const RESEND_MS = 60_000;
+const GONE = "That invite is already gone.";
 export const EXISTING_ACCOUNTS = "Existing accounts are not affected. Ban the user to block them.";
 
 type Actor = { id: string; email: string };
-type Result<T = object> = ({ ok: true } & T) | { ok: false; status: 400 | 404 | 409; message: string };
+type Result<T = object> = ({ ok: true } & T) | { ok: false; status: 400 | 404 | 409 | 429; message: string };
 
 // void/db and @schema are imported on use: Void's plugin loads auth.ts (and so this file) at startup, where bindings are not available.
 const store = async () => ({ ...(await import("void/db")), ...(await import("@schema")), ...(await import("../.void/better-auth-schema")) });
+
+type Store = Awaited<ReturnType<typeof store>>;
+
+// An audit row that is written only while the invite still exists, placed before the batch's own delete or update: a request that lost a race to another one
+// finds no invite, so it writes nothing (one entry per change that happened, never one per request).
+const auditWhileInvite = ({ db, sql, eq, invite, auditEntry }: Store, id: string, row: ReturnType<typeof auditRow>) =>
+  db.insert(auditEntry).select((qb) =>
+    qb
+      .select(Object.fromEntries(Object.entries(row).map(([k, v]) => [k, sql`${v instanceof Date ? v.getTime() : v}`.as(k)])) as never)
+      .from(invite)
+      .where(eq(invite.id, id)) as never,
+  );
 
 // The secret's entries, lower case, for the read-only list on the Invites page.
 export const secretEntries = (list: unknown): string[] => [
@@ -61,32 +77,61 @@ export async function addInvite(actor: Actor, kind: InviteKind, raw: string): Pr
   const { entry } = parsed;
   const { db, eq, invite, auditEntry } = await store();
   if ((await db.select({ id: invite.id }).from(invite).where(eq(invite.entry, entry)).limit(1))[0]) return { ok: false, status: 409, message: `${entry} is already invited.` };
-  await db.batch([
-    db.insert(invite).values({ id: crypto.randomUUID(), entry, addedByUserId: actor.id, createdAt: new Date() }),
-    db.insert(auditEntry).values(auditRow({ actor, verb: "invite", target: { id: null, email: entry }, detail: kind })),
-  ]);
+  try {
+    await db.batch([
+      db.insert(invite).values({ id: crypto.randomUUID(), entry, addedByUserId: actor.id, createdAt: new Date() }),
+      db.insert(auditEntry).values(auditRow({ actor, verb: "invite", target: { id: null, email: entry }, detail: kind })),
+    ]);
+  } catch (e) {
+    // A concurrent add of the same entry won (UNIQUE(entry)); the batch rolled back, so nothing is audited twice.
+    if (/UNIQUE/i.test(`${(e as Error)?.message} ${((e as Error)?.cause as Error | undefined)?.message}`)) return { ok: false, status: 409, message: `${entry} is already invited.` };
+    throw e;
+  }
   return { ok: true, entry, message: kind === "domain" ? INVITED_DOMAIN(entry) : INVITED_EMAIL(entry) };
 }
 
 // Removes the invite only: an account that already exists is never touched. The notes say whether the door is really closed.
 export async function revokeInvite(actor: Actor, id: string): Promise<Result<{ message: string; notes: string[] }>> {
-  const { db, eq, invite, auditEntry } = await store();
+  const st = await store();
+  const { db, eq, invite } = st;
   const row = (await db.select().from(invite).where(eq(invite.id, id)).limit(1))[0];
-  if (!row) return { ok: false, status: 404, message: "That invite is already gone." };
-  await db.batch([db.delete(invite).where(eq(invite.id, id)), db.insert(auditEntry).values(auditRow({ actor, verb: "revoke-invite", target: { id: null, email: row.entry } }))]);
-  return { ok: true, message: INVITE_REMOVED, notes: [...(coveredBySecret(row.entry, env.SIGNUP_ALLOWLIST) ? [STILL_INVITED] : []), EXISTING_ACCOUNTS] };
+  if (!row) return { ok: false, status: 404, message: GONE };
+  const [, deleted] = await db.batch([
+    auditWhileInvite(st, id, auditRow({ actor, verb: "revoke-invite", target: { id: null, email: row.entry } })),
+    db.delete(invite).where(eq(invite.id, id)).returning({ id: invite.id }),
+  ]);
+  if (!deleted.length) return { ok: false, status: 404, message: GONE };
+  // An exact email may still be admitted by a domain invite that remains.
+  const domain = row.entry.startsWith("@") ? null : row.entry.slice(row.entry.indexOf("@"));
+  const viaDomain = domain && (await db.select({ id: invite.id }).from(invite).where(eq(invite.entry, domain)).limit(1))[0];
+  return { ok: true, message: INVITE_REMOVED, notes: [...(coveredBySecret(row.entry, env.SIGNUP_ALLOWLIST) ? [STILL_INVITED] : []), ...(viaDomain && domain ? [STILL_INVITED_DOMAIN(domain)] : []), EXISTING_ACCOUNTS] };
 }
 
 // Mails the invitee the sign-up link. The mail goes first: a failed send (it throws) records nothing. Then the sent time and the audit entry are written together.
 export async function sendInvite(actor: Actor, id: string, signUpUrl: string): Promise<Result<{ message: string }>> {
-  const { db, eq, invite, auditEntry } = await store();
+  const st = await store();
+  const { db, eq, and, or, isNull, lt, invite } = st;
   const row = (await db.select().from(invite).where(eq(invite.id, id)).limit(1))[0];
-  if (!row) return { ok: false, status: 404, message: "That invite is already gone." };
+  if (!row) return { ok: false, status: 404, message: GONE };
   if (row.entry.startsWith("@")) return { ok: false, status: 400, message: "Only an exact email can be sent an invite." };
-  await send(row.entry, "Your invitation", signUpUrl);
-  await db.batch([
-    db.update(invite).set({ lastSentAt: new Date() }).where(eq(invite.id, id)),
-    db.insert(auditEntry).values(auditRow({ actor, verb: "send-invite", target: { id: null, email: row.entry } })),
+  // Claim the send slot before mailing, so two clicks at once mail once: only one request's conditional update matches.
+  const now = new Date();
+  const claimed = await db
+    .update(invite)
+    .set({ lastSentAt: now })
+    .where(and(eq(invite.id, id), or(isNull(invite.lastSentAt), lt(invite.lastSentAt, new Date(now.getTime() - RESEND_MS)))))
+    .returning({ id: invite.id });
+  if (!claimed.length) return { ok: false, status: 429, message: RESEND_TOO_SOON };
+  try {
+    await send(row.entry, "Your invitation", signUpUrl);
+  } catch (e) {
+    await db.update(invite).set({ lastSentAt: row.lastSentAt }).where(eq(invite.id, id)); // a mail that never went out frees the slot
+    throw e;
+  }
+  const [, sent] = await db.batch([
+    auditWhileInvite(st, id, auditRow({ actor, verb: "send-invite", target: { id: null, email: row.entry } })),
+    db.update(invite).set({ lastSentAt: now }).where(eq(invite.id, id)).returning({ id: invite.id }),
   ]);
+  if (!sent.length) return { ok: false, status: 404, message: GONE }; // revoked while the mail was going out: nothing is recorded
   return { ok: true, message: INVITE_EMAIL_REQUESTED(row.entry) };
 }

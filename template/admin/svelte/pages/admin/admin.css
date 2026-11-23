@@ -47,6 +47,7 @@
 .admin fieldset { border: 0; margin: 0; padding: 0; }
 .admin legend { padding: 0; }
 .admin .choice { display: inline-block; margin-right: 1.5rem; }
+.admin .radio .hint { display: block; margin-left: 1.6rem; }
 .admin button { font: inherit; padding: 0.4rem 0.8rem; cursor: pointer; }
 .admin button:disabled { cursor: wait; opacity: 0.6; }
 .admin .hint { color: var(--a-muted); font-size: 0.9rem; margin: 0.25rem 0 0; }
@@ -62,7 +63,7 @@
 /* Under 640px a user row is the email link plus one status word; the other columns live on user detail. */
 @media (max-width: 640px) {
   .admin .wide { display: none; }
-  .admin a, .admin button, .admin input { min-height: 44px; }
+  .admin a, .admin button, .admin input, .admin select { min-height: 44px; }
   .admin table a, .admin-bar a { display: inline-flex; align-items: center; }
   .admin input[type="text"], .admin input[type="search"], .admin input[type="email"] { max-width: none; }
 }
