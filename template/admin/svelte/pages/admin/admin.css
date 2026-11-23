@@ -1,0 +1,65 @@
+/* The admin pages' one stylesheet. Colours are the app's own (pages/style.css :root, with its values as fallbacks for a direct visit to /admin); --danger is the one new one. */
+.admin {
+  --danger: #b42318;
+  --a-text: var(--text-h, #16171d);
+  --a-muted: var(--text, rgb(22 23 29 / 70%));
+  --a-border: var(--border, #e5e4e7);
+  --a-accent: var(--accent, #6c3bff);
+  --a-error: var(--error, #b42318);
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0 1rem 3rem;
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.45;
+}
+@media (prefers-color-scheme: dark) {
+  .admin {
+    --danger: #fda29b;
+    --a-text: var(--text-h, #fff);
+    --a-muted: var(--text, rgb(255 255 255 / 70%));
+    --a-border: var(--border, #3b3440);
+    --a-accent: var(--accent, #b39aff);
+    --a-error: var(--error, #fda29b);
+  }
+}
+.admin h1 { font-size: 1.75rem; margin: 1rem 0; }
+.admin h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
+.admin a { color: var(--a-accent); }
+.admin :focus-visible { outline: 2px solid var(--a-accent); outline-offset: 2px; }
+.admin h1:focus { outline: none; }
+
+.admin-bar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 1.5rem; padding: 0.75rem 0; border-bottom: 1px solid var(--a-border); }
+.admin-bar strong { margin-right: 0.5rem; }
+.admin-bar ul { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; list-style: none; margin: 0; padding: 0; flex: 1; }
+.admin-bar a[aria-current="page"] { color: var(--a-text); font-weight: 600; text-decoration: none; border-bottom: 2px solid currentColor; }
+
+.admin table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.admin caption { text-align: left; font-weight: 600; padding: 0.5rem 0; }
+.admin th, .admin td { text-align: left; padding: 0.4rem 0.5rem; border-top: 1px solid var(--a-border); overflow-wrap: anywhere; vertical-align: top; }
+.admin th { font-size: 0.85rem; color: var(--a-muted); border-top: 0; }
+
+/* A status is always a word; colour only adds to it. */
+.status-banned { color: var(--danger); font-weight: 600; }
+.status-unverified { font-style: italic; }
+
+.admin label { display: block; margin: 0.75rem 0 0.25rem; }
+.admin input[type="text"], .admin input[type="search"], .admin input[type="email"] { width: 100%; max-width: 28rem; box-sizing: border-box; font: inherit; padding: 0.4rem 0.5rem; }
+.admin button { font: inherit; padding: 0.4rem 0.8rem; cursor: pointer; }
+.admin button:disabled { cursor: wait; opacity: 0.6; }
+.admin .hint { color: var(--a-muted); font-size: 0.9rem; margin: 0.25rem 0 0; }
+.admin [role="alert"] { color: var(--a-error); }
+.admin section { margin: 1.5rem 0; }
+.admin .paging { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin-top: 1rem; }
+
+.danger-zone { margin-top: 3rem; padding-top: 1rem; border-top: 2px solid var(--danger); }
+.danger-zone h2 { color: var(--danger); }
+.danger-zone button { border: 1px solid var(--danger); color: var(--danger); background: transparent; }
+.danger-zone button:disabled { opacity: 0.5; }
+
+/* Under 640px a user row is the email link plus one status word; the other columns live on user detail. */
+@media (max-width: 640px) {
+  .admin .wide { display: none; }
+  .admin a, .admin button, .admin input { min-height: 44px; }
+  .admin table a, .admin-bar a { display: inline-flex; align-items: center; }
+  .admin input[type="text"], .admin input[type="search"], .admin input[type="email"] { max-width: none; }
+}

@@ -505,3 +505,76 @@ test("secrets with a tsconfig that has no include is the anchor error", async ()
   const on = seeded("<!--/injected-by-void-->\n");
   await expect(scaffold({ ...cfg, secrets: true }, on.dir, withTsconfig(on, "{}"))).rejects.toThrow(/Anchor "include" not found in tsconfig\.json \(create-void@\d/);
 });
+
+// create-void's svelte starter, as far as --admin edits it.
+const SCHEMA = 'import { sql } from "void/db";\nimport { integer, sqliteTable, text } from "void/schema-d1";\n\nexport const messages = sqliteTable("messages", {});\n';
+const adminApp = (config: Record<string, unknown>, schema = SCHEMA) => {
+  const s = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
+  const exec = async (cmd: string[]) => {
+    await s.exec(cmd);
+    if (cmd[1] !== "x") return;
+    writeFileSync(join(s.dir, "void.config.ts"), "export default defineConfig({\n});\n");
+    writeFileSync(join(s.dir, "tsconfig.json"), tsconfig());
+    mkdirSync(join(s.dir, "db"), { recursive: true });
+    writeFileSync(join(s.dir, "db/schema.ts"), schema);
+  };
+  return { dir: s.dir, run: () => scaffold({ ...cfg, framework: "svelte", auth: true, email: true, admin: true, ...config } as any, s.dir, exec) };
+};
+
+test("svelte --admin ships the module, guard, schema, pages and tests, edits the Account page, declares and seeds ADMIN_EMAILS, and says how to start", async () => {
+  const { dir, run } = adminApp({});
+  await run();
+  const read = (f: string) => readFileSync(join(dir, f), "utf8");
+  for (const f of [
+    "src/admin.ts", "src/admin-guard.ts", "src/lib/admin-action.ts", "src/lib/admin-client.ts", "src/lib/admin-display.ts", "src/signup-allowlist.ts", "db/schema/admin.ts", "middleware/10.admin.ts",
+    "routes/admin/users.ts", "routes/api/admin/users/[id]/send-link.ts", "routes/api/admin/users/[id]/sessions/[sessionId]/revoke.ts", "pages/admin/layout.svelte", "pages/admin/admin.css", "pages/admin/index.svelte", "pages/admin/index.server.ts",
+    "pages/admin/users/[id].svelte", "pages/admin/users/[id].server.ts", "pages/admin/audit.svelte", "pages/admin/audit.server.ts",
+    "tests/admin.test.ts", "tests/admin-guard.test.ts", "tests/admin-action.test.ts", "tests/admin-display.test.ts", "tests/admin-pages.test.ts", "tests/signup-allowlist.test.ts",
+  ])
+    expect([f, existsSync(join(dir, f))]).toEqual([f, true]);
+  expect(existsSync(join(dir, "src/upload-guard.ts"))).toBe(false); // no --storage
+  expect(read("db/schema.ts")).toContain('export * from "./schema/admin";');
+  expect(read("pages/admin/layout.svelte")).toContain('const APP_NAME = "app";');
+  expect(read("src/admin.ts")).toContain("export const INVITE_ONLY = false;");
+  expect(read("env.ts")).toContain('ADMIN_EMAILS: string().default(""),');
+  expect(read(".env")).toContain("\nADMIN_EMAILS=@example.com\n");
+  const account = read("pages/settings.svelte");
+  for (const t of ["let { user, admin }: Props", 'href="/admin"', "Your email is on the admin list but isn't verified yet.", "Send verification link"]) expect(account).toContain(t);
+  expect(read("pages/settings.server.ts")).toContain("admin: adminAccess(user)");
+  const agents = read("AGENTS.md");
+  for (const t of ["## Admin area", "ADMIN_EMAILS", "sign in with an email on `ADMIN_EMAILS` and verify it", "audit_entry", "refused with a 404 on purpose", "set role"]) expect(agents).toContain(t);
+  expect(agents).not.toContain("${");
+  expect(agents).toContain("Every admin change writes exactly one audit entry");
+  expect(agents).toContain("self-delete. The deleted user's email");
+});
+
+test("svelte --admin --storage checks the user row after an upload; --admin --invite-only reuses the one matcher", async () => {
+  const on = adminApp({ storage: true, inviteOnly: true });
+  await on.run();
+  const route = readFileSync(join(on.dir, "routes/api/files/[name].ts"), "utf8");
+  for (const t of ['import { discardIfUserGone } from "../../../src/upload-guard"', "const user = requireAuth(c);", "discardIfUserGone(key, () => userExists(user.id), storage)"]) expect(route).toContain(t);
+  for (const f of ["src/upload-guard.ts", "tests/upload-guard.test.ts"]) expect(existsSync(join(on.dir, f))).toBe(true);
+  expect(readFileSync(join(on.dir, "src/admin.ts"), "utf8")).toContain("export const INVITE_ONLY = true;");
+  expect(readFileSync(join(on.dir, "src/signup-allowlist.ts"), "utf8")).toContain("export function signupAllowed"); // invite-only's copy, not a second one
+  expect(readFileSync(join(on.dir, "env.ts"), "utf8")).toContain("SIGNUP_ALLOWLIST: string(),");
+  const auth = readFileSync(on.dir + "/auth.ts", "utf8");
+  expect(auth).toContain("purge: purgeUserFiles");
+  expect(auth.match(/^  databaseHooks:/gm)).toHaveLength(1);
+  expect(readFileSync(join(on.dir, "tests/auth-email.test.ts"), "utf8")).toContain("(Reset|Set) your password"); // an invite-only admin app mails an unverified user a set-password link
+});
+
+test("without --admin none of it exists", async () => {
+  const { dir, run } = adminApp({ admin: false });
+  await run();
+  for (const f of ["src/admin.ts", "pages/admin", "middleware", "db/schema/admin.ts", ".env.admin"]) expect([f, existsSync(join(dir, f))]).toEqual([f, false]);
+  expect(readFileSync(join(dir, "db/schema.ts"), "utf8")).not.toContain("schema/admin");
+  expect(readFileSync(join(dir, "pages/settings.svelte"), "utf8")).not.toContain("admin list");
+  expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).not.toContain("## Admin area");
+  expect(readFileSync(join(dir, ".env"), "utf8")).not.toContain("ADMIN_EMAILS");
+});
+
+test("--admin on a schema without the expected import is the anchor error", async () => {
+  const { dir, run } = adminApp({}, 'export const x = 1;\n');
+  await expect(run()).rejects.toThrow(/Anchor .* not found in db\/schema\.ts \(create-void@\d/);
+  expect(existsSync(dir)).toBe(false);
+});

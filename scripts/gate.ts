@@ -226,6 +226,21 @@ try {
     for (const subject of [SET_PW, "Verify your email"]) if (await mailUrl(b, subject, address)) throw new Error(`${address} was refused but got a "${subject}" mail`);
     if ((await authPost(b, "/api/auth/sign-in/email", { email: address, password: gatePw })).ok) throw new Error(`${address} was refused but can sign in`);
   };
+  // Keys are read back from the local R2 state (miniflare's _mf_objects) to prove what is stored.
+  // Only the sqlite files with an _mf_objects table are R2's; any read error on one of them fails the gate.
+  const r2Keys = () => {
+    let found = false;
+    const keys = sqliteFiles(join(app, ".void")).flatMap((f) => {
+      const d = new Database(f, { readonly: true });
+      try {
+        if (!d.query("SELECT 1 FROM sqlite_master WHERE name = '_mf_objects'").get()) return [];
+        found = true;
+        return (d.query("SELECT key FROM _mf_objects").all() as { key: string }[]).map((r) => r.key);
+      } catch (e) { throw new Error(`cannot read R2 keys from ${f}: ${(e as Error).message}`); } finally { d.close(); }
+    });
+    if (!found) throw new Error("no local R2 database (_mf_objects) found under .void");
+    return keys;
+  };
   if (config.auth) {
     const base = `http://localhost:${port}`;
     // The always-pass test secret accepts Cloudflare's documented dummy token; without the header the captcha plugin must refuse.
@@ -356,21 +371,6 @@ try {
       if (!signUpPage.includes('autocomplete="email"') || signUpPage.includes('type="password"')) throw new Error("the invite-only /sign-up page must ask for email and no password");
       console.log("gate: invite-only admits @example.com (any case) with no session and no kept password until the set-password link; lookalike, subdomain, two-@ and non-ASCII addresses get no session, no user row, no mail; a verified user signs in");
     }
-    // --storage: routes are auth-gated and per-user. Keys are read back from the local R2 state (miniflare's _mf_objects) to prove what is stored.
-    // Only the sqlite files with an _mf_objects table are R2's; any read error on one of them fails the gate.
-    const r2Keys = () => {
-      let found = false;
-      const keys = sqliteFiles(join(app, ".void")).flatMap((f) => {
-        const d = new Database(f, { readonly: true });
-        try {
-          if (!d.query("SELECT 1 FROM sqlite_master WHERE name = '_mf_objects'").get()) return [];
-          found = true;
-          return (d.query("SELECT key FROM _mf_objects").all() as { key: string }[]).map((r) => r.key);
-        } catch (e) { throw new Error(`cannot read R2 keys from ${f}: ${(e as Error).message}`); } finally { d.close(); }
-      });
-      if (!found) throw new Error("no local R2 database (_mf_objects) found under .void");
-      return keys;
-    };
     const file = (name: string, init: RequestInit = {}) => fetch(`${base}/api/files/${name}`, { redirect: "manual", ...init });
     const storageUser = config.storage ? ((await fetch(`${base}/api/auth/get-session`, { headers: { cookie } }).then((r) => r.json() as Promise<any>)).user.id as string) : "";
     if (config.storage) {
@@ -554,6 +554,278 @@ try {
       await inviteRefused(b, `nobody-${Date.now()}@partner.test`);
       if (!(await authPost(b, "/api/auth/sign-in/email", { email: kept, password: gatePw + "-2" })).ok) throw new Error("an existing user could not sign in with an empty list");
       console.log("gate: invite-only exact entry admits (any case) and a same-domain address is refused; a list with no entries refuses everyone; existing users still sign in");
+    } finally {
+      writeFileSync(envFile, original);
+    }
+  }
+  if (config.admin) {
+    // --admin: /admin and /api/auth/admin/* answer to ADMIN_EMAILS (verified, live) and nobody else. The list is read at startup, so each list change restarts the dev server.
+    const envFile = join(app, ".env"), original = readFileSync(envFile, "utf8");
+    const withAdmins = async (list: string) => {
+      await killChildren();
+      writeFileSync(envFile, original.replace(/^ADMIN_EMAILS=.*$/m, `ADMIN_EMAILS=${list}`));
+      return `http://localhost:${(await startDev()).port}`;
+    };
+    // Rows in the app database (user, audit_entry, ...): the one sqlite file that has `table`.
+    const rows = (table: string, sql: string, ...args: (string | number)[]) => {
+      for (const f of sqliteFiles(join(app, ".void"))) {
+        const d = new Database(f, { readonly: true });
+        try {
+          if (d.query("SELECT 1 FROM sqlite_master WHERE name = ?").get(table)) return d.query(sql).all(...args) as any[];
+        } finally { d.close(); }
+      }
+      throw new Error(`no database with a ${table} table`);
+    };
+    const ts = Date.now();
+    const addr = (n: string) => `${n}-${ts}@example.com`;
+    const [boss, plain, owner2, victim, other] = [addr("boss"), addr("plain"), addr("owner2"), addr("victim"), addr("other")];
+    const idOf = (a: string) => onUser(a, "SELECT ?").id;
+    const call = (b: string, method: string, path: string, cookie = "", body?: object) =>
+      fetch(b + path, { method, redirect: "manual", headers: { origin: b, ...(body && { "content-type": "application/json" }), ...(cookie && { cookie }) }, body: body && JSON.stringify(body) });
+    const html = (b: string, path: string, cookie = "") => call(b, "GET", path, cookie).then(async (r) => ({ status: r.status, text: await r.text(), location: r.headers.get("location") }));
+    const sessionUser = (b: string, cookie: string) => fetch(`${b}/api/auth/get-session`, { headers: { cookie } }).then((r) => r.json() as Promise<any>).then((j) => j?.user ?? null);
+    // A user with a session: a verified one signs in (in an invite-only app the set-password link verifies and sets the password); an unverified one only exists in an app that lets sign-in wait on mail.
+    const mk = async (b: string, address: string, verified = true) => {
+      let cookie = "";
+      if (config.inviteOnly) {
+        if (verified) cookie = await signUpVerified(b, address);
+        else if (!(await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: address, password: "" })).ok) throw new Error(`sign-up for ${address} failed`);
+      } else {
+        if (!(await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: address, password: gatePw })).ok) throw new Error(`sign-up for ${address} failed`);
+        if (verified) onUser(address, "UPDATE user SET emailVerified = 1 WHERE id = ?");
+        cookie = cookieOf(await authPost(b, "/api/auth/sign-in/email", { email: address, password: gatePw }));
+      }
+      return { id: idOf(address), cookie };
+    };
+    const upload = (b: string, cookie: string, name: string, body: string) => fetch(`${b}/api/files/${name}`, { method: "PUT", body, headers: { cookie, "content-type": "text/plain" } }).then((r) => r.status);
+    const signIn = (b: string, address: string, password = gatePw) => authPost(b, "/api/auth/sign-in/email", { email: address, password });
+    // The 404 matrix: pages, the plugin's endpoints and our own admin route.
+    const adminPaths = (id: string): [string, string][] => [["GET", "/admin"], ["GET", "/admin/audit"], ["GET", `/admin/users/${id}`], ["GET", "/admin/users"], ["GET", "/api/auth/admin/list-users"], ["GET", `/api/auth/admin/get-user?id=${id}`], ["POST", `/api/admin/users/${id}/send-link`]];
+    const expectAll = async (b: string, who: string, cookie: string, id: string, want: (m: string, p: string) => number) => {
+      for (const [m, p] of adminPaths(id)) {
+        const r = await call(b, m, p, cookie, m === "POST" ? { userId: id } : undefined);
+        if (r.status !== want(m, p)) throw new Error(`${who}: ${m} ${p} -> ${r.status}, expected ${want(m, p)}`);
+      }
+    };
+    const REFUSED = ["set-role", "create-user", "update-user", "set-user-password", "impersonate-user", "stop-impersonating", "has-permission"];
+    const auditRows = () => rows("audit_entry", "SELECT * FROM audit_entry ORDER BY created_at");
+    const noMail = async (a: string) => { if (rows("audit_entry", "SELECT 1 FROM audit_entry WHERE actor_email = ? OR target_email = ? OR detail LIKE ?", a.toLowerCase(), a.toLowerCase(), `%${a.toLowerCase()}%`).length) throw new Error(`the audit log still holds ${a}`); };
+
+    try {
+      let b = await withAdmins(`${boss},${owner2}`);
+      const bossU = await mk(b, boss), plainU = await mk(b, plain), victimU = await mk(b, victim), otherU = await mk(b, other);
+      const ownerU = config.inviteOnly ? null : await mk(b, owner2, false); // listed, not verified: sign-in waits on nothing here
+      // 404 for signed out, a signed-in non-admin and a listed but unverified user; 200 for the admin.
+      const any = [["signed out", ""], ["non-admin", plainU.cookie], ...(ownerU ? [["listed, unverified", ownerU.cookie]] : [])] as [string, string][];
+      for (const [who, cookie] of any) await expectAll(b, who, cookie, victimU.id, () => 404);
+      for (const [m, p] of adminPaths(victimU.id)) {
+        const r = await call(b, m, p, bossU.cookie, m === "POST" ? { userId: victimU.id } : undefined);
+        const want = p === "/admin/users" ? 302 : 200;
+        if (r.status !== want) throw new Error(`admin: ${m} ${p} -> ${r.status}, expected ${want}`);
+        if (p === "/admin/users" && r.headers.get("location") !== "/admin") throw new Error(`/admin/users redirected to ${r.headers.get("location")}`);
+      }
+      // The path spelling does not matter: a case or encoding variant is refused for a non-admin too.
+      for (const p of ["/ADMIN", "/Admin/audit", "/admin/", "/%61dmin"]) if ((await fetch(b + p, { headers: { cookie: plainU.cookie } })).status !== 404) throw new Error(`non-admin GET ${p} was not 404 (redirects followed)`);
+      // The plugin's endpoints the pages do not use are refused, even for an admin; so is anything not on the allowlist.
+      for (const e of REFUSED) {
+        const r = await call(b, "POST", `/api/auth/admin/${e}`, bossU.cookie, { userId: victimU.id, role: "admin", email: addr("x"), password: "x-password-123", name: "x", newPassword: "x-password-123", data: {} });
+        if (r.status !== 404) throw new Error(`admin POST /api/auth/admin/${e} -> ${r.status}, expected 404`);
+      }
+      if (rows("user", "SELECT 1 FROM user WHERE role = 'admin' AND id = ?", victimU.id).length) throw new Error("set-role changed a role");
+      console.log("gate: admin 404 for signed out, non-admin" + (ownerU ? ", listed-unverified" : "") + ", case/encoding variants and the 7 refused endpoints; 200 for an admin; /admin/users redirects");
+
+      // Sign-in writes lastSignInAt (E9) and never role: only the guard writes that.
+      if (!rows("user", "SELECT lastSignInAt AS t FROM user WHERE id = ?", plainU.id)[0].t) throw new Error("sign-in did not write lastSignInAt");
+      if (rows("user", "SELECT role FROM user WHERE id = ?", plainU.id)[0].role === "admin") throw new Error("a non-admin has role admin");
+
+      // Grant on a live session (O3): a listed user who verifies after signing in reaches the plugin API on the same session; the guard is what writes role.
+      if (ownerU) {
+        onUser(owner2, "UPDATE user SET emailVerified = 1 WHERE id = ?");
+        if ((await call(b, "GET", "/api/auth/admin/list-users", ownerU.cookie)).status !== 200) throw new Error("a newly verified, listed user did not reach list-users on their existing session");
+        if (rows("user", "SELECT role FROM user WHERE id = ?", ownerU.id)[0].role !== "admin") throw new Error("the guard did not sync role");
+        onUser(owner2, "UPDATE user SET emailVerified = 0 WHERE id = ?");
+        if ((await call(b, "GET", "/api/auth/admin/list-users", ownerU.cookie)).status !== 404) throw new Error("a listed user who is no longer verified still reached list-users");
+      }
+
+      // Users page: the admin reaches it, search finds by email and by name, no match says so, paging.
+      onUser(other, "UPDATE user SET name = 'Zed Zebrowski' WHERE id = ?");
+      const page = await html(b, "/admin", bossU.cookie);
+      for (const t of ["<caption>", 'scope="col"', 'aria-label="Admin"', 'aria-current="page"', "Back to app", "Search email or name", 'type="search"']) if (!page.text.includes(t)) throw new Error(`/admin lacks ${t}`);
+      if (!page.text.includes(`>${victim}</a>`)) throw new Error("/admin does not list the newest users");
+      const byEmail = await html(b, `/admin?q=${encodeURIComponent(other.toUpperCase())}`, bossU.cookie), byName = await html(b, "/admin?q=zebrowski", bossU.cookie);
+      if (!byEmail.text.includes(`>${other}</a>`) || byEmail.text.includes(`>${victim}</a>`)) throw new Error("search by email (any case) did not narrow to the user");
+      if (!byName.text.includes(`>${other}</a>`) || byName.text.includes(`>${victim}</a>`)) throw new Error("search by name did not find the user");
+      const none = await html(b, "/admin?q=nobody-here-xyz", bossU.cookie);
+      if (!none.text.includes("No account for nobody-here-xyz.")) throw new Error("no-match copy missing");
+      const wild = await html(b, "/admin?q=%25", bossU.cookie);
+      if (!wild.text.includes("No account for %.")) throw new Error("a % in the search was treated as a wildcard");
+      // Paging: 50 a page, newest first, with the Showing line.
+      const db = sqliteFiles(join(app, ".void")).map((f) => new Database(f)).find((d) => d.query("SELECT 1 FROM sqlite_master WHERE name = 'user'").get())!;
+      const now = Date.now();
+      for (let i = 0; i < 52; i++) db.run("INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)", [`page-${ts}-${i}`, `Page ${i}`, `page-${i}-${ts}@fixture.test`, now - 86_400_000 - i * 1000, now]);
+      const total = (db.query("SELECT count(*) AS n FROM user").get() as { n: number }).n;
+      db.close();
+      const p1 = await html(b, "/admin", bossU.cookie), p2 = await html(b, "/admin?page=2", bossU.cookie);
+      if (!p1.text.includes(`Showing 1–50 of ${total}`) || !p1.text.includes("Older") || p1.text.includes("Newer")) throw new Error("page 1 lacks the Showing line and an Older link");
+      if (!p2.text.includes(`Showing 51–${total} of ${total}`) || !p2.text.includes("Newer")) throw new Error("page 2 lacks the Showing line and a Newer link");
+      const rowsOn = (t: string) => t.split("<tr>").length - 2;
+      if (rowsOn(p1.text) !== 50) throw new Error(`page 1 lists ${rowsOn(p1.text)} rows, expected 50`);
+      if (p1.text.indexOf(`>${victim}</a>`) > p1.text.indexOf(`>page-0-${ts}@fixture.test</a>`)) throw new Error("users are not newest first");
+      // The delete action's redirect banner, and a failed load is not an empty list.
+      if (!(await html(b, "/admin?deleted=gone%40x.com", bossU.cookie)).text.includes("Deleted gone@x.com and their files.")) throw new Error("the deleted banner is missing");
+      console.log("gate: admin Users page: search by email (any case) and by name, no-match copy, % is not a wildcard, 50 a page newest first with Showing and Newer/Older");
+
+      // Ban: sessions gone, sign-in refused with the blocked copy, audit entry, reason shown to admins only; unban restores.
+      const victimB = cookieOf(await signIn(b, victim)) || victimU.cookie;
+      const ban = await call(b, "POST", "/api/auth/admin/ban-user", bossU.cookie, { userId: victimU.id, banReason: "spam signup" });
+      if (ban.status !== 200) throw new Error(`ban-user -> ${ban.status}`);
+      if (await sessionUser(b, victimB)) throw new Error("a banned user's session survived");
+      const refused = await signIn(b, victim);
+      const refusedBody = (await refused.json()) as any;
+      if (refused.ok || refusedBody?.code !== "BANNED_USER" || refusedBody?.message !== "This account has been blocked. Contact the site owner.") throw new Error(`a banned user's sign-in -> ${refused.status} ${JSON.stringify(refusedBody)}`);
+      const detail = await html(b, `/admin/users/${victimU.id}`, bossU.cookie);
+      if (!detail.text.includes("Banned") || !detail.text.includes("spam signup") || !detail.text.includes("Unban")) throw new Error("user detail does not show the ban, its reason and Unban");
+      const live = await html(b, `/admin/users/${otherU.id}`, bossU.cookie);
+      for (const t of ["Only admins see this.", "Active, last sign-in", `aria-label="Ban ${other}"`, "Danger zone", "Delete user permanently", `Type ${other} to confirm`, "Send reset link", 'tabindex="-1"']) if (!live.text.includes(t)) throw new Error(`user detail lacks ${t}`);
+      if (JSON.stringify(refusedBody).includes("spam")) throw new Error("the ban reason reached the banned user");
+      if (!auditRows().some((r) => r.verb === "ban" && r.target_email === victim && r.actor_email === boss && r.detail === "spam signup" && r.old_value === "active" && r.new_value === "banned")) throw new Error("no audit entry for the ban");
+      // B2: a re-ban writes its own entry (banned -> banned, new reason); banExpiresIn is refused (D12) with no change and no entry.
+      const banEntries = () => auditRows().filter((r) => r.verb === "ban").length;
+      const banned0 = banEntries();
+      if ((await call(b, "POST", "/api/auth/admin/ban-user", bossU.cookie, { userId: victimU.id, banReason: "second reason" })).status !== 200 || banEntries() !== banned0 + 1 || !auditRows().some((r) => r.verb === "ban" && r.detail === "second reason" && r.old_value === "banned" && r.new_value === "banned")) throw new Error("a re-ban did not write one banned -> banned entry");
+      if ((await call(b, "POST", "/api/auth/admin/ban-user", bossU.cookie, { userId: victimU.id, banReason: "x", banExpiresIn: 60 })).status !== 400 || banEntries() !== banned0 + 1) throw new Error("ban with banExpiresIn was not refused 400 with no entry");
+      console.log("gate: admin re-ban writes one banned -> banned entry; banExpiresIn is refused 400");
+      if ((await call(b, "POST", "/api/auth/admin/unban-user", bossU.cookie, { userId: victimU.id })).status !== 200) throw new Error("unban-user failed");
+      if (!(await signIn(b, victim)).ok) throw new Error("an unbanned user could not sign in");
+      if (!auditRows().some((r) => r.verb === "unban" && r.target_email === victim)) throw new Error("no audit entry for the unban");
+      console.log("gate: admin ban ends sessions, sign-in shows the blocked copy (no reason), reason on user detail and in the audit entry; unban restores sign-in");
+
+      // Revoke one session, then the rest.
+      await signIn(b, victim);
+      await signIn(b, victim);
+      const sessionsOf = () => rows("session", "SELECT id, token FROM session WHERE userId = ?", victimU.id) as { id: string; token: string }[];
+      const before = sessionsOf();
+      if (before.length < 2) throw new Error(`${before.length} sessions for the victim`);
+      // CSO-1: no token reaches the admin's browser. The plugin's list endpoint is off the allowlist (404 even for an admin), and the User detail page ships ids only.
+      if ((await call(b, "POST", "/api/auth/admin/list-user-sessions", bossU.cookie, { userId: victimU.id })).status !== 404) throw new Error("an admin's raw list-user-sessions was not 404");
+      const victimPage = await html(b, `/admin/users/${victimU.id}`, bossU.cookie);
+      if (before.some((s) => victimPage.text.includes(s.token))) throw new Error("the User detail page ships a raw session token");
+      const revokeUrl = (id: string, sid: string) => `/api/admin/users/${id}/sessions/${sid}/revoke`;
+      // A foreign or missing Origin is refused with no side effects; so is a session id that is not this user's.
+      const post = (path: string, origin?: string) => fetch(b + path, { method: "POST", headers: { cookie: bossU.cookie, ...(origin && { origin }) } });
+      const audited = auditRows().length;
+      const refusals = [await post(revokeUrl(victimU.id, before[0]!.id)), await post(revokeUrl(victimU.id, before[0]!.id), "https://evil.test"), await post(`/api/admin/users/${victimU.id}/send-link`), await post(`/api/admin/users/${victimU.id}/send-link`, "https://evil.test")];
+      // No Origin: our 403. A foreign Origin: Void drops the session before our route runs (404, as the review saw); our 403 is the backstop. Either way nothing happens.
+      const st = refusals.map((r) => r.status);
+      if (st[0] !== 403 || st[2] !== 403 || ![403, 404].includes(st[1]!) || ![403, 404].includes(st[3]!)) throw new Error(`no-Origin and cross-origin revoke/send-link -> ${st}, expected 403 for no Origin and 403 or 404 for a foreign one`);
+      if (sessionsOf().length !== before.length || auditRows().length !== audited) throw new Error("a refused revoke or send-link changed a session or wrote an audit entry");
+      const foreignSid = (rows("session", "SELECT id FROM session WHERE userId = ?", bossU.id) as { id: string }[])[0]?.id;
+      if (!foreignSid) throw new Error("the admin has no session row to use as another user's session id");
+      const sessionsBefore = sessionsOf().length;
+      const auditBefore = auditRows().length;
+      if ((await call(b, "POST", revokeUrl(victimU.id, foreignSid), bossU.cookie)).status !== 404 || sessionsOf().length !== sessionsBefore || auditRows().length !== auditBefore || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404 || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown or another user's session id was not 404");
+      if ((await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), plainU.cookie)).status !== 404) throw new Error("a non-admin's revoke was not 404");
+      const revoke = await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), bossU.cookie);
+      if (revoke.status !== 200 || sessionsOf().length !== before.length - 1 || auditRows().filter((r) => r.verb === "revoke-session").length !== 1) throw new Error(`revoke by id -> ${revoke.status}, ${sessionsOf().length} of ${before.length} sessions left`);
+      if ((await call(b, "POST", "/api/auth/admin/revoke-user-sessions", bossU.cookie, { userId: victimU.id })).status !== 200 || sessionsOf().length) throw new Error("revoke-user-sessions left a session");
+      if (!auditRows().some((r) => r.verb === "revoke-session" && r.target_email === victim) || !auditRows().some((r) => r.verb === "revoke-sessions" && r.target_email === victim)) throw new Error("no audit entries for the revokes");
+      console.log("gate: admin revoke one session then all; audit entries for both");
+
+      // Send link: the server route calls requestPasswordReset (no Turnstile token needed), the mail lands in the dev inbox, the link sets a new password.
+      const sent = await call(b, "POST", `/api/admin/users/${victimU.id}/send-link`, bossU.cookie);
+      if (sent.status !== 200 || ((await sent.json()) as any).kind !== "reset") throw new Error(`send-link -> ${sent.status}`);
+      const [resetLink] = await waitMails(b, "Reset your password", victim, 1);
+      if (!resetLink) throw new Error("no reset mail in the dev inbox");
+      const landed = new URL((await follow(b, resetLink)).headers.get("location") ?? "", b);
+      const token = landed.searchParams.get("token");
+      if (landed.pathname !== "/reset-password" || !token) throw new Error(`reset link landed on ${landed}`);
+      const NEW_PW = "admin-sent-password-1";
+      if (!(await authPost(b, "/api/auth/reset-password", { newPassword: NEW_PW, token })).ok || !(await signIn(b, victim, NEW_PW)).ok) throw new Error("the sent link did not set a new password");
+      if (!auditRows().some((r) => r.verb === "send-link" && r.target_email === victim)) throw new Error("no audit entry for the link");
+      if (config.inviteOnly) {
+        // An unverified user in an invite-only app gets a set-password link with its own subject.
+        const pend = addr("pending");
+        await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: pend, password: "" });
+        const pid = idOf(pend);
+        const r = await call(b, "POST", `/api/admin/users/${pid}/send-link`, bossU.cookie);
+        if (r.status !== 200 || ((await r.json()) as any).kind !== "set-password") throw new Error(`send-link for an unverified user -> ${r.status}`);
+        if ((await waitMails(b, SET_PW, pend, 2)).length < 2) throw new Error("the admin's set-password link was not mailed");
+      }
+      if ((await call(b, "POST", `/api/admin/users/not-a-user/send-link`, bossU.cookie)).status !== 404) throw new Error("send-link for a missing user was not 404");
+      console.log("gate: admin send-link lands in the dev inbox and sets a new password" + (config.turnstile ? " (no Turnstile token)" : "") + (config.inviteOnly ? "; a set-password link for an unverified user" : ""));
+
+      // Self-protection: the plugin refuses a self-ban and self-delete (400); the guard refuses before anything is purged.
+      let kept = "";
+      if (config.storage) {
+        if ((await upload(b, bossU.cookie, "mine.txt", "mine")) !== 201) throw new Error("the admin's own upload failed");
+        kept = `users/${bossU.id}/mine.txt`;
+      }
+      for (const [p, want] of [["ban-user", 400], ["remove-user", 400]] as const) {
+        const r = await call(b, "POST", `/api/auth/admin/${p}`, bossU.cookie, { userId: bossU.id });
+        if (r.status !== want) throw new Error(`self ${p} -> ${r.status}, expected ${want}`);
+      }
+      if (!rows("user", "SELECT 1 FROM user WHERE id = ?", bossU.id).length || (kept && !r2Keys().includes(kept)) || !(await sessionUser(b, bossU.cookie))) throw new Error("a refused self-delete changed something");
+      await signIn(b, boss); // a second session, so "Revoke all other sessions" is offered
+      const own = await html(b, `/admin/users/${bossU.id}`, bossU.cookie);
+      if (!own.text.includes("This is you. Use Account settings to delete your own account.") || own.text.includes("Delete user permanently")) throw new Error("own user detail offers Ban or Delete");
+      if (!own.text.includes("This device") || !own.text.includes("Revoke all other sessions")) throw new Error("own user detail lacks This device or Revoke all other sessions");
+      console.log("gate: admin self-ban and self-delete refused (400), own detail page says 'This is you.' and labels This device");
+
+      // Before-hooks run ahead of the endpoint's own checks: a cross-origin delete with the admin's cookie must be refused before the guard purges anything.
+      const keep = await mk(b, addr("keep"));
+      if (config.storage && (await upload(b, keep.cookie, "keep.txt", "keep")) !== 201) throw new Error("the kept user's upload failed");
+      const evil = await fetch(`${b}/api/auth/admin/remove-user`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.test", cookie: bossU.cookie }, body: JSON.stringify({ userId: keep.id }) });
+      if (evil.status !== 403) throw new Error(`a cross-origin remove-user -> ${evil.status}, expected 403`);
+      if (!rows("user", "SELECT 1 FROM user WHERE id = ?", keep.id).length || (config.storage && !r2Keys().includes(`users/${keep.id}/keep.txt`))) throw new Error("a refused cross-origin remove-user purged files or deleted the user");
+      if (auditRows().some((r) => r.verb === "delete-user")) throw new Error("a refused cross-origin remove-user was audited");
+      // B1: the plugin coerces userId, so an array must be refused by the guard (400) before the purge or the delete runs.
+      const arr = await call(b, "POST", "/api/auth/admin/remove-user", bossU.cookie, { userId: [keep.id] });
+      if (arr.status !== 400) throw new Error(`remove-user with an array userId -> ${arr.status}, expected 400`);
+      if (!rows("user", "SELECT 1 FROM user WHERE id = ?", keep.id).length || (config.storage && !r2Keys().includes(`users/${keep.id}/keep.txt`)) || auditRows().some((r) => r.verb === "delete-user")) throw new Error("an array-userId remove-user deleted, purged or was audited");
+
+      // Delete: the user row, sessions and files go; no audit entry holds the deleted email once the request is done; the delete itself is recorded without a target.
+      const del = await mk(b, addr("doomed"));
+      const doomed = addr("doomed");
+      if (config.storage) {
+        if ((await upload(b, del.cookie, "theirs.txt", "bye")) !== 201) throw new Error("the doomed user's upload failed");
+        if (!r2Keys().includes(`users/${del.id}/theirs.txt`)) throw new Error("the doomed user's file is not in R2");
+      }
+      await call(b, "POST", "/api/auth/admin/ban-user", bossU.cookie, { userId: del.id, banReason: `note about ${doomed}` });
+      const removed = await call(b, "POST", "/api/auth/admin/remove-user", bossU.cookie, { userId: del.id });
+      if (removed.status !== 200) throw new Error(`remove-user -> ${removed.status}`);
+      if (rows("user", "SELECT 1 FROM user WHERE id = ?", del.id).length || (await sessionUser(b, del.cookie))) throw new Error("the deleted user row or session is still there");
+      if (config.storage && r2Keys().some((k) => k.startsWith(`users/${del.id}/`))) throw new Error("the deleted user's files are still in R2");
+      await noMail(doomed);
+      const entry = auditRows().find((r) => r.verb === "delete-user");
+      if (!entry || entry.target_user_id !== null || entry.target_email !== null || entry.actor_email !== boss || !String(entry.detail).includes(del.id)) throw new Error(`the delete audit entry is wrong: ${JSON.stringify(entry)}`);
+      if (!auditRows().some((r) => r.verb === "ban" && r.target_email === null && r.detail === null && r.target_user_id === null)) throw new Error("the deleted user's earlier audit rows were not redacted to a null email and detail");
+      console.log("gate: admin delete removes the user row, sessions" + (config.storage ? " and files" : "") + "; no audit entry holds the deleted email or free text; the delete entry has no target");
+
+      // Audit page: newest first, filter by the affected user, "View audit log" on user detail.
+      const audit = await html(b, "/admin/audit", bossU.cookie);
+      for (const t of ["<caption>", 'scope="col"', "<time datetime=", `${boss} unbanned ${victim}`, `${boss} banned ${victim}: active → banned (spam signup)`, `${boss} deleted a user`]) if (!audit.text.includes(t)) throw new Error(`/admin/audit lacks ${t}`);
+      if (audit.text.indexOf(`${boss} unbanned ${victim}`) > audit.text.indexOf(`${boss} banned ${victim}`)) throw new Error("the audit log is not newest first");
+      const mine = await html(b, `/admin/audit?user=${encodeURIComponent(victim.toUpperCase())}`, bossU.cookie);
+      if (!mine.text.includes(`${boss} banned ${victim}`) || mine.text.includes("deleted a user") || mine.text.includes("a deleted user")) throw new Error("?user= did not filter to the affected user");
+      if (!(await html(b, `/admin/audit?user=nobody-here`, bossU.cookie)).text.includes("No changes for nobody-here.")) throw new Error("the empty filtered audit copy is missing");
+      if (!(await html(b, `/admin/users/${victimU.id}`, bossU.cookie)).text.includes(`/admin/audit?user=${encodeURIComponent(victim)}`)) throw new Error("user detail lacks the View audit log link");
+      console.log("gate: admin audit log newest first, ?user= filters to the affected user, user detail links to it");
+
+      // The Account page: an Admin link for an admin; a verify hint for a listed, unverified user (never a different 404); nothing for anyone else.
+      const acct = (cookie: string) => html(b, "/settings", cookie).then((r) => r.text);
+      if (!(await acct(bossU.cookie)).includes('href="/admin"')) throw new Error("an admin's Account page lacks the Admin link");
+      if ((await acct(plainU.cookie)).includes('href="/admin"') || (await acct(plainU.cookie)).includes("admin list")) throw new Error("a non-admin's Account page mentions admin");
+      if (ownerU && !(await acct(ownerU.cookie)).includes("Your email is on the admin list but isn't verified yet.")) throw new Error("a listed, unverified user's Account page lacks the hint");
+
+      // De-listed on a live session and an empty list. Restart on a list without boss (and with plain): boss's session is 404 on page and API at once; plain's live session now reaches list-users.
+      b = await withAdmins(plain);
+      await expectAll(b, "de-listed admin", bossU.cookie, victimU.id, () => 404);
+      for (const [m, p] of adminPaths(victimU.id).slice(0, 5)) if ((await call(b, m, p, plainU.cookie, m === "POST" ? { userId: victimU.id } : undefined)).status !== (p === "/admin/users" ? 302 : 200)) throw new Error(`a newly listed user's live session: ${m} ${p} was refused`);
+      b = await withAdmins("");
+      const empty = await call(b, "GET", "/admin", plainU.cookie), root = await call(b, "GET", "/");
+      if (empty.status !== 404 || root.status !== 200) throw new Error(`an empty ADMIN_EMAILS: /admin -> ${empty.status}, / -> ${root.status}`);
+      if ((await call(b, "GET", "/api/auth/admin/list-users", plainU.cookie)).status !== 404) throw new Error("list-users answered with an empty ADMIN_EMAILS");
+      console.log("gate: admin follows ADMIN_EMAILS live: a de-listed session is 404 on pages and API, a newly listed one is let in on its existing session, an empty list is 404 while GET / is 200");
     } finally {
       writeFileSync(envFile, original);
     }

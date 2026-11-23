@@ -12,8 +12,8 @@ import { installEmail } from "./email";
 import { installTurnstile } from "./turnstile";
 import { installInviteOnly } from "./invite-only";
 
-export const authEnv = (config: Pick<Config, "turnstile" | "inviteOnly">): string =>
-  `BETTER_AUTH_SECRET=${randomBytes(32).toString("base64url")}\nBETTER_AUTH_URL=http://localhost:5173\n${config.turnstile ? "TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA\n" : ""}${config.inviteOnly ? "SIGNUP_ALLOWLIST=@example.com\n" : ""}`;
+export const authEnv = (config: Pick<Config, "turnstile" | "inviteOnly" | "admin">): string =>
+  `BETTER_AUTH_SECRET=${randomBytes(32).toString("base64url")}\nBETTER_AUTH_URL=http://localhost:5173\n${config.turnstile ? "TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA\n" : ""}${config.inviteOnly ? "SIGNUP_ALLOWLIST=@example.com\n" : ""}${config.admin ? "ADMIN_EMAILS=@example.com\n" : ""}`;
 
 // Runs after installShadcn. Pages are copied; `void db generate` runs later in the pipeline (needs deps).
 export function installAuth(dir: string, config: Config): void {

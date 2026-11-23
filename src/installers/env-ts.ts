@@ -12,10 +12,13 @@ const TURNSTILE: EnvPart = {
 
 const INVITE_ONLY: EnvPart = { keys: ["SIGNUP_ALLOWLIST: string(),"] };
 
+// Optional with an empty default (U3): unset or empty means no admins and /admin answers 404, while the app keeps serving. A required key would 500 every request.
+const ADMIN: EnvPart = { keys: ['ADMIN_EMAILS: string().default(""),'] };
+
 export const renderEnvTs = (parts: EnvPart[]): string | null =>
   parts.some((p) => p.keys.length)
     ? `import { defineEnv, string } from "void/env";\n\n${parts.map((p) => p.comment ?? "").join("")}export default defineEnv({\n${parts.flatMap((p) => p.keys).map((k) => `  ${k}\n`).join("")}});\n`
     : null;
 
 // The root env.ts, written whole from the enabled features (one owner; no feature copies an env.ts). null = no feature declares a key.
-export const composeEnvTs = (config: Config): string | null => renderEnvTs([...(config.turnstile ? [TURNSTILE] : []), ...(config.inviteOnly ? [INVITE_ONLY] : [])]);
+export const composeEnvTs = (config: Config): string | null => renderEnvTs([...(config.turnstile ? [TURNSTILE] : []), ...(config.inviteOnly ? [INVITE_ONLY] : []), ...(config.admin ? [ADMIN] : [])]);

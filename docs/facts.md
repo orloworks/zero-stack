@@ -62,3 +62,20 @@ the database cascaded. Deployed D1 is the same engine; the AGENTS.md cascade rul
 rests on this. App tables are not created by `vp dev` alone: they need `void db generate` and `void db reset`/migrate.
 Importing `@auth-schema` from `db/schema.ts` failed at dev start ("Cannot find module '@auth-schema'"); the probe used
 `../.void/better-auth-schema`. Docs show `@auth-schema`; unresolved here, so check it before telling users to use it.
+
+## `--admin` probes P6 and P7 (2026-11-22)
+
+Scaffolded `--framework svelte --email` (void@1.8.0, better-auth@1.7.27), added `admin()` to `auth.ts`, `void db generate`
+(adds `user.role`, `banned`, `banReason`, `banExpires` and `session.impersonatedBy`), ran `vp dev`.
+
+- **P6, `adminClient` through `createAuthClient` from `void/client/svelte`: works.** `void/client/svelte` re-exports
+  `createAuthClient` from `better-auth/svelte` unchanged. `tsc --noEmit` accepts
+  `createAuthClient({ basePath, plugins: [adminClient()] })` with typed `c.admin.listUsers`, `c.admin.banUser` and
+  `users[0].role` (a deliberate type error in the same file is caught, so the file was checked). At runtime the client
+  called `/api/auth/admin/list-users` with a signed-in session cookie and got the user list. `better-auth` resolves
+  from the app root without being in `package.json` (a transitive of `void`; the generated `auth.ts` already imports it).
+- **P7, Void 1.8 does not cookie-cache the session: confirmed.** Sign-in sets only `better-auth.session_token`
+  (no `session_data` cookie); `void/dist` has no `cookieCache` and its auth defaults carry no `session` key. Runtime proof:
+  set `user.role='admin'`, `list-users` 200; set `role='user'` in the database and replay the same cookie: `list-users`
+  403 `YOU_ARE_NOT_ALLOWED_TO_LIST_USERS` at once, and `get-session` shows the new role. So the admin guard needs no
+  cache-disable option; if a Void bump adds a cache, the gate's de-listed and ban checks fail first.

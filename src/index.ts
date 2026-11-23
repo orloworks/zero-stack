@@ -2,6 +2,7 @@
 import { basename, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { argv, FEATURE_LIST, type FlagInput, parseFeature, validateFlags } from "./flags";
+import { closingLines } from "./closing";
 import { clackUi, fillPrompts } from "./prompts";
 import { preflight, scaffold } from "./pipeline";
 
@@ -31,7 +32,7 @@ try {
   const target = positionals[0] ?? config.name;
   await scaffold(config, resolve(target));
   console.log(`\nDone. cd ${target} && bun dev`);
-  if (config.auth && config.framework === "svelte") console.log("Account page: /settings (link it from your nav).");
+  for (const line of closingLines(config)) console.log(line);
 } catch (e) {
   console.error(`error: ${(e as Error).message}`);
   process.exit(1);
