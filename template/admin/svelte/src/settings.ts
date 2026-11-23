@@ -56,10 +56,12 @@ export function adminSettings(c: Ctx) {
       const d = decl(key);
       const parsed = parseSetting(d, raw);
       if (!parsed.ok) return refuse(400, parsed.message);
+      const value = storedForm(parsed.value);
+      // A number like 1e21 stores in exponent form, which the plain-decimal parser refuses: it would read back as the default.
+      if (!parseSetting(d, value).ok) return refuse(400, "Enter a number with fewer digits.");
       const { db, eq, setting: table, auditEntry } = await store();
       const now = new Date();
       const old = (await db.select().from(table).where(eq(table.key, key)).limit(1))[0]?.value ?? storedForm(d.default);
-      const value = storedForm(parsed.value);
       await db.batch([
         db.insert(table).values({ key, value, updatedAt: now }).onConflictDoUpdate({ target: table.key, set: { value, updatedAt: now } }),
         db.insert(auditEntry).values(auditRow({ actor, verb: "set-setting", detail: key, oldValue: old, newValue: value }, now)),

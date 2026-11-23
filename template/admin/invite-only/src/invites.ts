@@ -121,7 +121,11 @@ export async function sendInvite(actor: Actor, id: string, signUpUrl: string): P
     .set({ lastSentAt: now })
     .where(and(eq(invite.id, id), or(isNull(invite.lastSentAt), lt(invite.lastSentAt, new Date(now.getTime() - RESEND_MS)))))
     .returning({ id: invite.id });
-  if (!claimed.length) return { ok: false, status: 429, message: RESEND_TOO_SOON };
+  if (!claimed.length) {
+    // Nothing claimed: either a send just went out, or the invite was deleted since the read.
+    const still = (await db.select({ id: invite.id }).from(invite).where(eq(invite.id, id)).limit(1))[0];
+    return still ? { ok: false, status: 429, message: RESEND_TOO_SOON } : { ok: false, status: 404, message: GONE };
+  }
   try {
     await send(row.entry, "Your invitation", signUpUrl);
   } catch (e) {
