@@ -6,6 +6,7 @@ import type { Config } from "./flags";
 import { installAdmin } from "./installers/admin";
 import { installAuth } from "./installers/auth";
 import { ignoreLine } from "./installers/shared";
+import { writeSetupFiles } from "./setup";
 import { installStorage } from "./installers/storage";
 import { installShadcn } from "./installers/shadcn";
 import { installTailwind } from "./installers/tailwind";
@@ -98,6 +99,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     // Leaves the auth migration generated, not applied to any database.
     if (config.auth) await exec([join(targetDir, "node_modules/.bin/void"), "db", "generate"], targetDir);
     writeAgentFiles(targetDir, config); // before vp check so the block gets formatted too
+    writeSetupFiles(targetDir, config);
     // create-void 1.8.0 output fails its own `vp check` on formatting (docs/facts.md).
     await exec([join(targetDir, "node_modules/.bin/vp"), "check", "--fix"], targetDir);
   } catch (e) {

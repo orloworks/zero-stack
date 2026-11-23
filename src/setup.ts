@@ -1,0 +1,217 @@
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Config } from "./flags";
+
+// Who can do a step: an agent from a CLI/API, an agent driving the user's signed-in browser, or only the human.
+export type Who = "agent" | "agent-browser" | "human";
+
+// One setup step. `action` is markdown (commands in backticks); `verify` is a plain shell command whose exit code proves the step is done
+// (the wizard runs it to skip a done step). `covers` lists the env names the step puts in production. Human steps drive the wizard:
+// `capture` reads that secret name (hidden) and stores it, else `url` is opened, else `exec` is run.
+export type Step = {
+  id: string;
+  on: (c: Config) => boolean;
+  title: string;
+  why: string;
+  who: Who;
+  action: string | ((c: Config) => string);
+  verify: string;
+  covers?: string[];
+  url?: string;
+  click?: string[];
+  exec?: string;
+  capture?: string;
+};
+
+const WHO: Record<Who, string> = { agent: "Agent", "agent-browser": "Agent with browser", human: "Human only" };
+const SECRET_LIST = "void secret list | grep -q";
+const EMAIL_STATUS = "void email status --platform cloudflare";
+const PLANS = "https://dash.cloudflare.com/?to=/:account/workers/plans";
+
+// Dependency order: sign-ins, values a deploy needs, the deploy, then what it provisions. Every step is checked against the Void 1.8.0 docs
+// (reference/cli/{auth,secrets,email,deploy}.md, guide/{env-vars,auth,email/domains}.md) or `--help` of cf and infisical.
+export const STEPS: Step[] = [
+  {
+    id: "cloudflare-login", on: () => true, title: "Sign in to Cloudflare", who: "human",
+    why: "Void deploys to your own Cloudflare account. Sign-in opens a browser and needs an interactive terminal.",
+    action: "`void cloudflare login`", exec: "void cloudflare login", verify: "void cloudflare status",
+  },
+  {
+    id: "infisical-login", on: (c) => !!c.secrets, title: "Sign in to Infisical", who: "human",
+    why: "The `infisical` CLI needs a session before the folder can be linked or production values stored.",
+    action: "`infisical login`", exec: "infisical login", verify: "infisical user get",
+  },
+  {
+    id: "infisical-link", on: (c) => !!c.secrets, title: "Link this folder to an Infisical project", who: "agent",
+    why: "`secrets:pull`, `secrets:push` and the production route read the link file.",
+    action: "Run the `secret-sync` skill, or `infisical init --project-id <id>`", verify: "test -f .infisical.yaml -o -f .infisical.json",
+  },
+  {
+    id: "email-from", on: (c) => !!c.email, title: "Set the sending address", who: "agent",
+    why: "`email.from` ships as `noreply@example.com`, which Void cannot send from. It must be an address on a zone in your Cloudflare account (a subdomain such as `mail.acme.com` keeps existing mail working).",
+    action: "Set `email.from` in `void.config.ts` to an address on your mail domain", verify: "! grep -q noreply@example.com void.config.ts",
+  },
+  {
+    id: "turnstile-widget", on: (c) => !!c.turnstile, title: "Create the Turnstile widget and store its secret", who: "agent",
+    why: "Local dev uses Cloudflare's always-pass test keys, and `auth.ts` refuses to start with the test secret off localhost. The secret goes straight into `void secret put`, so it is never printed; only the public site key is, and it goes in the build shell of the deploy.",
+    action: "`w=$(mktemp) && cf turnstile widgets create --body '{\"name\":\"<app-name>\",\"domains\":[\"<app-host>\"],\"mode\":\"managed\"}' > \"$w\" && jq -rj '(.result // .).secret' \"$w\" | void secret put TURNSTILE_SECRET_KEY; jq -r '(.result // .).sitekey' \"$w\"; rm -f \"$w\"`",
+    verify: `${SECRET_LIST} TURNSTILE_SECRET_KEY`, covers: ["TURNSTILE_SECRET_KEY", "VITE_TURNSTILE_SITE_KEY"],
+  },
+  {
+    id: "signup-allowlist", on: (c) => !!c.inviteOnly, title: "Set the sign-up allowlist", who: "human",
+    why: "Only these emails can create an account. With `--admin` it is optional (invites also live in the database); without it, an unset value fails every request.",
+    action: "`void secret put SIGNUP_ALLOWLIST` (masked prompt), or run the wizard", capture: "SIGNUP_ALLOWLIST",
+    click: ["Exact emails (a@x.com) and whole domains (@x.com), separated by commas.", "No quotes, $, # or backslashes."],
+    verify: `${SECRET_LIST} SIGNUP_ALLOWLIST`, covers: ["SIGNUP_ALLOWLIST"],
+  },
+  {
+    id: "admin-emails", on: (c) => !!c.admin, title: "Set the admin emails", who: "human",
+    why: "An admin is a signed-in user with a verified email on this list. Unset means no admins and `/admin` answers 404. The local `.env` value is the placeholder `@example.com`.",
+    action: "`void secret put ADMIN_EMAILS` (masked prompt), or run the wizard", capture: "ADMIN_EMAILS",
+    click: ["Your own email, or several separated by commas.", "No quotes, $, # or backslashes."],
+    verify: `${SECRET_LIST} ADMIN_EMAILS`, covers: ["ADMIN_EMAILS"],
+  },
+  {
+    id: "deploy", on: () => true, title: "Deploy", who: "agent",
+    why: "Builds, provisions the database and any other resource the code uses, applies migrations and publishes. It fails until every required server key exists remotely, and never uploads `.env`. Run it in a terminal you watch: the first deploy can ask you to pick an account or accept a setup prompt.",
+    action: (c) => `\`${c.turnstile ? "VITE_TURNSTILE_SITE_KEY=<site key> " : ""}void deploy --platform cloudflare\`${c.secrets ? "; with Infisical, the production route in the Secrets section (it ends in `infisical run --env=prod -- void deploy`)" : ""}`,
+    verify: "curl -fsS -o /dev/null https://<app-host>/",
+  },
+  {
+    id: "auth-secret", on: (c) => !!c.auth, title: "Check the Better Auth secret", who: "agent",
+    why: "Void creates `BETTER_AUTH_SECRET` on deploy if it is missing and reuses it later, so there is nothing to enter. `BETTER_AUTH_URL` is a local `.env` value; the Void docs do not say what sets it on the Worker.",
+    action: "Nothing to run; confirm after the deploy", verify: `${SECRET_LIST} BETTER_AUTH_SECRET`, covers: ["BETTER_AUTH_SECRET", "BETTER_AUTH_URL"],
+  },
+  {
+    id: "storage-bucket", on: (c) => !!c.storage, title: "Confirm the R2 bucket", who: "agent",
+    why: "Void sees `void/storage` in the code and provisions the bucket on deploy; there is no separate step.",
+    action: "Nothing to run; confirm after the deploy", verify: "cf r2 buckets list",
+  },
+  {
+    id: "email-setup", on: (c) => !!c.email, title: "Upgrade for sending to any recipient", who: "human",
+    why: "On Workers Free, sending reaches only verified destinations. Arbitrary recipients need Workers Paid (a payment method) and Email Sending onboarding, which a normal deploy never retries.",
+    action: "Upgrade at the plans page, then `void email setup --platform cloudflare`", url: PLANS,
+    click: ["Pick Workers Paid and add a payment method if asked.", "Then run: void email setup --platform cloudflare"], verify: EMAIL_STATUS,
+  },
+  {
+    id: "email-dns", on: (c) => !!c.email, title: "Check mail DNS is verified", who: "agent-browser",
+    why: "Void sets up routing and sending records when the zone is on Cloudflare. A dashboard checklist can still list a step, and records at an outside registrar are yours to add.",
+    action: "In the signed-in browser, open Email, then Settings, then Subdomains, and confirm every item is verified", verify: EMAIL_STATUS,
+  },
+];
+
+export const stepsFor = (c: Config): Step[] => STEPS.filter((s) => s.on(c));
+const hasHuman = (c: Config) => stepsFor(c).some((s) => s.who === "human");
+const cell = (s: string) => s.replace(/\|/g, "\\|");
+const act = (s: Step, c: Config) => (typeof s.action === "function" ? s.action(c) : s.action);
+const code = (s: string) => "`" + s + "`";
+
+// The `## Setup` section of AGENTS.md: a compact table, in order.
+export function composeSetupSection(c: Config): string {
+  const rows = stepsFor(c).map((s, i) => `| ${i + 1} | ${cell(s.title)} | ${WHO[s.who]} | ${cell(act(s, c))} | ${cell(code(s.verify))} |`);
+  return `\n\n## Setup
+
+From scaffold to production, in order. Why each step is needed: \`docs/setup.md\`.${hasHuman(c) ? " Human-only steps go through \`scripts/setup-wizard.sh\` (the human runs it with \`!\`); it is re-runnable and skips what is done. Never ask for, read or print a secret value." : ""}
+
+| # | Step | Who | Action | Verify (exit 0 when done) |
+| - | ---- | --- | ------ | ------------------------- |
+${rows.join("\n")}\n`;
+}
+
+// docs/setup.md: the full guide for humans.
+export function composeSetupDoc(c: Config): string {
+  const body = stepsFor(c).map((s, i) => {
+    const lines = [`## ${i + 1}. ${s.title}`, "", `Who: ${WHO[s.who]}`, "", s.why, "", `Do: ${act(s, c)}`];
+    if (s.url) lines.push("", `Open: ${s.url}`);
+    if (s.click?.length) lines.push("", ...s.click.map((l) => `- ${l}`));
+    lines.push("", `Verify (exit 0 when done): ${code(s.verify)}`);
+    return lines.join("\n");
+  });
+  return `# Setup
+
+Every step from scaffold to production for the flags this app was made with, in order. "Agent" steps have a CLI or API an agent can run. "Agent with browser" steps are dashboard-only; an agent can drive your signed-in browser while you watch. "Human only" steps need you${hasHuman(c) ? `: run \`bash scripts/setup-wizard.sh\`, which opens the right page, says what to click, and stores values straight into ${c.secrets ? "Infisical and Void" : "Void"} without printing them` : ""}.
+
+${body.join("\n\n")}
+`;
+}
+
+const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+// The wizard library: the \`wizard\` skill's helper names, trimmed to what these steps need (no .env or GitHub writes).
+const LIB = `set -euo pipefail
+cd "$(dirname "$0")/.."
+
+TOTAL=__TOTAL__
+N=0
+TODO=()
+say()  { printf '  %s\\n' "$1"; }
+warn() { printf '  ! %s\\n' "$1"; }
+open_url() {
+  printf '  opening %s\\n' "$1"
+  { command -v open >/dev/null 2>&1 && open "$1" || command -v xdg-open >/dev/null 2>&1 && xdg-open "$1"; } >/dev/null 2>&1 || warn "open it yourself: $1"
+}
+# todo TITLE VERIFY: announce the stage; false when VERIFY already passes, so a re-run skips done steps.
+todo() {
+  N=$((N + 1))
+  printf '\\n> Stage %s/%s: %s\\n' "$N" "$TOTAL" "$1"
+  if bash -c "$2" >/dev/null 2>&1; then say "already done, skipping"; return 1; fi
+}
+# check VERIFY TITLE: after the human acts, confirm it, or remember what is left.
+check() {
+  if bash -c "$1" >/dev/null 2>&1; then say "done"; else warn "not detected yet"; TODO+=("$2"); fi
+}
+# put_secret NAME: read a value without echoing it, then store it. Only the entry count is printed.
+put_secret() {
+  local v f
+  read -rs -p "  Value for $1 (hidden): " v || true
+  printf '\\n'
+  if [[ -z "$v" || "$v" == *[\\'\\"\\\\$#]* ]]; then warn "empty, or has a quote, backslash, \\$ or #: skipped"; TODO+=("$1"); return; fi
+__INFISICAL__  printf '%s' "$v" | void secret put "$1" >/dev/null
+  say "stored $1 (\${#v} characters)"
+}
+`;
+
+const INFISICAL = `  if [[ -f .infisical.yaml || -f .infisical.json ]]; then
+    f=$(mktemp); printf '%s=%s\\n' "$1" "$v" > "$f"
+    infisical secrets set --file "$f" --env=prod --silent >/dev/null || { rm -f "$f"; warn "Infisical refused it"; TODO+=("$1"); return; }
+    rm -f "$f"
+  fi
+`;
+
+// scripts/setup-wizard.sh: one stage per human step, null when the app has none. Never prints what the human types.
+export function composeWizard(c: Config): string | null {
+  const human = stepsFor(c).filter((s) => s.who === "human");
+  if (!human.length) return null;
+  const stages = human.map((s) => {
+    const t = sq(s.title);
+    const verify = sq(s.verify);
+    const body = [`say ${sq(s.why)}`, ...(s.click ?? []).map((l) => `say ${sq(l)}`)];
+    if (s.capture) body.push(`put_secret ${s.capture}`);
+    else if (s.url) body.push(`open_url ${sq(s.url)}`, `read -r -p "  Press Enter when done: " _ || true`);
+    else body.push(`${s.exec} || warn "exited non-zero"`);
+    return `  if todo ${t} ${verify}; then\n${body.map((l) => `    ${l}`).join("\n")}\n    check ${verify} ${t}\n  fi`;
+  });
+  return `#!/usr/bin/env bash
+# Human-only setup steps (generated; the list is docs/setup.md). Re-run any time: a done step is skipped. Never prints what you type.
+${LIB.replace("__TOTAL__", String(human.length)).replace("__INFISICAL__", c.secrets ? INFISICAL : "")}
+run_wizard() {
+${stages.join("\n")}
+  if (( \${#TODO[@]} )); then printf '\\nStill to do:\\n'; printf '  - %s\\n' "\${TODO[@]}"; exit 1; fi
+  printf '\\nAll human-only steps are done.\\n'
+}
+
+run_wizard "$@"; exit
+`;
+}
+
+// docs/setup.md always; scripts/setup-wizard.sh only when a human step applies.
+export function writeSetupFiles(dir: string, c: Config): void {
+  mkdirSync(join(dir, "docs"), { recursive: true });
+  writeFileSync(join(dir, "docs/setup.md"), composeSetupDoc(c));
+  const wizard = composeWizard(c);
+  if (!wizard) return;
+  mkdirSync(join(dir, "scripts"), { recursive: true });
+  const f = join(dir, "scripts/setup-wizard.sh");
+  writeFileSync(f, wizard);
+  chmodSync(f, 0o755);
+}
