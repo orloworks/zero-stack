@@ -96,7 +96,7 @@ function databaseHooks(parts: DatabaseHookParts): string[] {
 //   has no unexpired set-password or reset link, so a new one goes out after the last expires or is used.
 // - reset-password: a valid token proves the inbox, so it marks an unverified user verified, if the list still holds the address; if not, the reset is refused
 //   with Better Auth's invalid-token error. Verified users reset as usual. The reset then replaces the random password.
-const INVITE_ONLY_PLUGIN = `{
+export const INVITE_ONLY_PLUGIN =`{
       id: "invite-only",
       hooks: {
         before: [
@@ -139,8 +139,15 @@ const INVITE_ONLY_PLUGIN = `{
               const expiresIn = ctx.context.options.emailAndPassword?.resetPasswordTokenExpiresIn ?? 3600;
               await ctx.context.runInBackgroundOrAwait(
                 (async () => {
-                  await ctx.context.internalAdapter.createVerificationValue({ value: found.user.id, identifier: \`reset-password:\${token}\`, expiresAt: new Date(Date.now() + expiresIn * 1000) });
-                  await send(found.user.email, "Set your password", \`\${ctx.context.baseURL}/reset-password/\${token}?callbackURL=%2Freset-password\`);
+                  const identifier = \`reset-password:\${token}\`;
+                  await ctx.context.internalAdapter.createVerificationValue({ value: found.user.id, identifier, expiresAt: new Date(Date.now() + expiresIn * 1000) });
+                  try {
+                    await send(found.user.email, "Set your password", \`\${ctx.context.baseURL}/reset-password/\${token}?callbackURL=%2Freset-password\`);
+                  } catch (e) {
+                    // A link nobody got would block the next one for an hour (the unexpired-row check above).
+                    await ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier);
+                    throw e;
+                  }
                 })(),
               );
             }),
@@ -162,6 +169,8 @@ function userOption(config: Config): string[] {
 
 export function composeAuthTs(config: Config): string {
   const options = [
+    // One count across Worker instances (D3, Void docs/guide/auth.md); costs one D1 write per auth request. Off in dev, on for deployed Cloudflare requests.
+    '  rateLimit: { storage: "database" },',
     // Sign-in never waits on mail (D8), except --invite-only: the allowlist must see a proven address, so verification is required (sign-up creates no session)
     // and is proven by the set-password link (INVITE_ONLY_PLUGIN). Reset revokes every other session (D30).
     ...(config.email

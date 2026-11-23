@@ -25,8 +25,8 @@ export function installAuth(dir: string, config: Config): void {
 
   addPaths(dir, { "@auth-schema": ["./.void/better-auth-schema.ts"] });
 
+  writeFileSync(join(dir, "auth.ts"), composeAuthTs(config));
   if (framework === "svelte") {
-    writeFileSync(join(dir, "auth.ts"), composeAuthTs(config));
     const envTs = composeEnvTs(config);
     if (envTs) writeFileSync(join(dir, "env.ts"), envTs);
   }

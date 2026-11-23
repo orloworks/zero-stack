@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { FEATURE_LIST, validateFlags } from "../../src/flags";
-import { composeAuthTs } from "../../src/installers/auth-ts";
+import { INVITE_ONLY_PLUGIN, composeAuthTs } from "../../src/installers/auth-ts";
 
 // Every svelte flag combination (implications applied), as the composer sees it.
 function* svelteConfigs() {
@@ -83,4 +83,46 @@ test("the reset mail subject is 'Set your password' for an unverified user's ser
   expect(compose({ admin: true })).toContain('send(user.email, "Reset your password", url)');
   expect(both.match(/^  databaseHooks:/gm)).toHaveLength(1);
   expect(both).toContain("SIGNUP_INVITE_ONLY"); // the invite gate and the admin hooks share one databaseHooks object
+});
+
+// D8: the invite-only after-hook, run against an in-memory verification table with the generated source's own free names stubbed.
+test("a failed set-password send leaves no unexpired reset-password row, and the next accepted sign-in mails a link", async () => {
+  const rows: { identifier: string; value: string; expiresAt: Date }[] = [];
+  let failing = true;
+  const mails: string[] = [];
+  const user = { id: "u1", email: "a@example.com", emailVerified: false };
+  const stubs = {
+    createAuthMiddleware: (fn: unknown) => fn,
+    isAPIError: () => false,
+    signupAllowed: () => true,
+    env: {},
+    send: async (to: string) => {
+      if (failing) throw new Error("mail down");
+      mails.push(to);
+    },
+    APIError: Error,
+  };
+  const plugin = new Function(...Object.keys(stubs), `return (${INVITE_ONLY_PLUGIN});`)(...Object.values(stubs));
+  const handler = plugin.hooks.after[0].handler;
+  const ctx = {
+    path: "/sign-in/email",
+    body: { email: user.email },
+    context: {
+      returned: undefined,
+      baseURL: "http://x",
+      options: {},
+      runInBackgroundOrAwait: (p: Promise<unknown>) => p,
+      internalAdapter: {
+        findUserByEmail: async () => ({ user }),
+        createVerificationValue: async (r: (typeof rows)[number]) => void rows.push(r),
+        deleteVerificationByIdentifier: async (id: string) => void rows.splice(0, rows.length, ...rows.filter((r) => r.identifier !== id)),
+      },
+      adapter: { findOne: async () => rows.find((r) => r.identifier.startsWith("reset-password:") && r.expiresAt > new Date()) ?? null },
+    },
+  };
+  await expect(handler(ctx)).rejects.toThrow("mail down");
+  expect(rows.filter((r) => r.expiresAt > new Date())).toEqual([]);
+  failing = false;
+  await handler(ctx);
+  expect(mails).toEqual([user.email]);
 });
