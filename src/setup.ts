@@ -7,7 +7,7 @@ export type Who = "agent" | "agent-browser" | "human";
 
 // One setup step. `action` is markdown (commands in backticks); `verify` is a plain shell command whose exit code proves the step is done
 // (the wizard runs it to skip a done step). `covers` lists the env names the step puts in production. Human steps drive the wizard:
-// `capture` reads that secret name (hidden) and stores it, else `url` is opened, else `exec` is run.
+// `capture` reads that secret name (hidden) and stores it, else `url` is printed for the person to open, else `exec` is run.
 export type Step = {
   id: string;
   on: (c: Config) => boolean;
@@ -22,13 +22,11 @@ export type Step = {
   exec?: string;
   capture?: string;
   // Cannot be proven by a command: the wizard never skips it and does not check it afterwards (the human confirms).
-  always?: boolean;
 };
 
 const WHO: Record<Who, string> = { agent: "Agent", "agent-browser": "Agent with browser", human: "Human only" };
 const SECRET_LIST = "void secret list | grep -q";
 const EMAIL_STATUS = "void email status --platform cloudflare";
-const PLANS = "https://dash.cloudflare.com/?to=/:account/workers/plans";
 
 // Dependency order: sign-ins, values a deploy needs, the deploy, then what it provisions. Every step is checked against the Void 1.8.0 docs
 // (reference/cli/{auth,secrets,email,deploy}.md, guide/{env-vars,auth,email/domains}.md) or `--help` of cf and infisical.
@@ -105,10 +103,9 @@ export const STEPS: Step[] = [
     action: "Nothing to run; confirm after the deploy", verify: "cf r2 buckets list --name-contains <app-name> | grep -q storage",
   },
   {
-    id: "email-setup", on: (c) => !!c.email, title: "Upgrade for sending to any recipient", who: "human",
-    why: "No command proves Workers Paid (`void email status` also passes on Workers Free), so this step is never skipped. On Workers Free, sending reaches only verified destinations. Arbitrary recipients need Workers Paid (a payment method) and Email Sending onboarding, which a normal deploy never retries.",
-    action: "Upgrade at the plans page, then `void email setup --platform cloudflare`", url: PLANS,
-    click: ["Pick Workers Paid and add a payment method if asked.", "Then run: void email setup --platform cloudflare"], verify: "false", always: true,
+    id: "email-setup", on: (c) => !!c.email, title: "Turn on Email Sending", who: "agent",
+    why: "Sends from your domain. Mail to any recipient needs the Workers Paid plan; if you don't have it, `void email setup` says so. The guide never opens the plans page for you.",
+    action: "`void email setup --platform cloudflare`", verify: "void email status >/dev/null 2>&1",
   },
   {
     id: "email-dns", on: (c) => !!c.email, title: "Check mail DNS is verified", who: "agent-browser",
@@ -122,7 +119,7 @@ const hasHuman = (c: Config) => stepsFor(c).some((s) => s.who === "human");
 const cell = (s: string) => s.replace(/\|/g, "\\|");
 const act = (s: Step, c: Config) => (typeof s.action === "function" ? s.action(c) : s.action);
 const code = (s: string) => "`" + s + "`";
-const ver = (s: Step) => (s.always ? "none: confirm by hand" : code(s.verify));
+const ver = (s: Step) => code(s.verify);
 
 // The `## Setup` section of AGENTS.md: a compact table, in order.
 export function composeSetupSection(c: Config): string {
@@ -166,14 +163,7 @@ N=0
 TODO=()
 say()  { printf '  %s\\n' "$1"; }
 warn() { printf '  ! %s\\n' "$1"; }
-open_url() {
-  # Only a person at a terminal gets a browser: tests, agents and pipes (no TTY on stdin) or SETUP_WIZARD_NO_OPEN=1 just see the link.
-  if [ -n "\${SETUP_WIZARD_NO_OPEN:-}" ] || [ ! -t 0 ]; then printf '  open %s\\n' "$1"; return; fi
-  printf '  opening %s\\n' "$1"
-  if command -v open >/dev/null 2>&1; then open "$1" >/dev/null 2>&1 || warn "open it yourself: $1"
-  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$1" >/dev/null 2>&1 || warn "open it yourself: $1"
-  else warn "open it yourself: $1"; fi
-}
+# The wizard never opens a browser itself: it prints the link for the person to open.
 # todo TITLE VERIFY: announce the stage; false when VERIFY already passes, so a re-run skips done steps.
 todo() {
   N=$((N + 1))
@@ -210,9 +200,9 @@ export function composeWizard(c: Config): string | null {
     const verify = sq(s.verify);
     const body = [`say ${sq(s.why)}`, ...(s.click ?? []).map((l) => `say ${sq(l)}`)];
     if (s.capture) body.push(`put_secret ${s.capture}`);
-    else if (s.url) body.push(`open_url ${sq(s.url)}`, `read -r -p "  Press Enter when done: " _ || true`);
+    else if (s.url) body.push(`say ${sq("Open: " + s.url)}`, `read -r -p "  Press Enter when done: " _ || true`);
     else body.push(`${s.exec} || warn "exited non-zero"`);
-    return `  if todo ${t} ${verify}; then\n${body.map((l) => `    ${l}`).join("\n")}${s.always ? "" : `\n    check ${verify} ${t}`}\n  fi`;
+    return `  if todo ${t} ${verify}; then\n${body.map((l) => `    ${l}`).join("\n")}\n    check ${verify} ${t}\n  fi`;
   });
   return `#!/usr/bin/env bash
 # Human-only setup steps (generated; the list is docs/setup.md). Re-run any time: a done step is skipped. Never prints what you type.

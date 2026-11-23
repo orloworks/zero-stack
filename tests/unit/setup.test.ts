@@ -99,18 +99,16 @@ function wizardRun(c: ReturnType<typeof cfg>, input: string, listed: string, voi
   return { code: r.exitCode, out: r.stdout.toString() + r.stderr.toString(), calls: read(log), stdin: read(log + ".stdin"), opened: read(log + ".open"), dir };
 }
 
-test("the wizard never opens a browser without a person at a terminal, and prints the link instead", () => {
+test("the wizard never opens a browser", () => {
   const c = cfg({ email: true, turnstile: true, admin: true });
   const r = wizardRun(c, "\n\n\n\n\n\n", "");
   expect(r.opened).toBe("");
-  expect(r.out).toContain("https://");
   // Without the env var too: stdin is a pipe here, not a TTY.
   const dir = r.dir;
   const again = Bun.spawnSync(["bash", join(dir, "scripts/setup-wizard.sh")], {
     cwd: dir, stdin: new TextEncoder().encode("\n\n\n\n\n\n"),
     env: { ...process.env, SETUP_WIZARD_NO_OPEN: "", PATH: `${join(dir, "fakebin")}:${process.env.PATH}`, FAKE_LOG: join(dir, "calls.log"), LISTED: "" },
   });
-  expect(again.stdout.toString()).toContain("https://");
   expect(readFileSync(join(dir, "calls.log.open"), { flag: "a+" }).toString()).toBe("");
 }, 30_000); // two wizard runs; 5s is too short at load 100+
 
