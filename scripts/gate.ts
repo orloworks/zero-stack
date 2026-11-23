@@ -629,7 +629,7 @@ try {
     const upload = (b: string, cookie: string, name: string, body: string) => fetch(`${b}/api/files/${name}`, { method: "PUT", body, headers: { cookie, "content-type": "text/plain" } }).then((r) => r.status);
     const signIn = (b: string, address: string, password = gatePw) => authPost(b, "/api/auth/sign-in/email", { email: address, password });
     // The 404 matrix: pages, the plugin's endpoints and our own admin route.
-    const adminPaths = (id: string): [string, string][] => [["GET", "/admin"], ["GET", "/admin/audit"], ["GET", `/admin/users/${id}`], ["GET", "/admin/users"], ["GET", "/api/auth/admin/list-users"], ["GET", `/api/auth/admin/get-user?id=${id}`], ["POST", `/api/admin/users/${id}/send-link`]];
+    const adminPaths = (id: string): [string, string][] => [["GET", "/admin"], ["GET", "/admin/audit"], ["GET", `/admin/users/${id}`], ["GET", "/admin/users"], ["GET", "/api/auth/admin/list-users"], ["GET", `/api/auth/admin/get-user?id=${id}`], ["POST", `/api/admin/users/${id}/send-link`], ["GET", "/admin/features"]];
     const expectAll = async (b: string, who: string, cookie: string, id: string, want: (m: string, p: string) => number) => {
       for (const [m, p] of adminPaths(id)) {
         const r = await call(b, m, p, cookie, m === "POST" ? { userId: id } : undefined);
@@ -863,6 +863,92 @@ try {
       for (const t of [`Onboarding: ${steps} of ${steps}`, "Signed up: Done", "Email verified: Done", "example-step: Done"]) if (!otherPage.includes(t)) throw new Error(`user detail lacks ${t}`);
       if (!(await html(b, `/admin/users/${victimU.id}`, bossU.cookie)).text.includes("example-step: Not yet")) throw new Error("an unreached step did not say Not yet");
       console.log(`gate: admin onboarding: the Users list shows "n of m" (2 of ${steps}, then ${steps} of ${steps} after a step), user detail lists the steps with Done and Not yet`);
+
+      // Feature switches (#54): precedence over HTTP. The scaffold declares "example-feature" and gates routes/api/example-feature.ts on it.
+      {
+        const F = "example-feature", feat = addr("feat"), featU = await mk(b, feat);
+        const gated = (cookie = "") => call(b, "GET", "/api/example-feature", cookie);
+        const setGlobal = (state: unknown) => call(b, "POST", `/api/admin/features/${F}`, bossU.cookie, { state });
+        const setUser = (u: { id: string }, state: unknown) => call(b, "POST", `/api/admin/users/${u.id}/features/${F}`, bossU.cookie, { state });
+        const expectGate = async (what: string, who: string, cookie: string, want: number) => {
+          const got = (await gated(cookie)).status;
+          if (got !== want) throw new Error(`features: ${what}: ${who} got ${got}, expected ${want}`);
+        };
+        const auditCount = () => auditRows().length;
+        // Nothing set: off for everyone; signed out is 401, signed in is 403.
+        await expectGate("nothing set", "signed out", "", 401);
+        await expectGate("nothing set", "a user", featU.cookie, 403);
+        // Global on and off.
+        if ((await setGlobal("on")).status !== 200) throw new Error("features: setting the global state on failed");
+        await expectGate("global on", "a user", featU.cookie, 200);
+        await expectGate("global on", "signed out", "", 401);
+        const onBody = (await (await gated(featU.cookie)).json()) as { features: string[] };
+        if (!onBody.features.includes(F)) throw new Error("features(c) did not list a feature that is on");
+        if ((await setGlobal("off")).status !== 200) throw new Error("features: setting the global state off failed");
+        await expectGate("global off", "a user", featU.cookie, 403);
+        // An override in both directions: on beats global off for that user only; off beats global on.
+        if ((await setUser(featU, "on")).status !== 200) throw new Error("features: setting an override on failed");
+        await expectGate("override on, global off", "the user", featU.cookie, 200);
+        await expectGate("override on, global off", "another user", plainU.cookie, 403);
+        await setGlobal("on");
+        if ((await setUser(featU, "off")).status !== 200) throw new Error("features: setting an override off failed");
+        await expectGate("override off, global on", "the user", featU.cookie, 403);
+        await expectGate("override off, global on", "another user", plainU.cookie, 200);
+        // The kill switch beats an override on, for everyone.
+        await setUser(featU, "on");
+        await expectGate("override on, global on", "the user", featU.cookie, 200);
+        if ((await setGlobal("kill")).status !== 200) throw new Error("features: setting the kill switch failed");
+        await expectGate("kill switch", "the user with an override on", featU.cookie, 403);
+        await expectGate("kill switch", "another user", plainU.cookie, 403);
+        // The pages show the result and the reason, computed by decide().
+        const killed = (await html(b, `/admin/users/${featU.id}`, bossU.cookie)).text;
+        for (const t of ["Feature overrides", "Use global", `id="override-${F}"`, "Effective: Off: kill switch applies to everyone", `aria-label="Save ${F} for ${feat}"`]) if (!killed.includes(t)) throw new Error(`user detail lacks ${t} under the kill switch`);
+        await setGlobal("on");
+        if (!(await html(b, `/admin/users/${featU.id}`, bossU.cookie)).text.includes("Effective: On: user override")) throw new Error("user detail does not say On: user override");
+        await setUser(featU, "default");
+        if (!(await html(b, `/admin/users/${featU.id}`, bossU.cookie)).text.includes("Effective: On: on for everyone")) throw new Error("user detail does not follow the global state once the override is reset");
+        await expectGate("override reset, global on", "the user", featU.cookie, 200);
+        const page = (await html(b, "/admin/features", bossU.cookie)).text;
+        for (const t of ["<h1", F, "<fieldset>", "<legend", 'type="radio"', "Everyone, except users set to off", "No one, except users set to on", "No one. User settings are ignored.", `aria-label="Save ${F}"`, 'href="/admin/features"']) if (!page.includes(t)) throw new Error(`/admin/features lacks ${t}`);
+        console.log("gate: features: nothing set is off (401 signed out, 403 signed in), global on and off, an override in both directions, the kill switch beats an override on, and the pages show the effective result and reason");
+        // A row for a feature that is no longer declared is dropped: it neither reaches features(c) nor the pages, and nothing fails.
+        onUser(feat, "INSERT INTO feature_switch (feature, state, updated_at) SELECT 'ghost', 'on', 1700000000000 WHERE ? IS NOT NULL");
+        onUser(feat, "INSERT INTO feature_override (user_id, feature, state, updated_at) VALUES (?, 'ghost', 'on', 1700000000000)");
+        const ghost = (await (await gated(featU.cookie)).json()) as { features: string[] };
+        if (ghost.features.join() !== F) throw new Error(`features(c) with an undeclared row returned ${ghost.features.join()}`);
+        const ghostPage = await html(b, "/admin/features", bossU.cookie), ghostUser = await html(b, `/admin/users/${featU.id}`, bossU.cookie);
+        if (ghostPage.status !== 200 || ghostUser.status !== 200 || ghostPage.text.includes("ghost") || ghostUser.text.includes("ghost")) throw new Error("an undeclared feature row reached a page");
+        if ((await setGlobal("on")).status !== 200) throw new Error("an undeclared row broke set()");
+        console.log("gate: features: an undeclared feature row and override are dropped");
+        // Refusals write nothing: a bad state, an undeclared feature, a missing user, a non-admin, no or a foreign Origin.
+        const before = auditCount();
+        const refused: [string, number][] = [
+          [`bad state: ${(await setGlobal("sometimes")).status}`, 400],
+          [`no state: ${(await setGlobal(undefined)).status}`, 400],
+          [`kill as an override: ${(await setUser(featU, "kill")).status}`, 400],
+          [`undeclared feature: ${(await call(b, "POST", "/api/admin/features/ghost", bossU.cookie, { state: "on" })).status}`, 400],
+          [`missing user: ${(await call(b, "POST", `/api/admin/users/not-a-user/features/${F}`, bossU.cookie, { state: "on" })).status}`, 404],
+          [`non-admin global: ${(await call(b, "POST", `/api/admin/features/${F}`, plainU.cookie, { state: "off" })).status}`, 404],
+          [`non-admin override: ${(await call(b, "POST", `/api/admin/users/${featU.id}/features/${F}`, plainU.cookie, { state: "off" })).status}`, 404],
+          [`signed out: ${(await call(b, "POST", `/api/admin/features/${F}`, "", { state: "off" })).status}`, 404],
+          [`foreign Origin: ${(await fetch(`${b}/api/admin/features/${F}`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.test", cookie: bossU.cookie }, body: JSON.stringify({ state: "off" }) })).status}`, 403],
+          [`no Origin: ${(await fetch(`${b}/api/admin/features/${F}`, { method: "POST", headers: { "content-type": "application/json", cookie: bossU.cookie }, body: JSON.stringify({ state: "off" }) })).status}`, 403],
+        ];
+        // A foreign Origin is 403 or 404 (Better Auth ignores the session cookie on it, so the admin looks signed out); either way nothing runs.
+        for (const [what, want] of refused) if (Number(what.split(": ")[1]) !== want && !(what.startsWith("foreign Origin") && what.endsWith("404"))) throw new Error(`features: ${what}, expected ${want}`);
+        await expectGate("after the refusals", "the user", featU.cookie, 200);
+        if (auditCount() !== before) throw new Error("a refused feature change wrote an audit entry");
+        if ((await html(b, "/admin/features", plainU.cookie)).status !== 404) throw new Error("a non-admin reached /admin/features");
+        console.log("gate: features: a bad state, an undeclared feature, a missing user, a non-admin and a missing or foreign Origin are refused and write no audit entry");
+        // Every change is audited, in the same batch as the change, with the old and new value.
+        const audited = auditRows().filter((r) => r.verb === "set-feature" || r.verb === "set-override");
+        const has = (verb: string, old: string, now: string) => audited.some((r) => r.verb === verb && r.detail === F && r.old_value === old && r.new_value === now);
+        if (!has("set-feature", "off", "on") || !has("set-feature", "on", "kill") || !has("set-override", "default", "on") || !has("set-override", "on", "default") || !has("set-override", "on", "off")) throw new Error(`features: the audit log lacks an entry: ${JSON.stringify(audited.map((r) => [r.verb, r.old_value, r.new_value]))}`);
+        if (!audited.some((r) => r.verb === "set-override" && r.target_email === feat)) throw new Error("an override entry does not name the user");
+        const log = (await html(b, "/admin/audit", bossU.cookie)).text;
+        for (const t of [`${boss} set feature ${F}: on → kill`, `${boss} set feature ${F} for ${feat}: default → on`]) if (!log.includes(t)) throw new Error(`/admin/audit lacks ${t}`);
+        console.log("gate: features: every global change and override wrote an audit entry with its old and new value");
+      }
 
       if (config.inviteOnly) {
         // Invites in the database (U4, E10): no SIGNUP_ALLOWLIST at all, so the database is the only list and the app still fails closed.

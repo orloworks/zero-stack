@@ -149,7 +149,7 @@ in `AGENTS.md`.
   page as partial-purge copy) and sweeps again in `afterDelete`.
 
 - `--admin` (svelte): an admin area at `/admin` in the same app (spec #51; tickets #52: guard, Users,
-  User detail, Audit log, and #53: invites and onboarding). Feature switches and settings are later tickets. An **admin** is a signed-in
+  User detail, Audit log, #53: invites and onboarding, and #54: feature switches). Settings is a later ticket. An **admin** is a signed-in
   user with a verified email on the `ADMIN_EMAILS` secret (the invite-only matcher, `src/signup-allowlist.ts`, copied when
   `--invite-only` did not). It is optional with an empty default in the composed `env.ts` (unset or empty means no admins and
   `/admin` 404s while the app serves); the local `.env` gets `ADMIN_EMAILS=@example.com`. There is no promote button.
@@ -202,6 +202,18 @@ in `AGENTS.md`.
     an undeclared name throws) and `progress(userId)`; `onboarding_step` (user id `cascade`, step, reached at; primary key user and step). "Signed up" and
     "Email verified" come from the user row and are never stored. The Users list shows "n of m" in an Onboarding column and user detail the steps; both are
     hidden when `STEPS` is empty. Test: `tests/onboarding.test.ts`.
+  - **Feature switches** (`--admin`, #54; D15, E3, story 75-80). `src/access.ts` exports exactly `FEATURES` (the scaffold ships `example-feature`), `Feature`,
+    `features(c)`, `requireFeature(c, f)`, `adminSwitches(c, userId?)` and `decide(f, snapshot)`. Precedence, in one pure `decide()`: kill switch > per-user override
+    (both directions) > plan > global > off; the pages get the result and its reason ("On: user override", "Off: kill switch applies to everyone") from
+    `adminSwitches(c, userId).effective(f)`, built on the same rule. One snapshot per request, memoised on the raw request; an empty `sources` list for the plan layer
+    (`--payments` appends to it); undeclared rows, unknown states and undeclared overrides are dropped. `requireFeature` is 401 signed out, 403 when off and 500 when
+    the database fails; `features(c)` never throws (signed out or an error: the empty set, logged). `feature_switch` (feature, state) and `feature_override` (user id
+    `cascade`, feature, state) live in `db/schema/admin.ts`; `set()` is bound to the admin who called `adminSwitches` and writes the change and its audit entry
+    (`set-feature`, `set-override`, old and new value) in one `db.batch`. Routes: `POST /api/admin/features/:feature` (`{ state: on | off | kill }`) and
+    `POST /api/admin/users/:id/features/:feature` (`{ state: default | on | off }`), admin and same-origin. The Features page (nav: Users, Invites, Features, Audit
+    log) is a `<fieldset>` radio group per feature with its own Save; user detail has a select per feature and the effective result. Copy: "Saved. Applies on the
+    user's next page load." and "Nothing declared yet. Add features in `src/access.ts`." `routes/api/example-feature.ts` is the gated example the gate drives.
+    Tests: `tests/access.test.ts` (exports, precedence table over every combination, fail-closed) and `tests/access-pages.test.ts`.
   - `session.create.before` writes `lastSignInAt` (a `user.additionalFields` column) and nothing else.
   - The CLI closes with "To use /admin, sign in with an email on ADMIN_EMAILS and verify it."; `AGENTS.md` gets an Admin
     section. Generated tests: `tests/admin*.test.ts` (matcher, `userStatus`, the guard over a real Better Auth, the action
@@ -318,7 +330,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   `ADMIN_EMAILS` is 404 while `GET /` is 200; search by email (any case) and by name, the no-match copy, `%` not a wildcard, paging; ban ends sessions and sign-in
   shows the blocked copy, unban restores it; revoke one then all sessions; send-link lands in the dev inbox and sets a password (with no Turnstile token, and as a
   set-password link for an unverified invite-only user); self-ban and self-delete 400; delete removes the row, sessions and files and leaves no audit entry
-  holding the deleted email; the audit page newest first and `?user=`; onboarding "n of m" in the list and the steps on user detail, and onboarding rows gone with the user; `--admin --invite-only` with no `SIGNUP_ALLOWLIST`: a database invite (exact and domain) admits at once with no restart, a lookalike and no source are refused, revoke refuses again and leaves the existing account, the reset-password re-check reads the database, send-invite lands in the dev inbox, every change is audited, a search with no account says not invited or invited, and with a secret the secret still admits, shows read-only and a revoke of a covered entry says "Still invited through SIGNUP_ALLOWLIST."; `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
+  holding the deleted email; the audit page newest first and `?user=`; onboarding "n of m" in the list and the steps on user detail, and onboarding rows gone with the user; feature switches: nothing set is off (401 signed out, 403 signed in), global on and off, an override in both directions, the kill switch beats an override on, the pages show the effective result and reason, an undeclared row is dropped, refused changes write no audit entry and every change is audited; `--admin --invite-only` with no `SIGNUP_ALLOWLIST`: a database invite (exact and domain) admits at once with no restart, a lookalike and no source are refused, revoke refuses again and leaves the existing account, the reset-password re-check reads the database, send-invite lands in the dev inbox, every change is audited, a search with no account says not invited or invited, and with a secret the secret still admits, shows read-only and a revoke of a covered entry says "Still invited through SIGNUP_ALLOWLIST."; `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
   without a session, upload and download under `users/<id>/`, escaping names rejected, exactly 10 MB stored and 10 MB + 1 byte refused 413 with nothing stored (keys
   read back from the local R2 state), object gone after account deletion. The
   `STORAGE_PURGE_FAILED` path is covered by string tests only, not over HTTP.
