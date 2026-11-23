@@ -64,8 +64,8 @@ tests/
 
 Starter is fixed to sqlite (D1). The add-ons are the wave 1 and 1b flags; each CLI flag has a
 matching prompt. `--auth` on react, vue and solid is unchanged from v0.1.x (D34): the
-sign-in/sign-up pages, `void.config.ts` entry, alias, migration and `.env` below, and no
-root `auth.ts`. On svelte, `--auth` also gains an Account page and a generated `auth.ts`. No `--ui none`; no API-only mode exists upstream.
+sign-in/sign-up pages, `void.config.ts` entry, alias, migration and `.env` below, plus a root
+`auth.ts` that only sets `rateLimit: { storage: "database" }` (a shared limit across Worker instances, #58 D3, one D1 write per auth request; the migration gains the rate-limit table). On svelte, `--auth` also gains an Account page and a generated `auth.ts`. No `--ui none`; no API-only mode exists upstream.
 
 ## Auth installer
 

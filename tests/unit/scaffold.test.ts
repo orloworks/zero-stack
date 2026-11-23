@@ -252,7 +252,7 @@ const authApp = (framework: "react" | "vue" | "svelte" | "solid") => {
   return { dir, run: () => scaffold({ ...cfg, framework, auth: true }, dir, exec) };
 };
 
-test("react, vue and solid --auth keep v0.1 output: sign-in/up only, no auth.ts, no Account note", async () => {
+test("react, vue and solid --auth keep v0.1 output: sign-in/up only, an auth.ts that only shares the rate limit, no Account note", async () => {
   const want: Record<string, string[]> = { react: ["sign-in.tsx", "sign-up.tsx"], vue: ["sign-in.vue", "sign-up.vue"], solid: ["sign-in.tsx", "sign-up.tsx"] };
   for (const fw of ["react", "vue", "solid"] as const) {
     const { dir, run } = authApp(fw);
@@ -260,7 +260,9 @@ test("react, vue and solid --auth keep v0.1 output: sign-in/up only, no auth.ts,
     expect(readdirSync(join(dir, "pages")).sort()).toEqual(want[fw]!);
     for (const f of want[fw]!)
       expect(readFileSync(join(dir, "pages", f), "utf8")).toBe(readFileSync(join(import.meta.dir, "../../template/auth", fw, "pages", f), "utf8"));
-    expect(existsSync(join(dir, "auth.ts"))).toBe(false);
+    expect(readFileSync(join(dir, "auth.ts"), "utf8")).toBe(
+      'import { defineAuth } from "void/auth";\n\nexport default defineAuth(({ defaults }) => ({\n  ...defaults,\n  rateLimit: { storage: "database" },\n}));\n',
+    );
     expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).not.toContain("/settings");
   }
 });
@@ -270,7 +272,7 @@ test("svelte --auth ships /settings with its loader, a plain composed auth.ts an
   await run();
   expect(readdirSync(join(dir, "pages")).sort()).toEqual(["settings.server.ts", "settings.svelte", "sign-in.svelte", "sign-up.svelte"]);
   expect(readFileSync(join(dir, "auth.ts"), "utf8")).toBe(
-    'import { defineAuth } from "void/auth";\n\nexport default defineAuth(({ defaults }) => ({\n  ...defaults,\n}));\n',
+    'import { defineAuth } from "void/auth";\n\nexport default defineAuth(({ defaults }) => ({\n  ...defaults,\n  rateLimit: { storage: "database" },\n}));\n',
   );
   expect(readFileSync(join(dir, "pages/settings.svelte"), "utf8")).toContain("<!-- zero-stack:account-deletion -->");
   expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain("`/settings`");
@@ -452,7 +454,7 @@ test("--storage with --auth adds requireAuth routes on any framework and leaves 
     const route = readFileSync(join(dir, "routes/api/files/[name].ts"), "utf8");
     expect(route.match(/requireAuth\(c\)/g)).toHaveLength(3);
     for (const m of ["PUT", "GET", "DELETE"]) expect(route).toContain(`export const ${m} =`);
-    expect(existsSync(join(dir, "auth.ts"))).toBe(false);
+    expect(readFileSync(join(dir, "auth.ts"), "utf8")).not.toContain("purgeUserFiles");
     expect(readdirSync(join(dir, "pages")).sort()).toEqual(readdirSync(join(import.meta.dir, "../../template/auth", framework, "pages")).sort());
   }
 });

@@ -498,6 +498,9 @@ try {
     const sql = migrations.map((f) => readFileSync(join(app, "db/migrations", f), "utf8")).join("\n");
     for (const t of ["user", "session", "account", "verification"])
       if (!new RegExp(`CREATE TABLE\\s+[\`"']?${t}\\b`, "i").test(sql)) throw new Error(`no migration creates the ${t} table`);
+    // D3: the shared rate limit is in auth.ts and its table in the migration.
+    if (!readFileSync(join(app, "auth.ts"), "utf8").includes('storage: "database"')) throw new Error('auth.ts lacks rateLimit storage: "database"');
+    if (!/CREATE TABLE\s+[`"']?rateLimit\b/.test(sql)) throw new Error("no migration creates the rate-limit table");
     if (!readFileSync(join(app, ".gitignore"), "utf8").split("\n").includes(".env")) throw new Error(".env not gitignored");
     if ((statSync(join(app, ".env")).mode & 0o777) !== 0o600) throw new Error(".env is not mode 0600");
     const env = readFileSync(join(app, ".env"), "utf8");
