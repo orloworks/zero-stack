@@ -28,7 +28,7 @@ vi.mock("void/db", async () => {
 vi.mock("@schema", async () => ({ ...(await import("../db/schema/admin")), ...(await import("../db/schema/invites")) }));
 
 const { addInvite, revokeInvite, sendInvite, STILL_INVITED_DOMAIN, RESEND_TOO_SOON } = await import("../src/invites");
-const { sqlite } = (await import("void/db")) as unknown as { sqlite: import("better-sqlite3").Database };
+const { sqlite, db } = (await import("void/db")) as unknown as { sqlite: import("better-sqlite3").Database; db: { update: (...a: never[]) => unknown } };
 
 const actor = { id: "a1", email: "boss@example.com" };
 const audit = (verb: string) => sqlite.prepare("select * from audit_entry where verb = ?").all(verb);
@@ -89,4 +89,48 @@ it("revoking an exact email says when a remaining domain invite still admits it,
   if (covered.ok) expect(covered.notes[0]).toBe("Still invited through SIGNUP_ALLOWLIST.");
   const plain = await (async () => { await addInvite(actor, "email", "y@other.test"); return revokeInvite(actor, idOf("y@other.test")); })();
   if (plain.ok) expect(plain.notes).toEqual(["Existing accounts are not affected. Ban the user to block them."]);
+});
+
+const lastSent = (id: string) => (sqlite.prepare("select last_sent_at from invite where id = ?").get(id) as { last_sent_at: number | null }).last_sent_at;
+
+it("four concurrent sends of one invite: one 200, three 429, one send-invite entry", async () => {
+  await addInvite(actor, "email", "x@tester.test");
+  const id = idOf("x@tester.test");
+  const out = await Promise.all([1, 2, 3, 4].map(() => sendInvite(actor, id, "http://localhost/sign-up")));
+  expect(out.filter((o) => o.ok)).toHaveLength(1);
+  expect(out.filter((o) => !o.ok && o.status === 429)).toHaveLength(3);
+  expect(audit("send-invite")).toHaveLength(1);
+});
+
+it("a send that throws restores last_sent_at to null and writes no entry", async () => {
+  await addInvite(actor, "email", "x@tester.test");
+  const id = idOf("x@tester.test");
+  mail.send.mockRejectedValueOnce(new Error("mail down"));
+  await expect(sendInvite(actor, id, "http://localhost/sign-up")).rejects.toThrow("mail down");
+  expect(lastSent(id)).toBeNull();
+  expect(audit("send-invite")).toHaveLength(0);
+});
+
+it("a resend that throws restores the earlier time", async () => {
+  await addInvite(actor, "email", "x@tester.test");
+  const id = idOf("x@tester.test");
+  const earlier = Date.now() - 61_000;
+  sqlite.prepare("update invite set last_sent_at = ? where id = ?").run(earlier, id);
+  mail.send.mockRejectedValueOnce(new Error("mail down"));
+  await expect(sendInvite(actor, id, "http://localhost/sign-up")).rejects.toThrow("mail down");
+  expect(lastSent(id)).toBe(earlier);
+  expect(audit("send-invite")).toHaveLength(0);
+});
+
+it("a send whose invite is deleted between the read and the claim is 404, not 429", async () => {
+  await addInvite(actor, "email", "x@tester.test");
+  const id = idOf("x@tester.test");
+  const real = db.update.bind(db);
+  const spy = vi.spyOn(db, "update").mockImplementationOnce((...a) => {
+    sqlite.prepare("delete from invite where id = ?").run(id);
+    return real(...a);
+  });
+  expect(await sendInvite(actor, id, "http://localhost/sign-up")).toMatchObject({ ok: false, status: 404 });
+  spy.mockRestore();
+  expect(mail.send).not.toHaveBeenCalled();
 });

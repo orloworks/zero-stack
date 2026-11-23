@@ -93,6 +93,12 @@ it("an undeclared key and an invalid value are refused before anything is read o
   expect(await admin.set("example-number", 101)).toMatchObject({ ok: false, status: 400, message: "Enter a number from 1 to 100." });
 });
 
+it("a number whose stored form would not parse back is refused, not stored as an invalid setting", async () => {
+  (SETTINGS as Record<string, SettingDecl>)["test-open-number"] = open; // the shipped number has bounds that refuse these first
+  const admin = adminSettings({} as never);
+  for (const n of [1e21, 1e-7]) expect([n, await admin.set("test-open-number", n)]).toEqual([n, { ok: false, status: 400, message: "Enter a number with fewer digits." }]);
+});
+
 it("a non-admin gets the 404 before anything else", () => {
   session.user = { id: "u2", email: "other@example.com", emailVerified: true };
   expect(() => adminSettings({ req: { raw: new Request("http://localhost/") } } as never)).toThrow();
