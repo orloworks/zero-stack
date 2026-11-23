@@ -54,4 +54,4 @@ it.skipIf(STEPS.length === 0)("markStep stores a declared step once: the second 
   expect(rows[0].reachedAt).toEqual(first.reachedAt);
   const p = (await progressFor([user])).get("u1");
   expect(p?.steps.at(-1)).toMatchObject({ done: true, at: first.reachedAt });
-});
+}, 30_000); // the first call loads drizzle and better-sqlite3 cold, which a loaded machine makes slow
