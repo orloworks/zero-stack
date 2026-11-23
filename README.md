@@ -18,12 +18,12 @@ bunx github:orloworks/zero-stack#v0.3.0 my-app
 
 It runs straight from this public GitHub repo at a release tag: no npm package, no login. Without `#<tag>` you get whatever is on `main`.
 
-Run it without arguments in a terminal for prompts. The target directory must be new or
+Run it without arguments in a terminal for prompts (the first asks for the framework, default svelte; without a terminal and without `--framework` it builds react). The target directory must be new or
 empty; on any failure it is deleted. The CLI writes only inside that directory.
 
 | Flag | Values | Notes |
 |---|---|---|
-| `--framework` | react (default), vue, svelte, solid | passthrough to create-void |
+| `--framework` | react (default without a terminal), vue, svelte (prompt default), solid | passthrough to create-void |
 | `--tailwind` | bool | Tailwind v4 via `@tailwindcss/vite` |
 | `--shadcn` | bool | React only, implies `--tailwind` |
 | `--zod-rpc` | bool | Void `defineHandler.withValidator` with a zod body schema and a typed `void/client` call |

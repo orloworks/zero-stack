@@ -1,9 +1,10 @@
-import { cancel, confirm, isCancel, text } from "@clack/prompts";
-import { FEATURE_LIST, type FlagInput } from "./flags";
+import { cancel, confirm, isCancel, select, text } from "@clack/prompts";
+import { FEATURE_LIST, FRAMEWORKS, type Framework, type FlagInput } from "./flags";
 
 export type Ui = {
   text(message: string): Promise<string>;
   confirm(message: string): Promise<boolean>;
+  select<T extends string>(message: string, options: readonly T[], initial: T): Promise<T>;
 };
 
 const guard = <T>(v: T | symbol): T => {
@@ -17,6 +18,8 @@ const guard = <T>(v: T | symbol): T => {
 export const clackUi: Ui = {
   text: async (message) => guard<string>(await text({ message })),
   confirm: async (message) => guard<boolean>(await confirm({ message, initialValue: false })),
+  select: async (message, options, initial) =>
+    (guard<string>(await select<string>({ message, options: options.map((value) => ({ value, label: value })), initialValue: initial }))) as typeof initial,
 };
 
 // Asks only for what flags left undefined; the result goes through validateFlags like flag-only input.
@@ -26,6 +29,7 @@ export async function fillPrompts(
 ): Promise<FlagInput> {
   const out = { ...input };
   out.name ??= await ui.text("Project name");
+  out.framework ??= await ui.select<Framework>("Framework", FRAMEWORKS, "svelte");
   // On, or implied by a feature that is on, however many steps away (invite-only -> email -> auth).
   const isOn = (key: string): boolean => !!out[key as keyof typeof out] || FEATURE_LIST.some((g) => g.requires === key && isOn(g.key));
   const needsAuth = (key: string): boolean => {

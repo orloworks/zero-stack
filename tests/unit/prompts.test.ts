@@ -9,10 +9,10 @@ const ui = (answers: Record<string, string | boolean>) => {
     asked.push(m);
     return answers[m];
   };
-  return { asked, ui: { text: get, confirm: get } as Ui };
+  return { asked, ui: { text: get, confirm: get, select: get } as Ui };
 };
 
-const yesAll = { "Project name": "my-app", "Add Tailwind?": true, "Add shadcn/ui?": true, "Add typed zod RPC?": true, "Add auth?": true, "Add account deletion?": true, "Add email?": true, "Add Turnstile?": true, "Restrict sign-up to invited emails?": true, "Add an admin area?": true, "Add storage?": true, "Sync secrets with Infisical?": true };
+const yesAll = { "Project name": "my-app", Framework: "svelte", "Add Tailwind?": true, "Add shadcn/ui?": true, "Add typed zod RPC?": true, "Add auth?": true, "Add account deletion?": true, "Add email?": true, "Add Turnstile?": true, "Restrict sign-up to invited emails?": true, "Add an admin area?": true, "Add storage?": true, "Sync secrets with Infisical?": true };
 
 test("interactive and flag-only runs produce identical configs", async () => {
   const t = ui(yesAll);
@@ -24,12 +24,12 @@ test("interactive and flag-only runs produce identical configs", async () => {
 
 test("a declined prompt equals an omitted flag", async () => {
   const t = ui({ ...yesAll, "Add Tailwind?": false, "Add shadcn/ui?": false, "Add typed zod RPC?": false, "Add auth?": false });
-  expect(validateFlags(await fillPrompts({}, t.ui)).config).toEqual(validateFlags({ name: "my-app" }).config);
+  expect(validateFlags(await fillPrompts({}, t.ui)).config).toEqual(validateFlags({ name: "my-app", framework: "svelte" }).config);
 });
 
 test("flags already given are never asked", async () => {
   const t = ui(yesAll);
-  await fillPrompts({ name: "x", tailwind: true, auth: true }, t.ui);
+  await fillPrompts({ name: "x", framework: "react", tailwind: true, auth: true }, t.ui);
   expect(t.asked).toEqual(["Add shadcn/ui?", "Add typed zod RPC?", "Add storage?", "Sync secrets with Infisical?"]);
 });
 
@@ -92,4 +92,23 @@ test("--admin is prompted like the other add-ons, skipped when implied or off-fr
   const react = ui(yesAll);
   await fillPrompts({ name: "x", framework: "react" }, react.ui);
   expect(react.asked).not.toContain("Add an admin area?");
+});
+
+test("no framework flag asks for the framework, then the svelte-only questions", async () => {
+  const t = ui(yesAll);
+  const out = await fillPrompts({ name: "x" }, t.ui);
+  expect(out.framework).toBe("svelte");
+  for (const q of ["Add account deletion?", "Add email?", "Add Turnstile?", "Restrict sign-up to invited emails?", "Add an admin area?"]) expect(t.asked).toContain(q);
+});
+
+test("a framework flag skips the framework question", async () => {
+  const t = ui(yesAll);
+  await fillPrompts({ name: "x", framework: "react" }, t.ui);
+  expect(t.asked).not.toContain("Framework");
+});
+
+test("the framework is asked before any feature question", async () => {
+  const t = ui(yesAll);
+  await fillPrompts({ name: "x" }, t.ui);
+  expect(t.asked[0]).toBe("Framework");
 });

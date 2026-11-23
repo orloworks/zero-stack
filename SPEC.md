@@ -49,7 +49,7 @@ tests/
 
 | Flag | Values | Notes |
 |---|---|---|
-| `--framework` | react (default), vue, svelte, solid | passthrough to create-void |
+| `--framework` | react (default without a terminal), vue, svelte (prompt default), solid | passthrough to create-void |
 | `--tailwind` | bool | Tailwind v4 via `@tailwindcss/vite` (Void has no guidance) |
 | `--shadcn` | bool | React only, implies `--tailwind` |
 | `--zod-rpc` | bool | Void `defineHandler.withValidator` with a zod body schema + typed `void/client` call (no `@hono/zod-validator`: Void takes Standard Schema and feeds the client types) |
