@@ -35,6 +35,8 @@ it("describeAudit reads '[admin] [verb] [target]: [old → new]' and survives a 
   const sw = { ...row, verb: "set-feature", targetEmail: null, detail: "beta", oldValue: "off", newValue: "kill" };
   expect(describeAudit(sw)).toBe("a@x.com set feature beta: off → kill");
   expect(describeAudit({ ...sw, verb: "set-override", targetEmail: "u@x.com", oldValue: "default", newValue: "on" })).toBe("a@x.com set feature beta for u@x.com: default → on");
+  // Clearing a text value still shows the change.
+  expect(describeAudit({ ...sw, verb: "set-setting", detail: "greeting", oldValue: "hi", newValue: "" })).toContain(': hi → ""');
   expect(describeAudit({ ...sw, verb: "set-override", targetEmail: null, detail: null, oldValue: "default", newValue: "on" })).toBe("a@x.com set feature a feature for a deleted user: default → on");
   const st = { ...row, targetEmail: null, detail: "example-number", oldValue: "10", newValue: "25" };
   expect(describeAudit({ ...st, verb: "set-setting" })).toBe("a@x.com set setting example-number: 10 → 25");

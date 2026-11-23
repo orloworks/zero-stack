@@ -25,7 +25,7 @@ type Result = { ok: true } | { ok: false; status: 400 | 404; message: string };
 const refuse = (status: 400 | 404, message: string): Result => ({ ok: false, status, message });
 
 // void/db and @schema are imported on use: Void's plugin loads auth.ts at startup, where bindings are not available.
-const store = async () => ({ ...(await import("void/db")), ...(await import("@schema")), ...(await import("../.void/better-auth-schema")) });
+const store = async () => ({ ...(await import("void/db")), ...(await import("@schema")) });
 
 const declared = (key: string): key is SettingKey => Object.hasOwn(SETTINGS, key);
 const decl = (key: SettingKey): SettingDecl => SETTINGS[key];
@@ -38,7 +38,7 @@ export async function setting<K extends SettingKey>(key: K): Promise<ValueOf<K>>
 }
 
 // Admin only (404 for anyone else). `set` and `reset` are bound to the admin who called this: each writes the change and its audit entry in one db.batch, so a change
-// is never unrecorded and a request that loses a race to another writes nothing.
+// is never unrecorded. A `reset` that loses a race writes nothing; concurrent `set`s each write an entry (the same known limit as concurrent bans).
 export function adminSettings(c: Ctx) {
   const actor = requireAdmin(c);
   return {
@@ -75,9 +75,10 @@ export function adminSettings(c: Ctx) {
       const here = and(eq(table.key, key), eq(table.value, row.value));
       // The audit row is inserted only while the row it describes still exists, in the same batch as the delete: a request that lost a race inserts and deletes nothing.
       const audit = auditRow({ actor, verb: "reset-setting", detail: key, oldValue: row.value, newValue: storedForm(decl(key).default) }, now);
-      const params = Object.values({ ...audit, createdAt: audit.createdAt.getTime() }).map((v) => sql`${v}`);
+      // Each value is named by its column, so a reordered auditRow or audit_entry can't shift a value into the wrong column.
+      const cols = Object.fromEntries(Object.entries(audit).map(([k, v]) => [k, sql`${v instanceof Date ? v.getTime() : v}`.as(k)]));
       const [inserted] = await db.batch([
-        db.insert(auditEntry).select(sql`select ${sql.join(params, sql`, `)} where exists (select 1 from ${table} where ${here})`),
+        db.insert(auditEntry).select((qb) => qb.select(cols as never).from(table).where(here) as never),
         db.delete(table).where(here),
       ]);
       const changes = (inserted as { meta?: { changes?: number } }).meta?.changes;

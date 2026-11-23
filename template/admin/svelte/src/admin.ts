@@ -79,10 +79,12 @@ export async function recordAudit(i: AuditInput): Promise<void> {
 // A deleted user's address (and any free text about them, such as a ban reason) leaves the audit log; the record that a change happened stays.
 // Rows reference the user with "set null", so the ids are already gone by the time this runs: match on the email.
 export async function redactAudit(email: string): Promise<void> {
-  const { db, eq, auditEntry } = await store();
+  const { db, eq, and, auditEntry } = await store();
   const e = email.toLowerCase();
+  // Only a ban reason is free text about the user; other details (a feature name, an invite kind) stay so the entry still reads.
   await db.batch([
-    db.update(auditEntry).set({ targetEmail: null, detail: null }).where(eq(auditEntry.targetEmail, e)),
+    db.update(auditEntry).set({ detail: null }).where(and(eq(auditEntry.targetEmail, e), eq(auditEntry.verb, "ban"))),
+    db.update(auditEntry).set({ targetEmail: null }).where(eq(auditEntry.targetEmail, e)),
     db.update(auditEntry).set({ actorEmail: null }).where(eq(auditEntry.actorEmail, e)),
   ]);
 }

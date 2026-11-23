@@ -24,7 +24,7 @@ export function parseSetting(d: SettingDecl, raw: unknown): Parsed {
     case "choice":
       return typeof raw === "string" && d.values.includes(raw) ? { ok: true, value: raw } : fail(`Choose one of: ${d.values.join(", ")}.`);
     case "number": {
-      const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : Number.NaN;
+      const n = typeof raw === "number" ? raw : typeof raw === "string" && /^\s*-?\d+(\.\d+)?\s*$/.test(raw) ? Number(raw) : Number.NaN; // plain decimals only: no 0x10, 1e3 or Infinity
       if (!Number.isFinite(n)) return fail("Enter a number.");
       const { min, max } = d;
       if (min !== undefined && max !== undefined && (n < min || n > max)) return fail(`Enter a number from ${min} to ${max}.`);

@@ -33,6 +33,12 @@ it("every declared default fits its own declaration", () => {
   for (const [key, d] of Object.entries(SETTINGS)) expect([key, parseSetting(d as SettingDecl, d.default).ok]).toEqual([key, true]);
 });
 
+it("number: plain decimals only, so 0x10, 0b11, 1e3 and Infinity are refused", () => {
+  expect(value(open, "42")).toBe(42);
+  expect(value(open, " -1.5 ")).toBe(-1.5);
+  for (const raw of ["0x10", "0b11", "1e3", "Infinity", "1_000", "+"]) expect([raw, value(open, raw)]).toEqual([raw, "Enter a number."]);
+});
+
 it("text: any string up to the limit, nothing else", () => {
   expect(value(text, "hello")).toBe("hello");
   expect(value(text, "")).toBe("");

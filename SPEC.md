@@ -200,7 +200,7 @@ in `AGENTS.md`.
     yet."; an unverified user's status line says "Not invited (removed from the list)" when no source covers them. Generated tests: `tests/invites.test.ts`
     (`inviteAllowed`: env hit, database exact, database domain, lookalike refused, miss; entry parsing; the D6 copy) `tests/invites-db.test.ts` (the real queries on in-memory SQLite: concurrent revokes and adds, a send racing a revoke, the 60-second resend, the domain note) and `tests/invites-pages.test.ts`.
   - **Onboarding** (`--admin`, #53; E14, D20). `STEPS` in `src/onboarding.ts` (the scaffold ships `example-step`), `markStep(userId, step)` (first time only;
-    an undeclared name throws) and `progress(userId)`; `onboarding_step` (user id `cascade`, step, reached at; primary key user and step). "Signed up" and
+    an undeclared name throws) and `progressFor(users)` (from rows the page already has); `onboarding_step` (user id `cascade`, step, reached at; primary key user and step). "Signed up" and
     "Email verified" come from the user row and are never stored. The Users list shows "n of m" in an Onboarding column and user detail the steps; both are
     hidden when `STEPS` is empty. Test: `tests/onboarding.test.ts`.
   - **Feature switches** (`--admin`, #54; D15, E3, story 75-80). `src/access.ts` exports exactly `FEATURES` (the scaffold ships `example-feature`), `Feature`,

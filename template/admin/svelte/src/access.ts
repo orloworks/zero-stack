@@ -32,7 +32,7 @@ export const decide = (f: Feature, s: Snapshot): boolean => resolve(f, s).on;
 const sources: ((userId: string) => Promise<ReadonlySet<Feature>>)[] = [];
 
 // void/db and @schema are imported on use: Void's plugin loads auth.ts at startup, where bindings are not available.
-const store = async () => ({ ...(await import("void/db")), ...(await import("@schema")), ...(await import("../.void/better-auth-schema")) });
+const store = async () => ({ ...(await import("void/db")), ...(await import("@schema")) });
 
 const declared = (name: string): name is Feature => (FEATURES as readonly string[]).includes(name);
 const pick = <T extends string>(allowed: readonly T[], v: unknown): T | undefined => allowed.find((a) => a === v);

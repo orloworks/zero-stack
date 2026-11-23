@@ -110,15 +110,27 @@ export async function revokeInvite(actor: Actor, id: string): Promise<Result<{ m
 // Mails the invitee the sign-up link. The mail goes first: a failed send (it throws) records nothing. Then the sent time and the audit entry are written together.
 export async function sendInvite(actor: Actor, id: string, signUpUrl: string): Promise<Result<{ message: string }>> {
   const st = await store();
-  const { db, eq, invite } = st;
+  const { db, eq, and, or, isNull, lt, invite } = st;
   const row = (await db.select().from(invite).where(eq(invite.id, id)).limit(1))[0];
   if (!row) return { ok: false, status: 404, message: GONE };
   if (row.entry.startsWith("@")) return { ok: false, status: 400, message: "Only an exact email can be sent an invite." };
-  if (row.lastSentAt && Date.now() - row.lastSentAt.getTime() < RESEND_MS) return { ok: false, status: 429, message: RESEND_TOO_SOON };
-  await send(row.entry, "Your invitation", signUpUrl);
+  // Claim the send slot before mailing, so two clicks at once mail once: only one request's conditional update matches.
+  const now = new Date();
+  const claimed = await db
+    .update(invite)
+    .set({ lastSentAt: now })
+    .where(and(eq(invite.id, id), or(isNull(invite.lastSentAt), lt(invite.lastSentAt, new Date(now.getTime() - RESEND_MS)))))
+    .returning({ id: invite.id });
+  if (!claimed.length) return { ok: false, status: 429, message: RESEND_TOO_SOON };
+  try {
+    await send(row.entry, "Your invitation", signUpUrl);
+  } catch (e) {
+    await db.update(invite).set({ lastSentAt: row.lastSentAt }).where(eq(invite.id, id)); // a mail that never went out frees the slot
+    throw e;
+  }
   const [, sent] = await db.batch([
     auditWhileInvite(st, id, auditRow({ actor, verb: "send-invite", target: { id: null, email: row.entry } })),
-    db.update(invite).set({ lastSentAt: new Date() }).where(eq(invite.id, id)).returning({ id: invite.id }),
+    db.update(invite).set({ lastSentAt: now }).where(eq(invite.id, id)).returning({ id: invite.id }),
   ]);
   if (!sent.length) return { ok: false, status: 404, message: GONE }; // revoked while the mail was going out: nothing is recorded
   return { ok: true, message: INVITE_EMAIL_REQUESTED(row.entry) };

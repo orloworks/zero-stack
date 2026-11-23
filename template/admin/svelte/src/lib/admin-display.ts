@@ -21,7 +21,7 @@ export const SAVED = "Saved. Applies on the user's next page load.";
 
 // "[admin email] [verb] [target]: [old → new]"; the time is rendered by the page.
 export function describeAudit(r: { actorEmail: string | null; verb: string; targetEmail: string | null; detail: string | null; oldValue: string | null; newValue: string | null }) {
-  const change = r.oldValue && r.newValue ? `: ${r.oldValue} → ${r.newValue}` : "";
+  const change = r.oldValue != null && r.newValue != null ? `: ${r.oldValue || '""'} → ${r.newValue || '""'}` : "";
   // A feature switch keeps the feature's name in `detail`; an override also names the user.
   if (r.verb === "set-feature") return `${r.actorEmail ?? "A deleted admin"} ${VERBS["set-feature"]} ${r.detail ?? "a feature"}${change}`;
   if (r.verb === "set-override") return `${r.actorEmail ?? "A deleted admin"} ${VERBS["set-override"]} ${r.detail ?? "a feature"} for ${r.targetEmail ?? "a deleted user"}${change}`;

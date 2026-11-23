@@ -825,6 +825,7 @@ try {
       onUser(doomed, "INSERT INTO onboarding_step (user_id, step, reached_at) VALUES (?, 'example-step', 1700000000000)");
       if (!rows("onboarding_step", "SELECT 1 FROM onboarding_step WHERE user_id = ?", del.id).length) throw new Error("no onboarding row to cascade");
       await call(b, "POST", "/api/auth/admin/ban-user", bossU.cookie, { userId: del.id, banReason: `note about ${doomed}` });
+      if ((await call(b, "POST", `/api/admin/users/${del.id}/features/example-feature`, bossU.cookie, { state: "on" })).status !== 200) throw new Error("setting the doomed user's override failed");
       const removed = await call(b, "POST", "/api/auth/admin/remove-user", bossU.cookie, { userId: del.id });
       if (removed.status !== 200) throw new Error(`remove-user -> ${removed.status}`);
       if (rows("user", "SELECT 1 FROM user WHERE id = ?", del.id).length || (await sessionUser(b, del.cookie))) throw new Error("the deleted user row or session is still there");
@@ -835,6 +836,7 @@ try {
       const entry = auditRows().find((r) => r.verb === "delete-user");
       if (!entry || entry.target_user_id !== null || entry.target_email !== null || entry.actor_email !== boss || !String(entry.detail).includes(del.id)) throw new Error(`the delete audit entry is wrong: ${JSON.stringify(entry)}`);
       if (!auditRows().some((r) => r.verb === "ban" && r.target_email === null && r.detail === null && r.target_user_id === null)) throw new Error("the deleted user's earlier audit rows were not redacted to a null email and detail");
+      if (!auditRows().some((r) => r.verb === "set-override" && r.target_email === null && r.detail === "example-feature")) throw new Error("deleting a user erased the feature name from their override entry");
       console.log("gate: admin delete removes the user row, sessions" + (config.storage ? " and files" : "") + "; no audit entry holds the deleted email or free text; the delete entry has no target");
 
       // Audit page: newest first, filter by the affected user, "View audit log" on user detail.
@@ -1090,6 +1092,13 @@ try {
         if (resend.status !== 429 || (await said(resend)).message !== "An invite was just sent. Try again in a minute.") throw new Error(`a resend within a minute -> ${resend.status}`);
         if (auditRows().filter((r) => r.verb === "send-invite" && r.target_email === sendTo).length !== 1) throw new Error("a refused resend wrote an audit entry");
         console.log("gate: admin send-invite refuses a resend within a minute (429) and records nothing");
+        // Four sends at once: the slot is claimed before mailing, so exactly one mails and records; the rest are 429.
+        const burstTo = addr("burst");
+        await addInvite("email", burstTo);
+        const burst = await Promise.all(Array.from({ length: 4 }, () => api("POST", `/api/admin/invites/${inviteId(burstTo)}/send`).then((r) => r.status)));
+        if (burst.filter((s) => s === 200).length !== 1 || burst.filter((s) => s === 429).length !== 3) throw new Error(`four concurrent sends -> ${burst}, expected one 200 and three 429`);
+        if (auditRows().filter((r) => r.verb === "send-invite" && r.target_email === burstTo).length !== 1) throw new Error("four concurrent sends did not write exactly one send-invite entry");
+        console.log("gate: admin send-invite: four sends at once mail and record once (the rest 429)");
 
         // Concurrent requests: four revokes of one invite write exactly one entry (the others are 404); four adds of one entry make one row and one entry (the others are 409, never 500).
         const raceMail = addr("race"), dupMail = addr("dup"), viaDomain = `via-${ts}@corp.test`;
