@@ -64,7 +64,12 @@ A `create-void` app (vite-plus toolchain, sqlite starter, git) plus your chosen 
   With `--admin --invite-only`, `SIGNUP_ALLOWLIST` is optional: add invites on the Invites page, no secret change or restart.
 - `--email`: set `email.from` in `void.config.ts` to an address on your mail domain (scaffolded
   as `noreply@example.com`); without a mail domain sends fail and are logged.
-- Set `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` for the deployed origin.
+- `BETTER_AUTH_SECRET` is created by `void deploy` on first run. Nothing needs `BETTER_AUTH_URL` in production: Void sets the
+  auth base URL and trusted origin from the request origin.
+
+Every generated app also gets a setup guide for the flags that are on: a `## Setup` table in `AGENTS.md`, the full steps in
+`docs/setup.md`, and `scripts/setup-wizard.sh` for the human-only steps (sign-ins and typed allowlists). Each step says who
+can do it (Agent, Agent with browser, Human only) and a verify command. The wizard never prints what you type and can be re-run.
 
 Not included: data export, grace-period deletion, Stripe, orgs/admin/2FA (later waves), #17 referrals, #18 affiliate app.
 
