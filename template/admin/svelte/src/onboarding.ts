@@ -23,8 +23,8 @@ export function buildProgress(user: Pick<Person, "emailVerified" | "createdAt">,
   return { done, total: steps.length, text: `${done} of ${steps.length}`, steps };
 }
 
-// void/db and @schema are imported on use: Void's plugin loads auth.ts at startup, where bindings are not available.
-const store = async () => ({ ...(await import("void/db")), ...(await import("@schema")), ...(await import("../.void/better-auth-schema")) });
+// void/db and @schema are imported on use, so importing this file needs no Worker bindings (the tests run without them).
+const store = async () => ({ ...(await import("void/db")), ...(await import("@schema")) });
 
 // Marks a declared step reached for a user (the first time only). An undeclared name is a bug in the caller, so it throws.
 export async function markStep(userId: string, step: Step): Promise<void> {
@@ -43,10 +43,4 @@ export async function progressFor(users: Person[]): Promise<Map<string, Progress
   for (const r of rows) byUser.set(r.userId, (byUser.get(r.userId) ?? new Map()).set(r.step, r.reachedAt));
   for (const u of users) out.set(u.id, buildProgress(u, byUser.get(u.id) ?? new Map()));
   return out;
-}
-
-export async function progress(userId: string): Promise<Progress | null> {
-  const { db, eq, userTable } = await store();
-  const user = (await db.select().from(userTable).where(eq(userTable.id, userId)).limit(1))[0];
-  return user ? ((await progressFor([user])).get(userId) ?? null) : null;
 }

@@ -571,7 +571,7 @@ test("--admin --invite-only puts invites in the database: table, module, page, r
   const { dir, run } = adminApp({ inviteOnly: true });
   await run();
   const read = (f: string) => readFileSync(join(dir, f), "utf8");
-  for (const f of ["db/schema/invites.ts", "src/invites.ts", "src/lib/invite-entry.ts", "pages/admin/invites.svelte", "pages/admin/invites.server.ts", "routes/api/admin/invites.ts", "routes/api/admin/invites/[id]/revoke.ts", "routes/api/admin/invites/[id]/send.ts", "tests/invites.test.ts", "tests/invites-pages.test.ts"])
+  for (const f of ["db/schema/invites.ts", "src/invites.ts", "src/lib/invite-entry.ts", "pages/admin/invites.svelte", "pages/admin/invites.server.ts", "routes/api/admin/invites.ts", "routes/api/admin/invites/[id]/revoke.ts", "routes/api/admin/invites/[id]/send.ts", "tests/invites.test.ts", "tests/invites-pages.test.ts", "tests/invites-db.test.ts"])
     expect([f, existsSync(join(dir, f))]).toEqual([f, true]);
   expect(read("db/schema.ts")).toContain('export * from "./schema/admin";\nexport * from "./schema/invites";');
   expect(read("pages/admin/layout.svelte")).toContain('{ href: "/admin", label: "Users" },\n    { href: "/admin/invites", label: "Invites" },\n    { href: "/admin/features", label: "Features" },\n    { href: "/admin/audit", label: "Audit log" },');

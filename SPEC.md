@@ -192,12 +192,13 @@ in `AGENTS.md`.
     nav entry after Users) adds an exact email or a whole domain with inline validation and the "Anyone at @x.com can sign up" preview, lists
     "Added here" with Revoke and, for exact emails, Send invite, and the secret's entries read-only. Routes: `POST /api/admin/invites`,
     `POST /api/admin/invites/:id/revoke` and `/send` (admin, same-origin). Add and revoke write the change and their audit entry in one `db.batch`;
-    send mails the sign-up link (`send()`, subject "Your invitation") and then writes `last_sent_at` and its audit entry in one batch. Copy: "Invited x@y.com." /
+    send mails the sign-up link (`send()`, subject "Your invitation") and then writes `last_sent_at` and its audit entry in one batch. One entry per change that happened (spec #51, PR #67 review): the audit insert in the batch selects from the invite row, so a revoke or send that lost a race writes nothing and
+    answers 404; a concurrent duplicate add hits UNIQUE(entry) and answers 409; a resend within 60 seconds of `last_sent_at` is 429 "An invite was just sent. Try again in a minute." Copy: "Invited x@y.com." /
     "Invited anyone at @x.com." / "Invite removed." / "Invite email requested for x@y.com."; a revoke also says "Still invited through SIGNUP_ALLOWLIST."
-    when the secret covers the entry, and always "Existing accounts are not affected. Ban the user to block them." (an existing account is never touched).
+    when the secret covers the entry and "Still invited through @x.com." when a remaining domain invite admits the address, and always "Existing accounts are not affected. Ban the user to block them." (an existing account is never touched).
     A Users search with no account in an invite-only app adds "x@y.com is not invited. Invite them" (opening Invites with the email filled in) or "Invited, but hasn't signed up
     yet."; an unverified user's status line says "Not invited (removed from the list)" when no source covers them. Generated tests: `tests/invites.test.ts`
-    (`inviteAllowed`: env hit, database exact, database domain, lookalike refused, miss; entry parsing; the D6 copy) and `tests/invites-pages.test.ts`.
+    (`inviteAllowed`: env hit, database exact, database domain, lookalike refused, miss; entry parsing; the D6 copy) `tests/invites-db.test.ts` (the real queries on in-memory SQLite: concurrent revokes and adds, a send racing a revoke, the 60-second resend, the domain note) and `tests/invites-pages.test.ts`.
   - **Onboarding** (`--admin`, #53; E14, D20). `STEPS` in `src/onboarding.ts` (the scaffold ships `example-step`), `markStep(userId, step)` (first time only;
     an undeclared name throws) and `progress(userId)`; `onboarding_step` (user id `cascade`, step, reached at; primary key user and step). "Signed up" and
     "Email verified" come from the user row and are never stored. The Users list shows "n of m" in an Onboarding column and user detail the steps; both are

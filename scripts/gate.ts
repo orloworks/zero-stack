@@ -1007,6 +1007,30 @@ try {
         if (!inviteMail || inviteMail.pathname !== "/sign-up") throw new Error(`the invite mail is missing or does not link to /sign-up: ${inviteMail}`);
         if ((await api("POST", `/api/admin/invites/${inviteId("@corp.test")}/send`)).status !== 400) throw new Error("send invite for a domain was not 400");
         console.log("gate: admin send-invite mails the sign-up link to an exact email and refuses a domain");
+        // A resend inside a minute is refused (429) and neither mails nor records anything.
+        const resend = await api("POST", `/api/admin/invites/${inviteId(sendTo)}/send`);
+        if (resend.status !== 429 || (await said(resend)).message !== "An invite was just sent. Try again in a minute.") throw new Error(`a resend within a minute -> ${resend.status}`);
+        if (auditRows().filter((r) => r.verb === "send-invite" && r.target_email === sendTo).length !== 1) throw new Error("a refused resend wrote an audit entry");
+        console.log("gate: admin send-invite refuses a resend within a minute (429) and records nothing");
+
+        // Concurrent requests: four revokes of one invite write exactly one entry (the others are 404); four adds of one entry make one row and one entry (the others are 409, never 500).
+        const raceMail = addr("race"), dupMail = addr("dup"), viaDomain = `via-${ts}@corp.test`;
+        await addInvite("email", raceMail);
+        const raceId = inviteId(raceMail);
+        const revokes = await Promise.all([1, 2, 3, 4].map(() => api("POST", `/api/admin/invites/${raceId}/revoke`)));
+        const adds = await Promise.all([1, 2, 3, 4].map(() => addInvite("email", dupMail)));
+        const tally = (rs: Response[]) => rs.map((r) => r.status).sort().join();
+        if (tally(revokes) !== "200,404,404,404") throw new Error(`four concurrent revokes -> ${tally(revokes)}`);
+        if (tally(adds) !== "200,409,409,409") throw new Error(`four concurrent adds -> ${tally(adds)}`);
+        const count = (verb: string, target: string) => auditRows().filter((r) => r.verb === verb && r.target_email === target).length;
+        if (count("revoke-invite", raceMail) !== 1 || count("invite", dupMail) !== 1 || rows("invite", "SELECT 1 FROM invite WHERE entry = ?", dupMail).length !== 1) throw new Error("concurrent requests wrote more than one entry or row");
+        console.log("gate: admin invites under concurrency: four revokes write one entry (the rest 404), four duplicate adds make one row and one entry (the rest 409)");
+
+        // Revoking an exact email that a remaining domain invite still admits says so.
+        await addInvite("email", viaDomain);
+        const viaBody = await said(await api("POST", `/api/admin/invites/${inviteId(viaDomain)}/revoke`));
+        if (viaBody.notes?.join("|") !== "Still invited through @corp.test.|Existing accounts are not affected. Ban the user to block them.") throw new Error(`revoke under a domain invite -> ${JSON.stringify(viaBody)}`);
+        console.log("gate: admin invite revoke of an email covered by a domain invite says Still invited through @corp.test.");
 
         // Every change wrote its audit entry (same batch), and the audit page words them.
         for (const [verb, target] of [["invite", invitedMail], ["invite", "@corp.test"], ["revoke-invite", revokedMail], ["send-invite", sendTo]] as const)

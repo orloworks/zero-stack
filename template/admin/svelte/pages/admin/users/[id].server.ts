@@ -3,7 +3,7 @@ import { getSession } from "void/auth";
 import { env } from "void/env";
 import { adminSwitches, FEATURES } from "../../../src/access";
 import { inviteState } from "../../../src/invite-state";
-import { progress, showOnboarding } from "../../../src/onboarding";
+import { progressFor, showOnboarding } from "../../../src/onboarding";
 import { deviceLabel, findUser, listSessions, isAdmin, notFound, requireAdmin, setPasswordLink, userStatus } from "../../../src/admin";
 
 export type Props = InferProps<typeof loader>;
@@ -20,7 +20,8 @@ export const loader = defineHandler(async (c) => {
   // An unverified user whose address is no longer invited can't finish signing up (D5): the status line says so.
   const notInvited = !user.emailVerified && (await inviteState(user.email)) === "not-invited";
   const sw = await adminSwitches(c, user.id);
-  const steps = showOnboarding ? await progress(user.id) : null;
+  // The row this page already read is all progress needs: no second user query.
+  const steps = showOnboarding ? ((await progressFor([user])).get(user.id) ?? null) : null;
   return {
     user: { id: user.id, email: user.email, name: user.name, banned: !!user.banned },
     isMe: user.id === me.id,
