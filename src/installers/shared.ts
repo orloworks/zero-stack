@@ -1,4 +1,13 @@
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { editFile, replaceAnchor } from "../anchor";
+
+// Appends `line` to dir/.gitignore once, on its own line.
+export function ignoreLine(dir: string, line: string): void {
+  const gi = join(dir, ".gitignore");
+  const lines = existsSync(gi) ? readFileSync(gi, "utf8").split("\n") : [];
+  if (!lines.includes(line)) appendFileSync(gi, (lines.at(-1) === "" || !lines.length ? "" : "\n") + line + "\n");
+}
 
 // Void's generated mappings (.void/tsconfig.json). A `paths` entry in tsconfig.json replaces them
 // (Void auth docs), so they are written whenever we create `paths`.

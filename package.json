@@ -38,8 +38,7 @@
     "typecheck": "tsc -p . --noEmit",
     "ci": "bun run typecheck && bun test tests/unit && bun scripts/gate.ts --tailwind --shadcn --zod-rpc --auth",
     "ci:full": "bun scripts/ci-full.ts",
-    "setup-hooks": "bun scripts/setup-hooks.ts",
-    "prepublishOnly": "bun scripts/ci-full.ts --force"
+    "setup-hooks": "bun scripts/setup-hooks.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

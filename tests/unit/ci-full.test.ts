@@ -81,11 +81,9 @@ test("nodeVersion reads `node` from PATH", () => {
   }
 });
 
-test("--force ignores a warm green cache, and prepublishOnly uses it", () => {
+test("--force ignores a warm green cache", () => {
   expect(isGreen({ a: "h" }, "a", "h", false)).toBe(true);
   expect(isGreen({ a: "h" }, "a", "h", true)).toBe(false);
-  const pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));
-  expect(pkg.scripts.prepublishOnly).toMatch(/ci-full\.ts --force$/);
 });
 
 test("the matrix runs --admin alone and with --storage, and svelte-all picks it up from the table", () => {

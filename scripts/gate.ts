@@ -37,7 +37,12 @@ try {
     ...Object.fromEntries(FEATURE_LIST.map((f) => [f.key, hasSeq(featureArgv(f)) || undefined])),
   };
   const { config } = validateFlags(input);
-  await scaffold(config, app);
+  // One retry when create-void's own install fails (better-sqlite3 or esbuild install scripts die under load); scaffold deletes the half-made app first.
+  await scaffold(config, app).catch((e: Error) => {
+    if (!e.message.includes("create-void")) throw e;
+    console.error(`gate: retrying once after: ${e.message}`);
+    return scaffold(config, app);
+  });
   const pkgJson = JSON.parse(readFileSync(join(app, "package.json"), "utf8"));
   if (JSON.stringify(pkgJson.trustedDependencies) !== JSON.stringify(TRUSTED_DEPENDENCIES))
     throw new Error(`package.json trustedDependencies is ${JSON.stringify(pkgJson.trustedDependencies)}`);
@@ -103,7 +108,13 @@ try {
     probe.stop(true);
     return p;
   };
-  const startDev = async () => {
+  // One retry with fresh ports when vp dev dies at start (another run took a port between freePort() and listen).
+  const startDev = () => startDevOnce().catch((e: Error) => {
+    if (e.message !== "vp dev exited early") throw e;
+    console.error("gate: vp dev exited early, retrying once with fresh ports");
+    return startDevOnce();
+  });
+  const startDevOnce = async () => {
     const port = freePort();
     dev = spawnTracked([vp, "dev", "--port", String(port), "--strictPort"], {
       cwd: app, stdio: ["ignore", "inherit", "inherit"],
@@ -386,12 +397,16 @@ try {
         if (r.status < 400 || r.status >= 500) throw new Error(`PUT ${bad} -> ${r.status}, expected a 4xx`);
       }
       const exact = await file("exact.bin", { method: "PUT", body: new Uint8Array(10 * 1024 * 1024), headers: { cookie } });
-      if (exact.status !== 201 || (await file("exact.bin", { method: "DELETE", headers: { cookie } })).status !== 204) throw new Error(`an upload of exactly 10 MB -> ${exact.status}, expected 201`);
+      if (exact.status !== 201) throw new Error(`an upload of exactly 10 MB -> ${exact.status}, expected 201`);
+      if ((await file("exact.bin", { method: "DELETE", headers: { cookie } })).status !== 204) throw new Error("deleting the 10 MB upload was not 204");
       // vp dev's proxy (vite -> miniflare via undici) answers 500 "fetch failed" in about 1 of 10 runs when the Worker replies before reading
       // the whole upload; the Worker said 413. Retry only that, and check below that nothing was stored either way.
-      let big = 0;
-      for (let i = 0; i < 4 && big !== 413; i++) big = (await file("big.bin", { method: "PUT", body: new Uint8Array(10 * 1024 * 1024 + 1), headers: { cookie } })).status;
-      if (big !== 413) throw new Error(`a 10 MB + 1 byte upload -> ${big}, expected 413`);
+      for (let i = 0; ; i++) {
+        const r = await file("big.bin", { method: "PUT", body: new Uint8Array(10 * 1024 * 1024 + 1), headers: { cookie } });
+        if (r.status === 413) break;
+        const proxyFlake = r.status === 500 && (await r.text()).includes("fetch failed");
+        if (!proxyFlake || i === 3) throw new Error(`a 10 MB + 1 byte upload -> ${r.status}, expected 413`);
+      }
       const keys = r2Keys();
       if (keys.join() !== `users/${storageUser}/a.txt`) throw new Error(`R2 holds ${JSON.stringify(keys)}, expected only users/${storageUser}/a.txt`);
       console.log("gate: storage routes 401 without a session; upload/download under users/<id>/; escaping names rejected; exactly 10 MB stored; over 10 MB is 413 and stores nothing");
@@ -506,7 +521,7 @@ try {
     for (const t of ["user", "session", "account", "verification"])
       if (!new RegExp(`CREATE TABLE\\s+[\`"']?${t}\\b`, "i").test(sql)) throw new Error(`no migration creates the ${t} table`);
     // D3: the shared rate limit is in auth.ts and its table in the migration.
-    if (!readFileSync(join(app, "auth.ts"), "utf8").includes('storage: "database"')) throw new Error('auth.ts lacks rateLimit storage: "database"');
+    if (!readFileSync(join(app, "auth.ts"), "utf8").includes('rateLimit: { storage: "database" }')) throw new Error('auth.ts lacks rateLimit storage: "database"');
     if (!/CREATE TABLE\s+[`"']?rateLimit\b/.test(sql)) throw new Error("no migration creates the rate-limit table");
     if (!readFileSync(join(app, ".gitignore"), "utf8").split("\n").includes(".env")) throw new Error(".env not gitignored");
     if ((statSync(join(app, ".env")).mode & 0o777) !== 0o600) throw new Error(".env is not mode 0600");
@@ -733,7 +748,7 @@ try {
       if (!foreignSid) throw new Error("the admin has no session row to use as another user's session id");
       const sessionsBefore = sessionsOf().length;
       const auditBefore = auditRows().length;
-      if ((await call(b, "POST", revokeUrl(victimU.id, foreignSid), bossU.cookie)).status !== 404 || sessionsOf().length !== sessionsBefore || auditRows().length !== auditBefore || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404 || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown or another user's session id was not 404");
+      if ((await call(b, "POST", revokeUrl(victimU.id, foreignSid), bossU.cookie)).status !== 404 || sessionsOf().length !== sessionsBefore || auditRows().length !== auditBefore || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown or another user's session id was not 404");
       if ((await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), plainU.cookie)).status !== 404) throw new Error("a non-admin's revoke was not 404");
       const revoke = await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), bossU.cookie);
       if (revoke.status !== 200 || sessionsOf().length !== before.length - 1 || auditRows().filter((r) => r.verb === "revoke-session").length !== 1) throw new Error(`revoke by id -> ${revoke.status}, ${sessionsOf().length} of ${before.length} sessions left`);

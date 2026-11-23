@@ -18,6 +18,7 @@ const guard = <T>(v: T | symbol): T => {
 export const clackUi: Ui = {
   text: async (message) => guard<string>(await text({ message })),
   confirm: async (message) => guard<boolean>(await confirm({ message, initialValue: false })),
+  // clack's Option<T> is a conditional type TypeScript can't resolve for a generic T; the value is always one of `options`.
   select: async (message, options, initial) =>
     (guard<string>(await select<string>({ message, options: options.map((value) => ({ value, label: value })), initialValue: initial }))) as typeof initial,
 };
@@ -40,7 +41,7 @@ export async function fillPrompts(
     // Skipped when a feature already on implies this one, when the framework excludes it, or when auth (add-ons) is off.
     // shadcn is asked even when Tailwind was declined; choosing it implies Tailwind (validateFlags).
     const implied = FEATURE_LIST.some((g) => g.requires === f.key && isOn(g.key));
-    const allowed = !f.frameworks || f.frameworks.includes(out.framework ?? "react");
+    const allowed = !f.frameworks || f.frameworks.includes(out.framework);
     if (out[f.key] === undefined && !implied && allowed && (f.key === "auth" || !needsAuth(f.key) || isOn("auth")))
       (out as Record<string, unknown>)[f.key] = await ui.confirm(f.prompt);
   }

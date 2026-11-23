@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { editFile, replaceAnchor } from "../anchor";
-import { addPaths } from "./shared";
+import { addPaths, ignoreLine } from "./shared";
 import type { Config } from "../flags";
 import { composeAuthTs } from "./auth-ts";
 import { composeEnvTs } from "./env-ts";
@@ -37,8 +37,6 @@ export function installAuth(dir: string, config: Config): void {
   if (config.turnstile) installTurnstile(dir, config);
   if (config.inviteOnly) installInviteOnly(dir);
 
-  const gi = join(dir, ".gitignore");
-  const lines = existsSync(gi) ? readFileSync(gi, "utf8").split("\n") : [];
-  if (!lines.includes(".env")) appendFileSync(gi, (lines.at(-1) === "" || !lines.length ? "" : "\n") + ".env\n");
+  ignoreLine(dir, ".env");
   writeFileSync(join(dir, ".env"), authEnv(config), { mode: 0o600 });
 }
