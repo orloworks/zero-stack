@@ -1,7 +1,7 @@
 import { defineHandler, type InferProps } from "void";
-import { getAuth, getSession } from "void/auth";
+import { getSession } from "void/auth";
 import { env } from "void/env";
-import { deviceLabel, findUser, isAdmin, notFound, requireAdmin, setPasswordLink, userStatus } from "../../../src/admin";
+import { deviceLabel, findUser, listSessions, isAdmin, notFound, requireAdmin, setPasswordLink, userStatus } from "../../../src/admin";
 
 export type Props = InferProps<typeof loader>;
 
@@ -9,8 +9,7 @@ export const loader = defineHandler(async (c) => {
   const me = requireAdmin(c);
   const user = await findUser(c.req.param("id") ?? "");
   if (!user) throw notFound();
-  // Sessions come from the admin plugin (through the guard), not the table.
-  const { sessions } = await getAuth(c).api.listUserSessions({ body: { userId: user.id }, headers: c.req.raw.headers });
+  const sessions = await listSessions(user.id); // the page gets ids, never tokens (CSO-1)
   const currentSession = getSession()?.session.id;
   const back = new URLSearchParams();
   for (const k of ["q", "page"]) if (c.req.query(k)) back.set(k, c.req.query(k)!);
@@ -23,7 +22,6 @@ export const loader = defineHandler(async (c) => {
     status: userStatus({ ...user, bannedAt: user.updatedAt, admin }),
     sessions: sessions.map((s) => ({
       id: s.id,
-      token: s.token,
       device: deviceLabel(s.userAgent),
       createdAt: s.createdAt,
       expiresAt: s.expiresAt,

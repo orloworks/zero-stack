@@ -97,8 +97,9 @@ it("refuses every endpoint off the allowlist, even for an admin", async () => {
     t.auth.api.impersonateUser({ headers: h, body: { userId: other.id } }),
     t.auth.api.stopImpersonating({ headers: h }),
     t.auth.api.userHasPermission({ headers: h, body: { permissions: { user: ["list"] } } }),
+    t.auth.api.listUserSessions({ headers: h, body: { userId: other.id } }), // returns raw tokens
   ];
-  expect(await Promise.all(refused.map(status))).toEqual(Array(7).fill(404));
+  expect(await Promise.all(refused.map(status))).toEqual(Array(8).fill(404));
   expect(other.row.role).toBe("user");
   expect(t.db.user!.length).toBe(2);
 }, SLOW);
@@ -162,4 +163,34 @@ it("a self-delete is refused before anything is purged", async () => {
   expect(await status(t.auth.api.removeUser({ headers: boss.headers, body: { userId: boss.id } }))).toBe(400);
   expect(t.purged).toEqual([]);
   expect(t.db.user!.some((u) => u.id === boss.id)).toBe(true);
+}, SLOW);
+
+it("a userId that is not a string is refused with 400 before anything runs (the plugin would coerce [id] to id)", async () => {
+  const t = setup({ purgeFails: true });
+  const boss = await t.user("boss@x.com");
+  t.listed.add("boss@x.com");
+  const victim = await t.user("victim@x.com");
+  const bad = [[victim.id], 7, { id: victim.id }, null];
+  for (const userId of bad) {
+    for (const call of ["banUser", "unbanUser", "revokeUserSessions", "removeUser"] as const) {
+      expect(await status((t.auth.api[call] as any)({ headers: boss.headers, body: { userId } }))).toBe(400);
+    }
+  }
+  expect(t.db.user!.find((u) => u.id === victim.id)!.banned).toBeFalsy();
+  expect(t.db.user!.some((u) => u.id === victim.id)).toBe(true); // remove-user with the purge down: nothing deleted, nothing purged
+  expect(t.db.account!.some((a) => a.userId === victim.id)).toBe(true);
+  expect(t.purged).toEqual([]);
+  expect(t.audit).toEqual([]);
+}, SLOW);
+
+it("a ban or unban that changes nothing writes no audit entry", async () => {
+  const t = setup();
+  const boss = await t.user("boss@x.com");
+  t.listed.add("boss@x.com");
+  const victim = await t.user("victim@x.com");
+  expect(await status(t.auth.api.unbanUser({ headers: boss.headers, body: { userId: victim.id } }))).toBe(200); // not banned
+  expect(t.audit).toEqual([]);
+  await t.auth.api.banUser({ headers: boss.headers, body: { userId: victim.id } });
+  await t.auth.api.banUser({ headers: boss.headers, body: { userId: victim.id } }); // already banned
+  expect(t.audit.map((a) => a.verb)).toEqual(["ban"]);
 }, SLOW);

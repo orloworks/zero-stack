@@ -35,6 +35,12 @@ export function requireAdmin(c: Parameters<typeof requireAuth>[0]) {
   return user;
 }
 
+// A browser always sends Origin on a cross-site POST; a missing or foreign one is refused before anything runs (as Better Auth's own MISSING_OR_NULL_ORIGIN).
+export function requireSameOrigin(c: { req: { header: (n: string) => string | undefined; url: string } }) {
+  const origin = c.req.header("origin");
+  if (!origin || origin !== new URL(c.req.url).origin) throw new HTTPException(403, { message: "Forbidden" });
+}
+
 export const setPasswordLink = (user: Person): boolean => INVITE_ONLY && user.emailVerified !== true;
 
 // ---- audit -------------------------------------------------------------------------------------------------------------------------
@@ -107,4 +113,11 @@ export const userExists = async (id: string): Promise<boolean> => (await findUse
 export async function findUser(id: string) {
   const { db, eq, userTable } = await store();
   return (await db.select().from(userTable).where(eq(userTable.id, id)).limit(1))[0] ?? null;
+}
+
+// A user's live sessions, read here (not through the plugin's list-user-sessions) so the raw token stays on the server: pages get ids, and the revoke route maps id to token.
+export async function listSessions(userId: string) {
+  const { db, eq, desc, sessionTable } = await store();
+  const rows = await db.select().from(sessionTable).where(eq(sessionTable.userId, userId)).orderBy(desc(sessionTable.createdAt));
+  return rows.filter((s) => s.expiresAt > new Date());
 }

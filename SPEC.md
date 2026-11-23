@@ -157,9 +157,10 @@ in `AGENTS.md`.
     gates the paths, and each loader and route also calls `requireAdmin`.
   - `auth.ts` gains Better Auth's `admin()` plugin (ban message "This account has been blocked. Contact the site owner.") and
     an `admin-guard` plugin (`src/admin-guard.ts`): on `/admin/*` it 404s unless the path is on an allowlist (`list-users`,
-    `get-user`, `list-user-sessions`, `ban-user`, `unban-user`, `revoke-user-session`, `revoke-user-sessions`, `remove-user`;
-    `set-role`, `create-user`, `update-user`, `set-user-password`, `impersonate-user`, `stop-impersonating`, `has-permission`
-    and any future endpoint are refused) and the session user passes `isAdmin` right now; it is the only writer of
+    `get-user`, `ban-user`, `unban-user`, `revoke-user-session`, `revoke-user-sessions`, `remove-user`;
+    `set-role`, `create-user`, `update-user`, `set-user-password`, `impersonate-user`, `stop-impersonating`, `has-permission`,
+    `list-user-sessions` (it returns raw session tokens; pages read sessions server-side and revoke by id through
+    `POST /api/admin/users/:id/sessions/:sessionId/revoke`) and any future endpoint are refused) and the session user passes `isAdmin` right now; it is the only writer of
     `user.role`, so a listed user who verifies after signing in, or an address added to the list, is admitted on the same
     session, and a de-listed admin is refused at once. Void 1.8 does not cache sessions (probe P7), so the guard reads the
     session fresh; `adminClient` works through `void/client/svelte` (P6). See `docs/facts.md`.
@@ -181,7 +182,7 @@ in `AGENTS.md`.
     but unverified user, "Your email is on the admin list but isn't verified yet." with a verification link. Success copy says
     "requested", never "sent". Every form uses `runAction` (`src/lib/admin-action.ts`: pending, done, done-unaudited, error).
   - **Send link**: `POST /api/admin/users/:id/send-link` calls `requestPasswordReset` on the server (no Turnstile token
-    needed) and audits it; with `--invite-only` an unverified user's link is mailed as "Set your password".
+    needed) and audits it, and refuses a missing or foreign `Origin` with 403; with `--invite-only` an unverified user's link is mailed as "Set your password".
   - `session.create.before` writes `lastSignInAt` (a `user.additionalFields` column) and nothing else.
   - The CLI closes with "To use /admin, sign in with an email on ADMIN_EMAILS and verify it."; `AGENTS.md` gets an Admin
     section. Generated tests: `tests/admin*.test.ts` (matcher, `userStatus`, the guard over a real Better Auth, the action

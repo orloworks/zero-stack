@@ -7,12 +7,12 @@ import type { AuditInput, Verb } from "./admin";
 //   before: 404 unless the path is allowlisted and the signed-in user passes isAdmin now; then it is the only writer of user.role, so the plugin's
 //           own check (which reads the user fresh from the database) agrees; on remove-user, refuse self, then purge the user's files first (U1).
 //   after:  one audit entry for each successful change; a failed write answers 500 AUDIT_WRITE_FAILED (the change stands; the page shows a warning).
-// Not on the list, so refused with a 404 even for an admin: set-role, create-user, update-user, set-user-password, impersonate-user,
+// Not on the list, so refused with a 404 even for an admin: list-user-sessions (it returns raw session tokens; the pages read sessions server-side),
+// set-role, create-user, update-user, set-user-password, impersonate-user,
 // stop-impersonating, has-permission, and any endpoint a later Better Auth adds. Fail closed.
 export const ALLOWED = [
   "/admin/list-users",
   "/admin/get-user",
-  "/admin/list-user-sessions",
   "/admin/ban-user",
   "/admin/unban-user",
   "/admin/revoke-user-session",
@@ -62,6 +62,10 @@ export function adminGuard(opts: GuardOptions) {
             if (!verb) return;
             const actor = { id: user.id, email: user.email };
             const body = (ctx.body ?? {}) as { userId?: unknown; sessionToken?: unknown; banReason?: unknown };
+            if (path !== "/admin/revoke-user-session" && body.userId !== undefined && typeof body.userId !== "string") {
+              // The plugin coerces userId with z.coerce.string(), so ["id"] would reach it as "id" past this guard: refuse anything else.
+              throw new APIError("BAD_REQUEST", { code: "INVALID_USER_ID", message: "userId must be a string" });
+            }
             const userId = typeof body.userId === "string" ? body.userId : null;
             if (path === "/admin/revoke-user-session") {
               const found = typeof body.sessionToken === "string" ? await ctx.context.internalAdapter.findSession(body.sessionToken) : null;
@@ -84,6 +88,9 @@ export function adminGuard(opts: GuardOptions) {
               pending.set(ctx.context, { actor, verb, target: null, detail: `deleted user ${target.id}` });
               return;
             }
+            const banned = !!(target as { banned?: boolean | null }).banned;
+            // A ban of a banned user or an unban of an active one changes nothing, so it writes nothing.
+            if ((verb === "ban" && banned) || (verb === "unban" && !banned)) return;
             const reason = typeof body.banReason === "string" && body.banReason.trim() ? body.banReason.trim() : null;
             pending.set(ctx.context, {
               actor,

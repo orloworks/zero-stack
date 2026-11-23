@@ -600,7 +600,7 @@ try {
     const upload = (b: string, cookie: string, name: string, body: string) => fetch(`${b}/api/files/${name}`, { method: "PUT", body, headers: { cookie, "content-type": "text/plain" } }).then((r) => r.status);
     const signIn = (b: string, address: string, password = gatePw) => authPost(b, "/api/auth/sign-in/email", { email: address, password });
     // The 404 matrix: pages, the plugin's endpoints and our own admin route.
-    const adminPaths = (id: string): [string, string][] => [["GET", "/admin"], ["GET", "/admin/audit"], ["GET", `/admin/users/${id}`], ["GET", "/admin/users"], ["GET", "/api/auth/admin/list-users"], ["GET", `/api/auth/admin/get-user?id=${id}`], ["POST", "/api/auth/admin/list-user-sessions"], ["POST", `/api/admin/users/${id}/send-link`]];
+    const adminPaths = (id: string): [string, string][] => [["GET", "/admin"], ["GET", "/admin/audit"], ["GET", `/admin/users/${id}`], ["GET", "/admin/users"], ["GET", "/api/auth/admin/list-users"], ["GET", `/api/auth/admin/get-user?id=${id}`], ["POST", `/api/admin/users/${id}/send-link`]];
     const expectAll = async (b: string, who: string, cookie: string, id: string, want: (m: string, p: string) => number) => {
       for (const [m, p] of adminPaths(id)) {
         const r = await call(b, m, p, cookie, m === "POST" ? { userId: id } : undefined);
@@ -697,12 +697,27 @@ try {
       // Revoke one session, then the rest.
       await signIn(b, victim);
       await signIn(b, victim);
-      const sessionsOf = async () => ((await (await call(b, "POST", "/api/auth/admin/list-user-sessions", bossU.cookie, { userId: victimU.id })).json()) as any).sessions as { token: string }[];
-      const before = await sessionsOf();
-      if (before.length < 2) throw new Error(`list-user-sessions returned ${before.length} sessions`);
-      const revoke = await call(b, "POST", "/api/auth/admin/revoke-user-session", bossU.cookie, { sessionToken: before[0]!.token });
-      if (revoke.status !== 200 || (await sessionsOf()).length !== before.length - 1) throw new Error(`revoke-user-session -> ${revoke.status}, ${(await sessionsOf()).length} of ${before.length} sessions left`);
-      if ((await call(b, "POST", "/api/auth/admin/revoke-user-sessions", bossU.cookie, { userId: victimU.id })).status !== 200 || (await sessionsOf()).length) throw new Error("revoke-user-sessions left a session");
+      const sessionsOf = () => rows("session", "SELECT id, token FROM session WHERE userId = ?", victimU.id) as { id: string; token: string }[];
+      const before = sessionsOf();
+      if (before.length < 2) throw new Error(`${before.length} sessions for the victim`);
+      // CSO-1: no token reaches the admin's browser. The plugin's list endpoint is off the allowlist (404 even for an admin), and the User detail page ships ids only.
+      if ((await call(b, "POST", "/api/auth/admin/list-user-sessions", bossU.cookie, { userId: victimU.id })).status !== 404) throw new Error("an admin's raw list-user-sessions was not 404");
+      const victimPage = await html(b, `/admin/users/${victimU.id}`, bossU.cookie);
+      if (before.some((s) => victimPage.text.includes(s.token))) throw new Error("the User detail page ships a raw session token");
+      const revokeUrl = (id: string, sid: string) => `/api/admin/users/${id}/sessions/${sid}/revoke`;
+      // A foreign or missing Origin is refused with no side effects; so is a session id that is not this user's.
+      const post = (path: string, origin?: string) => fetch(b + path, { method: "POST", headers: { cookie: bossU.cookie, ...(origin && { origin }) } });
+      const audited = auditRows().length;
+      const refusals = [await post(revokeUrl(victimU.id, before[0]!.id)), await post(revokeUrl(victimU.id, before[0]!.id), "https://evil.test"), await post(`/api/admin/users/${victimU.id}/send-link`), await post(`/api/admin/users/${victimU.id}/send-link`, "https://evil.test")];
+      // No Origin: our 403. A foreign Origin: Void drops the session before our route runs (404, as the review saw); our 403 is the backstop. Either way nothing happens.
+      const st = refusals.map((r) => r.status);
+      if (st[0] !== 403 || st[2] !== 403 || ![403, 404].includes(st[1]!) || ![403, 404].includes(st[3]!)) throw new Error(`no-Origin and cross-origin revoke/send-link -> ${st}, expected 403 for no Origin and 403 or 404 for a foreign one`);
+      if (sessionsOf().length !== before.length || auditRows().length !== audited) throw new Error("a refused revoke or send-link changed a session or wrote an audit entry");
+      if ((await call(b, "POST", revokeUrl(victimU.id, bossU.id), bossU.cookie)).status !== 404 || (await call(b, "POST", revokeUrl(victimU.id, "no-such"), bossU.cookie)).status !== 404) throw new Error("revoke of an unknown or another user's session id was not 404");
+      if ((await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), plainU.cookie)).status !== 404) throw new Error("a non-admin's revoke was not 404");
+      const revoke = await call(b, "POST", revokeUrl(victimU.id, before[0]!.id), bossU.cookie);
+      if (revoke.status !== 200 || sessionsOf().length !== before.length - 1 || auditRows().filter((r) => r.verb === "revoke-session").length !== 1) throw new Error(`revoke by id -> ${revoke.status}, ${sessionsOf().length} of ${before.length} sessions left`);
+      if ((await call(b, "POST", "/api/auth/admin/revoke-user-sessions", bossU.cookie, { userId: victimU.id })).status !== 200 || sessionsOf().length) throw new Error("revoke-user-sessions left a session");
       if (!auditRows().some((r) => r.verb === "revoke-session" && r.target_email === victim) || !auditRows().some((r) => r.verb === "revoke-sessions" && r.target_email === victim)) throw new Error("no audit entries for the revokes");
       console.log("gate: admin revoke one session then all; audit entries for both");
 
@@ -753,6 +768,10 @@ try {
       if (evil.status !== 403) throw new Error(`a cross-origin remove-user -> ${evil.status}, expected 403`);
       if (!rows("user", "SELECT 1 FROM user WHERE id = ?", keep.id).length || (config.storage && !r2Keys().includes(`users/${keep.id}/keep.txt`))) throw new Error("a refused cross-origin remove-user purged files or deleted the user");
       if (auditRows().some((r) => r.verb === "delete-user")) throw new Error("a refused cross-origin remove-user was audited");
+      // B1: the plugin coerces userId, so an array must be refused by the guard (400) before the purge or the delete runs.
+      const arr = await call(b, "POST", "/api/auth/admin/remove-user", bossU.cookie, { userId: [keep.id] });
+      if (arr.status !== 400) throw new Error(`remove-user with an array userId -> ${arr.status}, expected 400`);
+      if (!rows("user", "SELECT 1 FROM user WHERE id = ?", keep.id).length || (config.storage && !r2Keys().includes(`users/${keep.id}/keep.txt`)) || auditRows().some((r) => r.verb === "delete-user")) throw new Error("an array-userId remove-user deleted, purged or was audited");
 
       // Delete: the user row, sessions and files go; no audit entry holds the deleted email once the request is done; the delete itself is recorded without a target.
       const del = await mk(b, addr("doomed"));

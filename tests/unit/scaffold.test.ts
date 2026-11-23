@@ -527,7 +527,7 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
   const read = (f: string) => readFileSync(join(dir, f), "utf8");
   for (const f of [
     "src/admin.ts", "src/admin-guard.ts", "src/lib/admin-action.ts", "src/lib/admin-client.ts", "src/lib/admin-display.ts", "src/signup-allowlist.ts", "db/schema/admin.ts", "middleware/10.admin.ts",
-    "routes/admin/users.ts", "routes/api/admin/users/[id]/send-link.ts", "pages/admin/layout.svelte", "pages/admin/admin.css", "pages/admin/index.svelte", "pages/admin/index.server.ts",
+    "routes/admin/users.ts", "routes/api/admin/users/[id]/send-link.ts", "routes/api/admin/users/[id]/sessions/[sessionId]/revoke.ts", "pages/admin/layout.svelte", "pages/admin/admin.css", "pages/admin/index.svelte", "pages/admin/index.server.ts",
     "pages/admin/users/[id].svelte", "pages/admin/users/[id].server.ts", "pages/admin/audit.svelte", "pages/admin/audit.server.ts",
     "tests/admin.test.ts", "tests/admin-guard.test.ts", "tests/admin-action.test.ts", "tests/admin-display.test.ts", "tests/admin-pages.test.ts", "tests/signup-allowlist.test.ts",
   ])

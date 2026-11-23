@@ -38,9 +38,9 @@
   async function sendLink() {
     await runAction((s) => (link = s), () => fetch(`/api/admin/users/${user.id}/send-link`, { method: "POST" }), "Couldn't request the link.");
   }
-  async function revokeOne(id: string, token: string) {
+  async function revokeOne(id: string) {
     revoking = id;
-    const out = await runAction((s) => (sessionsOne = s), () => adminAuth.admin.revokeUserSession({ sessionToken: token }));
+    const out = await runAction((s) => (sessionsOne = s), () => fetch(`/api/admin/users/${user.id}/sessions/${id}/revoke`, { method: "POST" }), "Couldn't revoke the session.");
     revoking = "";
     if (out.status !== "error") refresh();
   }
@@ -103,7 +103,7 @@
               {#if s.current}
                 This device
               {:else}
-                <button type="button" aria-label={`Revoke session on ${s.device}`} onclick={() => revokeOne(s.id, s.token)} disabled={pending(sessionsOne)}>
+                <button type="button" aria-label={`Revoke session on ${s.device}`} onclick={() => revokeOne(s.id)} disabled={pending(sessionsOne)}>
                   {revoking === s.id ? "Revoking…" : "Revoke"}
                 </button>
               {/if}
