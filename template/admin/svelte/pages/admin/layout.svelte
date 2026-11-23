@@ -10,6 +10,7 @@
   const NAV = [
     { href: "/admin", label: "Users" },
     { href: "/admin/features", label: "Features" },
+    { href: "/admin/settings", label: "Settings" },
     { href: "/admin/audit", label: "Audit log" },
   ];
 

@@ -532,7 +532,8 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
     "routes/admin/users.ts", "routes/api/admin/users/[id]/send-link.ts", "routes/api/admin/users/[id]/sessions/[sessionId]/revoke.ts", "pages/admin/layout.svelte", "pages/admin/admin.css", "pages/admin/index.svelte", "pages/admin/index.server.ts",
     "pages/admin/users/[id].svelte", "pages/admin/users/[id].server.ts", "pages/admin/audit.svelte", "pages/admin/audit.server.ts",
     "src/access.ts", "routes/api/example-feature.ts", "routes/api/admin/features/[feature].ts", "routes/api/admin/users/[id]/features/[feature].ts", "pages/admin/features.svelte", "pages/admin/features.server.ts",
-    "tests/access.test.ts", "tests/access-pages.test.ts", "tests/admin.test.ts", "tests/admin-guard.test.ts", "tests/admin-action.test.ts", "tests/admin-display.test.ts", "tests/admin-pages.test.ts", "tests/signup-allowlist.test.ts",
+    "src/settings.ts", "src/lib/setting-value.ts", "routes/api/example-settings.ts", "routes/api/admin/settings/[key].ts", "pages/admin/settings.svelte", "pages/admin/settings.server.ts",
+    "tests/settings.test.ts", "tests/settings-pages.test.ts", "tests/access.test.ts", "tests/access-pages.test.ts", "tests/admin.test.ts", "tests/admin-guard.test.ts", "tests/admin-action.test.ts", "tests/admin-display.test.ts", "tests/admin-pages.test.ts", "tests/signup-allowlist.test.ts",
   ])
     expect([f, existsSync(join(dir, f))]).toEqual([f, true]);
   expect(existsSync(join(dir, "src/upload-guard.ts"))).toBe(false); // no --storage
@@ -550,6 +551,7 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
   expect(agents).toContain("Every admin change writes exactly one audit entry");
   expect(agents).toContain("self-delete. The deleted user's email");
   for (const t of ["### Feature switches", "requireFeature(c, \"my-feature\")", "`FEATURES` in `src/access.ts`", "`decide()`", "kill switch"]) expect(agents).toContain(t);
+  for (const t of ["### Settings", "`SETTINGS` in `src/settings.ts`", "await setting(\"my-setting\")", "never a secret"]) expect(agents).toContain(t);
 });
 
 test("svelte --admin --storage checks the user row after an upload; --admin --invite-only reuses the one matcher", async () => {
@@ -574,7 +576,7 @@ test("--admin --invite-only puts invites in the database: table, module, page, r
   for (const f of ["db/schema/invites.ts", "src/invites.ts", "src/lib/invite-entry.ts", "pages/admin/invites.svelte", "pages/admin/invites.server.ts", "routes/api/admin/invites.ts", "routes/api/admin/invites/[id]/revoke.ts", "routes/api/admin/invites/[id]/send.ts", "tests/invites.test.ts", "tests/invites-pages.test.ts", "tests/invites-db.test.ts"])
     expect([f, existsSync(join(dir, f))]).toEqual([f, true]);
   expect(read("db/schema.ts")).toContain('export * from "./schema/admin";\nexport * from "./schema/invites";');
-  expect(read("pages/admin/layout.svelte")).toContain('{ href: "/admin", label: "Users" },\n    { href: "/admin/invites", label: "Invites" },\n    { href: "/admin/features", label: "Features" },\n    { href: "/admin/audit", label: "Audit log" },');
+  expect(read("pages/admin/layout.svelte")).toContain('{ href: "/admin", label: "Users" },\n    { href: "/admin/invites", label: "Invites" },\n    { href: "/admin/features", label: "Features" },\n    { href: "/admin/settings", label: "Settings" },\n    { href: "/admin/audit", label: "Audit log" },');
   expect(read("src/invite-state.ts")).toContain("inviteAllowed"); // the real lookup, not the base app's stub
   expect(read("auth.ts")).toContain('import { inviteAllowed } from "./src/invites";');
   expect(read("src/admin.ts")).toContain("INVITE_ONLY = true");

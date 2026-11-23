@@ -36,5 +36,8 @@ it("describeAudit reads '[admin] [verb] [target]: [old → new]' and survives a 
   expect(describeAudit(sw)).toBe("a@x.com set feature beta: off → kill");
   expect(describeAudit({ ...sw, verb: "set-override", targetEmail: "u@x.com", oldValue: "default", newValue: "on" })).toBe("a@x.com set feature beta for u@x.com: default → on");
   expect(describeAudit({ ...sw, verb: "set-override", targetEmail: null, detail: null, oldValue: "default", newValue: "on" })).toBe("a@x.com set feature a feature for a deleted user: default → on");
+  const st = { ...row, targetEmail: null, detail: "example-number", oldValue: "10", newValue: "25" };
+  expect(describeAudit({ ...st, verb: "set-setting" })).toBe("a@x.com set setting example-number: 10 → 25");
+  expect(describeAudit({ ...st, verb: "reset-setting", oldValue: "25", newValue: "10" })).toBe("a@x.com reset setting example-number: 25 → 10");
   expect(describeAudit({ ...row, verb: "delete-user", targetEmail: null, detail: "deleted user u1", oldValue: null, newValue: null })).toBe("a@x.com deleted a user");
 });
