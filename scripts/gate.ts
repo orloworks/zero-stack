@@ -385,9 +385,11 @@ try {
         const r = await file(bad, { method: "PUT", body: "x", headers: { cookie } });
         if (r.status < 400 || r.status >= 500) throw new Error(`PUT ${bad} -> ${r.status}, expected a 4xx`);
       }
+      const big = await file("big.bin", { method: "PUT", body: new Uint8Array(10 * 1024 * 1024 + 1), headers: { cookie } });
+      if (big.status !== 413) throw new Error(`a 10 MB + 1 byte upload -> ${big.status}, expected 413`);
       const keys = r2Keys();
       if (keys.join() !== `users/${storageUser}/a.txt`) throw new Error(`R2 holds ${JSON.stringify(keys)}, expected only users/${storageUser}/a.txt`);
-      console.log("gate: storage routes 401 without a session; upload/download under users/<id>/; escaping names rejected");
+      console.log("gate: storage routes 401 without a session; upload/download under users/<id>/; escaping names rejected; over 10 MB is 413 and stores nothing");
     }
     // Route pages for the enabled features; the loader is a file, not a route, so it is checked separately.
     const routes = ["sign-in", "sign-up", ...(config.framework === "svelte" ? ["settings"] : []), ...(config.email ? ["forgot-password", "reset-password"] : [])];
