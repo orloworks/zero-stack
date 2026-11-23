@@ -558,11 +558,41 @@ test("svelte --admin --storage checks the user row after an upload; --admin --in
   for (const f of ["src/upload-guard.ts", "tests/upload-guard.test.ts"]) expect(existsSync(join(on.dir, f))).toBe(true);
   expect(readFileSync(join(on.dir, "src/admin.ts"), "utf8")).toContain("export const INVITE_ONLY = true;");
   expect(readFileSync(join(on.dir, "src/signup-allowlist.ts"), "utf8")).toContain("export function signupAllowed"); // invite-only's copy, not a second one
-  expect(readFileSync(join(on.dir, "env.ts"), "utf8")).toContain("SIGNUP_ALLOWLIST: string(),");
+  expect(readFileSync(join(on.dir, "env.ts"), "utf8")).toContain('SIGNUP_ALLOWLIST: string().default(""),'); // U4: optional with --admin
   const auth = readFileSync(on.dir + "/auth.ts", "utf8");
   expect(auth).toContain("purge: purgeUserFiles");
   expect(auth.match(/^  databaseHooks:/gm)).toHaveLength(1);
   expect(readFileSync(join(on.dir, "tests/auth-email.test.ts"), "utf8")).toContain("(Reset|Set) your password"); // an invite-only admin app mails an unverified user a set-password link
+});
+
+test("--admin --invite-only puts invites in the database: table, module, page, routes, tests, nav entry and the real invite-state", async () => {
+  const { dir, run } = adminApp({ inviteOnly: true });
+  await run();
+  const read = (f: string) => readFileSync(join(dir, f), "utf8");
+  for (const f of ["db/schema/invites.ts", "src/invites.ts", "src/lib/invite-entry.ts", "pages/admin/invites.svelte", "pages/admin/invites.server.ts", "routes/api/admin/invites.ts", "routes/api/admin/invites/[id]/revoke.ts", "routes/api/admin/invites/[id]/send.ts", "tests/invites.test.ts", "tests/invites-pages.test.ts"])
+    expect([f, existsSync(join(dir, f))]).toEqual([f, true]);
+  expect(read("db/schema.ts")).toContain('export * from "./schema/admin";\nexport * from "./schema/invites";');
+  expect(read("pages/admin/layout.svelte")).toContain('{ href: "/admin/invites", label: "Invites" },\n    { href: "/admin/audit", label: "Audit log" },');
+  expect(read("src/invite-state.ts")).toContain("inviteAllowed"); // the real lookup, not the base app's stub
+  expect(read("auth.ts")).toContain('import { inviteAllowed } from "./src/invites";');
+  expect(read("src/admin.ts")).toContain("INVITE_ONLY = true");
+  const agents = read("AGENTS.md");
+  for (const t of ["Invites live in the database", "SIGNUP_ALLOWLIST\` is **optional**", "Revoking an invite never touches an existing account", "### Onboarding", "markStep(userId", "invite.added_by_user_id"]) expect([t, agents.includes(t)]).toEqual([t, true]);
+  expect(agents).not.toContain("${");
+  expect(read("src/onboarding.ts")).toContain("export const STEPS");
+  expect(read("db/schema/admin.ts")).toContain('"onboarding_step"');
+});
+
+test("--admin without --invite-only has onboarding but no invites", async () => {
+  const { dir, run } = adminApp({});
+  await run();
+  for (const f of ["db/schema/invites.ts", "src/invites.ts", "pages/admin/invites.svelte", "routes/api/admin/invites.ts", "tests/invites.test.ts"]) expect([f, existsSync(join(dir, f))]).toEqual([f, false]);
+  expect(readFileSync(join(dir, "src/invite-state.ts"), "utf8")).toContain("async (_email: string): Promise<InviteState> => null");
+  expect(readFileSync(join(dir, "src/onboarding.ts"), "utf8")).toContain("export async function markStep");
+  expect(readFileSync(join(dir, "pages/admin/layout.svelte"), "utf8")).not.toContain("Invites");
+  const agents = readFileSync(join(dir, "AGENTS.md"), "utf8");
+  expect(agents).toContain("### Onboarding");
+  expect(agents).not.toContain("Invites live in the database");
 });
 
 test("without --admin none of it exists", async () => {

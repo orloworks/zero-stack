@@ -132,7 +132,7 @@ in `AGENTS.md`.
   shows one message for `EMAIL_NOT_VERIFIED` and `INVALID_EMAIL_OR_PASSWORD`, so sign-in doesn't
   reveal list membership. The matcher refuses any email without exactly one `@`, with an empty
   local part, or with any non-ASCII character in the raw input (tested before trimming or
-  lowercasing). `SIGNUP_ALLOWLIST` is a required
+  lowercasing). `SIGNUP_ALLOWLIST` is a required (optional with `--admin`, see below)
   server secret (`string()` in the composed `env.ts`): exact emails and `@domain` entries
   separated by commas or whitespace, case-insensitive; `@x.com` matches exactly that domain
   (not `sub.x.com` or `evilx.com`); a missing or empty list refuses everyone (Void's required-env check turns an unset or empty value into a 500 on every request; a list with no entries refuses every sign-up). Matcher
@@ -148,8 +148,8 @@ in `AGENTS.md`.
   (fail closed: a storage error aborts the deletion, code `STORAGE_PURGE_FAILED`, shown by the
   page as partial-purge copy) and sweeps again in `afterDelete`.
 
-- `--admin` (svelte): an admin area at `/admin` in the same app (spec #51; this is its first ticket, #52: guard, Users,
-  User detail, Audit log). Invites, onboarding, feature switches and settings are later tickets. An **admin** is a signed-in
+- `--admin` (svelte): an admin area at `/admin` in the same app (spec #51; tickets #52: guard, Users,
+  User detail, Audit log, and #53: invites and onboarding). Feature switches and settings are later tickets. An **admin** is a signed-in
   user with a verified email on the `ADMIN_EMAILS` secret (the invite-only matcher, `src/signup-allowlist.ts`, copied when
   `--invite-only` did not). It is optional with an empty default in the composed `env.ts` (unset or empty means no admins and
   `/admin` 404s while the app serves); the local `.env` gets `ADMIN_EMAILS=@example.com`. There is no promote button.
@@ -183,6 +183,25 @@ in `AGENTS.md`.
     "requested", never "sent". Every form uses `runAction` (`src/lib/admin-action.ts`: pending, done, done-unaudited, error).
   - **Send link**: `POST /api/admin/users/:id/send-link` calls `requestPasswordReset` on the server (no Turnstile token
     needed) and audits it, and refuses a missing or foreign `Origin` with 403; with `--invite-only` an unverified user's link is mailed as "Set your password".
+  - **Invites** (`--admin --invite-only`, #53; U4, E10). Invites live in the database: `db/schema/invites.ts` (`invite`: an exact
+    email or `@domain`, lower case, unique; who added it, `set null`; when; when its email was last requested) and `src/invites.ts`.
+    `inviteAllowed(email, SIGNUP_ALLOWLIST)` is the env list OR the rows for the address or its `@domain`, through the same matcher
+    (`signupAllowed`), and the composer swaps all three call sites in `auth.ts` (the user-create hook and both plugin re-checks) to it;
+    `void/db` is imported on use. `SIGNUP_ALLOWLIST` becomes `string().default("")` in the composed `env.ts`: empty plus no database
+    invite refuses every sign-up, so the app fails closed. It stays required for `--invite-only` alone. The Invites page (`pages/admin/invites.svelte`,
+    nav entry after Users) adds an exact email or a whole domain with inline validation and the "Anyone at @x.com can sign up" preview, lists
+    "Added here" with Revoke and, for exact emails, Send invite, and the secret's entries read-only. Routes: `POST /api/admin/invites`,
+    `POST /api/admin/invites/:id/revoke` and `/send` (admin, same-origin). Add and revoke write the change and their audit entry in one `db.batch`;
+    send mails the sign-up link (`send()`, subject "Your invitation") and then writes `last_sent_at` and its audit entry in one batch. Copy: "Invited x@y.com." /
+    "Invited anyone at @x.com." / "Invite removed." / "Invite email requested for x@y.com."; a revoke also says "Still invited through SIGNUP_ALLOWLIST."
+    when the secret covers the entry, and always "Existing accounts are not affected. Ban the user to block them." (an existing account is never touched).
+    A Users search with no account in an invite-only app adds "x@y.com is not invited. Invite them" (opening Invites with the email filled in) or "Invited, but hasn't signed up
+    yet."; an unverified user's status line says "Not invited (removed from the list)" when no source covers them. Generated tests: `tests/invites.test.ts`
+    (`inviteAllowed`: env hit, database exact, database domain, lookalike refused, miss; entry parsing; the D6 copy) and `tests/invites-pages.test.ts`.
+  - **Onboarding** (`--admin`, #53; E14, D20). `STEPS` in `src/onboarding.ts` (the scaffold ships `example-step`), `markStep(userId, step)` (first time only;
+    an undeclared name throws) and `progress(userId)`; `onboarding_step` (user id `cascade`, step, reached at; primary key user and step). "Signed up" and
+    "Email verified" come from the user row and are never stored. The Users list shows "n of m" in an Onboarding column and user detail the steps; both are
+    hidden when `STEPS` is empty. Test: `tests/onboarding.test.ts`.
   - `session.create.before` writes `lastSignInAt` (a `user.additionalFields` column) and nothing else.
   - The CLI closes with "To use /admin, sign in with an email on ADMIN_EMAILS and verify it."; `AGENTS.md` gets an Admin
     section. Generated tests: `tests/admin*.test.ts` (matcher, `userStatus`, the guard over a real Better Auth, the action
@@ -202,7 +221,8 @@ Void imports `void/email` and `void/storage` lazily in generated helpers: its pl
   delivery needs that domain (or Workers Paid on your Cloudflare account). Without it sends
   fail, are logged, and the user gets no mail.
 - `--admin`: set `ADMIN_EMAILS` for prod (`void secret put ADMIN_EMAILS`, or Infisical `prod` through the production route); dev uses the
-  `@example.com` placeholder. Unset or empty: no admins, `/admin` is a 404. The first admin signs in with a listed address and verifies it.
+  `@example.com` placeholder. Unset or empty: no admins, `/admin` is a 404. The first admin signs in with a listed address and verifies it. With
+  `--admin --invite-only`, `SIGNUP_ALLOWLIST` is optional: invites can live in the database only.
 - Always: `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` for the deployed origin.
 
 ## `--secrets infisical`
@@ -276,7 +296,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   `nice`, shared bun cache, scaffolds skipped when the hash of pins + template is
   unchanged. The matrix (`scripts/matrix.ts`) is every framework with all its valid flags,
   bare, and solo runs per add-on: `svelte-auth`, `svelte-account-deletion`, `svelte-email`,
-  `svelte-turnstile`, `svelte-invite-only`, `svelte-admin`, `svelte-admin-storage`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
+  `svelte-turnstile`, `svelte-invite-only`, `svelte-admin`, `svelte-admin-storage`, `svelte-admin-invite-only`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
 - Gate checks per flag (`scripts/gate.ts`, HTTP against `vp dev`): `--auth` sign-up, sign-in,
   session, `/settings` signed in and out, wrong then right change-password, other session
   revoked, migration present, `.env` gitignored; `--email` reset mail in the dev inbox, link,
@@ -298,7 +318,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   `ADMIN_EMAILS` is 404 while `GET /` is 200; search by email (any case) and by name, the no-match copy, `%` not a wildcard, paging; ban ends sessions and sign-in
   shows the blocked copy, unban restores it; revoke one then all sessions; send-link lands in the dev inbox and sets a password (with no Turnstile token, and as a
   set-password link for an unverified invite-only user); self-ban and self-delete 400; delete removes the row, sessions and files and leaves no audit entry
-  holding the deleted email; the audit page newest first and `?user=`; `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
+  holding the deleted email; the audit page newest first and `?user=`; onboarding "n of m" in the list and the steps on user detail, and onboarding rows gone with the user; `--admin --invite-only` with no `SIGNUP_ALLOWLIST`: a database invite (exact and domain) admits at once with no restart, a lookalike and no source are refused, revoke refuses again and leaves the existing account, the reset-password re-check reads the database, send-invite lands in the dev inbox, every change is audited, a search with no account says not invited or invited, and with a secret the secret still admits, shows read-only and a revoke of a covered entry says "Still invited through SIGNUP_ALLOWLIST."; `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
   without a session, upload and download under `users/<id>/`, escaping names rejected, exactly 10 MB stored and 10 MB + 1 byte refused 413 with nothing stored (keys
   read back from the local R2 state), object gone after account deletion. The
   `STORAGE_PURGE_FAILED` path is covered by string tests only, not over HTTP.
