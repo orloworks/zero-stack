@@ -299,6 +299,16 @@ Scripts: `verify` (`void prepare && vp check && tsc --noEmit && vp build && vp t
 in Node; bindings are unavailable). `AGENTS.md` tells agents to run `verify` before
 finishing. No wrangler files, ever (Void migrates a root `wrangler.jsonc` itself).
 
+## Setup guide
+
+`src/setup.ts` holds one typed step list (`STEPS`): title, why, who (`agent`, `agent-browser`, `human`), action, a verify
+command (exit 0 = done) and the env names the step covers. A step has a flag predicate, so a step that does not apply is never
+shown. Three composers read it: the `## Setup` table in `AGENTS.md`, `docs/setup.md`, and `scripts/setup-wizard.sh` (one stage per
+`human` step; a done step is detected by its verify command and skipped; typed values are read hidden, never printed, and go to
+`void secret put` by stdin, plus Infisical `prod` with `--secrets`). A unit test fails when a flag adds an env name in `authEnv`
+or `env.ts` that no step covers. The gate checks the steps against the flags and runs `bash -n` on the wizard. Commands are Void
+1.8.0, `cf` and `infisical` only, never wrangler; Void-side browser driving stays in the agent's harness, not in the app.
+
 ## Routing docs
 
 One source, `docs/cloudflare-routing.md`: need -> product -> Void module or `cloudflare:`
