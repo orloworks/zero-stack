@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { FEATURE_LIST, validateFlags } from "../../src/flags";
 import { authEnv } from "../../src/installers/auth";
 import { composeEnvTs } from "../../src/installers/env-ts";
-import { composeSetupDoc, composeSetupSection, composeWizard, STEPS, stepsFor, writeSetupFiles } from "../../src/setup";
+import { composeDoctor, composeSetupDoc, composeSetupSection, composeWizard, STEPS, stepsFor, writeSetupFiles } from "../../src/setup";
 
 const cfg = (o: object = {}) => validateFlags({ name: "app", framework: "svelte", ...o }).config;
 const ALL = Object.fromEntries(FEATURE_LIST.filter((f) => !f.frameworks || f.frameworks.includes("svelte")).map((f) => [f.key, true]));
@@ -202,5 +202,151 @@ test("bash -n accepts the wizard for every flag set that has one", () => {
     const w = composeWizard(cfg(o));
     if (!w) continue;
     expect(Bun.spawnSync(["bash", "-n"], { stdin: new TextEncoder().encode(w) }).exitCode).toBe(0);
+  }
+});
+
+// Runs scripts/doctor.sh under the system bash from a subdirectory, against fake CLIs that log argv and print SENTINEL on both streams.
+// The fake `void secret list` prints $LISTED; `void cloudflare status` exits $CF_STATUS; the file-only steps are satisfied by the files written here.
+const SENTINEL = "s3cr3t-sentinel-value";
+function doctorRun(c: ReturnType<typeof cfg>, env: Record<string, string> = {}, listed = stepsFor(c).flatMap((s) => s.covers ?? []).join("\n")) {
+  const dir = mkdtempSync(join(tmpdir(), "zs-doc-"));
+  writeSetupFiles(dir, c);
+  mkdirSync(join(dir, ".void"));
+  mkdirSync(join(dir, "src/sub"), { recursive: true });
+  writeFileSync(join(dir, ".void/project.json"), '{"platform":"cloudflare"}');
+  writeFileSync(join(dir, ".infisical.yaml"), "x: 1\n");
+  writeFileSync(join(dir, "void.config.ts"), "export default { email: { from: 'hi@mail.acme.com' } };\n");
+  writeFileSync(join(dir, ".env"), "STRIPE_SECRET_KEY=sk_test_abc\nSTRIPE_WEBHOOK_SECRET=whsec_abc\n");
+  const bin = join(dir, "fakebin");
+  mkdirSync(join(dir, "node_modules/.bin"), { recursive: true });
+  mkdirSync(bin);
+  const fake = [
+    "#!/bin/sh",
+    'echo "$(basename "$0") $*" >> "$FAKE_LOG"',
+    `echo ${SENTINEL}; echo ${SENTINEL} >&2`,
+    // HANG="secret list": that command never returns. HANG_MODE=child makes it spawn its own child first; otherwise it ignores ALRM and exec's sleep.
+    '[ -n "$HANG" ] && [ "$1 $2" = "$HANG" ] && { if [ -n "$HANG_TRAP" ]; then echo $$ > "$FAKE_LOG.pid"; trap "exit 0" TERM; while :; do sleep 1; done; fi; if [ -n "$HANG_CHILD" ]; then sleep 30 & echo "$$ $!" > "$FAKE_LOG.pid"; wait; else trap "" ALRM; echo $$ > "$FAKE_LOG.pid"; exec sleep 30; fi; }',
+    '[ "$1 $2" = "secret list" ] && { echo "$LISTED"; exit 0; }',
+    '[ "$1 $2" = "cloudflare status" ] && exit "${CF_STATUS:-0}"',
+    '[ "$1 $2" = "auth whoami" ] && echo \'"authenticated": true\'',
+    '[ "$1 $2" = "r2 buckets" ] && echo storage',
+    '[ "$1 $2" = "db status" ] && { echo "${DB_OUT:-1 migration}"; exit 0; }',
+    "exit 0",
+  ].join("\n");
+  for (const [d, n] of [[join(dir, "node_modules/.bin"), "void"], [bin, "infisical"], [bin, "cf"], [bin, "curl"]] as const) { writeFileSync(join(d, n), fake); chmodSync(join(d, n), 0o755); }
+  const log = join(dir, "calls.log");
+  writeFileSync(log, "");
+  const r = Bun.spawnSync(["/bin/bash", join(dir, "scripts/doctor.sh")], {
+    cwd: join(dir, "src/sub"), stdin: null,
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, LISTED: listed, APP_HOST: "app.example.com", ...env },
+  });
+  const out = r.stdout.toString() + r.stderr.toString();
+  return { code: r.exitCode, out, rows: out.split("\n").filter((l) => /^(PASS|FAIL|NOT CHECKED) /.test(l)), calls: readFileSync(log, "utf8"), dir };
+}
+
+test("doctor: every row passes against passing CLIs, from a subdirectory, and exits 0", () => {
+  const c = cfg(ALL);
+  const r = doctorRun(c);
+  expect(r.out).toContain("0 failed, 0 not checked");
+  expect(r.rows).toHaveLength(stepsFor(c).length + 3);
+  expect(r.rows.every((l) => l.startsWith("PASS"))).toBe(true);
+  expect(r.code).toBe(0);
+  expect(r.calls).toContain("curl -fsS -o /dev/null https://app.example.com/");
+});
+
+test("doctor: no output of any command reaches the terminal", () => {
+  const r = doctorRun(cfg(ALL));
+  expect(r.out).not.toContain(SENTINEL);
+  expect(r.calls.length).toBeGreaterThan(0);
+});
+
+test("doctor: a missing secret name fails that step with its guide step and the wizard", () => {
+  const c = cfg({ admin: true });
+  const n = stepsFor(c).findIndex((s) => s.id === "admin-emails") + 1;
+  const r = doctorRun(c, {}, "");
+  expect(r.code).toBe(1);
+  expect(r.out).toContain(`FAIL         ${n}. Set the admin emails\n               fix: docs/setup.md step ${n}, Set the admin emails; then: bash scripts/setup-wizard.sh`);
+  expect(r.out).toContain("Start with the first FAIL.");
+});
+
+test("doctor: a failed sign-in marks every later row NOT CHECKED, with no fix line of its own", () => {
+  const c = cfg({ admin: true, secrets: true });
+  const r = doctorRun(c, { CF_STATUS: "1" });
+  expect(r.rows.slice(0, 3).map((l) => l.split(" ")[0])).toEqual(["PASS", "PASS", "FAIL"]);
+  const later = r.rows.slice(3);
+  expect(later).toHaveLength(stepsFor(c).length - 1 + 1);
+  expect(later.every((l) => l.startsWith("NOT CHECKED"))).toBe(true);
+  expect(r.out.match(/sign in first: step 1 Sign in to Cloudflare/g)).toHaveLength(later.length);
+  expect(r.out.match(/fix:/g)).toHaveLength(1);
+  expect(r.code).toBe(1);
+});
+
+test("doctor: migration drift fails the migrations row, even when the summary line looks fine", () => {
+  const r = doctorRun(cfg(), { DB_OUT: "1 migration\nMigration drift detected between db/migrations/ and the journal" });
+  expect(r.rows[0]).toStartWith("PASS");
+  expect(r.rows[1]).toStartWith("FAIL         Local migrations");
+  expect(r.code).toBe(1);
+});
+
+// A hung CLI must not hang the doctor, and nothing it started may survive: every pid the fake wrote is dead afterwards.
+async function expectKilled(r: ReturnType<typeof doctorRun>) {
+  const pids = readFileSync(join(r.dir, "calls.log.pid"), "utf8").trim().split(" ").map(Number);
+  const alive = (p: number) => { try { process.kill(p, 0); return true; } catch { return false; } };
+  for (let i = 0; i < 30 && pids.some(alive); i++) await Bun.sleep(100);
+  expect(pids.filter(alive)).toEqual([]);
+}
+
+test("doctor: a CLI that ignores ALRM and is exec'd directly times out FAIL, and is killed", async () => {
+  const t = Date.now();
+  const r = doctorRun(cfg(), { HANG: "cloudflare status", DOCTOR_LIMIT: "1" });
+  expect(Date.now() - t).toBeLessThan(15_000);
+  expect(r.out).toContain("FAIL         1. Sign in to Cloudflare\n               fix: timed out after 1s");
+  expect(r.code).toBe(1);
+  await expectKilled(r);
+}, 30_000);
+
+test("doctor: a timed-out CLI that catches TERM and exits 0 is still FAIL, not PASS", async () => {
+  const r = doctorRun(cfg(), { HANG: "cloudflare status", HANG_TRAP: "1", DOCTOR_LIMIT: "1" });
+  expect(r.out).toContain("FAIL         1. Sign in to Cloudflare\n               fix: timed out after 1s");
+  expect(r.code).toBe(1);
+  await expectKilled(r);
+}, 30_000);
+
+test("doctor: a CLI inside $(...) (the migrations row) is killed on timeout", async () => {
+  const r = doctorRun(cfg(), { HANG: "db status", DOCTOR_LIMIT: "1" });
+  expect(r.out).toContain("FAIL         Local migrations (void db status)\n               fix: timed out after 1s");
+  await expectKilled(r);
+}, 30_000);
+
+test("doctor: a CLI's own child process is killed on timeout too", async () => {
+  const r = doctorRun(cfg({ admin: true }), { HANG: "secret list", HANG_CHILD: "1", DOCTOR_LIMIT: "1" });
+  const n = stepsFor(cfg({ admin: true })).findIndex((s) => s.id === "admin-emails") + 1;
+  expect(r.out).toContain(`FAIL         ${n}. Set the admin emails\n               fix: timed out after 1s`);
+  await expectKilled(r);
+}, 30_000);
+
+test("the Set the sending address step fails when void.config.ts is missing", () => {
+  expect(STEPS.find((s) => s.id === "email-from")!.verify).toStartWith("test -f void.config.ts &&");
+});
+
+test("doctor: APP_HOST unset fails the Deploy row with the command to run, and curl is not called", () => {
+  const r = doctorRun(cfg(), { APP_HOST: "" });
+  expect(r.out).toContain("FAIL         3. Deploy\n               fix: APP_HOST=<your host> bun run doctor");
+  expect(r.calls).not.toContain("curl");
+});
+
+test("doctor: the app name defaults to the scaffolded name and can be overridden", () => {
+  const c = cfg({ storage: true });
+  expect(doctorRun(c).calls).toContain("cf r2 buckets list --name-contains app");
+  expect(doctorRun(c, { APP_NAME: "renamed" }).calls).toContain("cf r2 buckets list --name-contains renamed");
+});
+
+test("doctor: a step for a flag that is off has no row, and the script parses with no placeholder left", () => {
+  const bare = composeDoctor(cfg());
+  for (const w of ["Turnstile", "Infisical", "admin emails", "R2"]) expect(bare).not.toContain(w);
+  for (const c of [cfg(), cfg(ALL)]) {
+    const s = composeDoctor(c);
+    expect(Bun.spawnSync(["bash", "-n"], { stdin: new TextEncoder().encode(s) }).exitCode).toBe(0);
+    expect(s.replace("<your host>", "")).not.toMatch(/<[A-Za-z][^<>]*>/);
   }
 });

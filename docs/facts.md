@@ -108,3 +108,11 @@ Scaffolded `--framework svelte --email` (void@1.8.0, better-auth@1.7.27), added 
   set `user.role='admin'`, `list-users` 200; set `role='user'` in the database and replay the same cookie: `list-users`
   403 `YOU_ARE_NOT_ALLOWED_TO_LIST_USERS` at once, and `get-session` shows the new role. So the admin guard needs no
   cache-disable option; if a Void bump adds a cache, the gate's de-listed and ban checks fail first.
+
+## Doctor probes (void@1.11.0, real CLI, isolated HOME, scaffolds `--framework svelte --auth --admin` and bare, 2026-11-24)
+
+- `void env check`: exit 0 and "Local .env values are valid." when `.env` satisfies `env.ts`; exit 1 and "Missing required env vars: NAME" when not (a key with `.default()` is optional, so deleting `ADMIN_EMAILS` from `.env` still passes). A bare app has no `env.ts`: exit 0, "No env.ts found". Any stray `.env.bak` makes it exit 1 ("only .env is supported").
+- `void db status` exits 0 whatever the state. Before the first `db:reset`: "N migrations, N pending locally". After: lines `local: applied` and a bare "N migration(s)" with no "pending". A migration file missing from `meta/_journal.json` prints "Migration drift detected" (no "pending"), still exit 0. So the doctor passes only on exit 0, no "pending locally", and a line `^ *N migrations?$`; anything else fails closed. A real pending migration for the gate: append a table to `db/schema.ts`, `void db generate`.
+- Signed out, new app (platform none): `void cloudflare status` exit 1 "Not signed in to Cloudflare"; `void secret list` and `void env check --remote` exit 1 "Deployment is disabled. Run `void init`..."; `void email status --platform cloudflare` exit 1 "no Cloudflare account is pinned".
+- `void db migrate` is the local "apply pending migrations" command (fix line for the migrations row).
+- The app ships `node_modules/.bin/cf` (a dependency of void), which `scripts/doctor.sh` and the wizard put ahead of any global `cf`. Signed out, `cf auth whoami` exits 0 with `"authenticated": false` (so the step verify greps for `true`) and its stderr tells an agent to run `cf deploy --temporary-account`; the doctor discards output, so that advice never reaches an agent.

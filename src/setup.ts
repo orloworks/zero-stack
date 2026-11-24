@@ -58,7 +58,7 @@ export const STEPS: Step[] = [
   {
     id: "email-from", on: (c) => !!c.email, title: "Set the sending address", who: "agent",
     why: "`email.from` ships as `noreply@example.com`, which Void cannot send from. It must be an address on a zone in your Cloudflare account (a subdomain such as `mail.acme.com` keeps existing mail working).",
-    action: "Set `email.from` in `void.config.ts` to an address on your mail domain", verify: "! grep -q noreply@example.com void.config.ts",
+    action: "Set `email.from` in `void.config.ts` to an address on your mail domain", verify: "test -f void.config.ts && ! grep -q noreply@example.com void.config.ts",
   },
   {
     id: "turnstile-widget", on: (c) => !!c.turnstile, title: "Create the Turnstile widget and store its secret", who: "agent",
@@ -154,7 +154,7 @@ export function composeSetupSection(c: Config): string {
   const rows = stepsFor(c).map((s, i) => `| ${i + 1} | ${cell(s.title)} | ${WHO[s.who]} | ${cell(act(s, c))} | ${cell(ver(s))} |`);
   return `\n\n## Setup
 
-From scaffold to production, in order. Why each step is needed: \`docs/setup.md\`.${hasHuman(c) ? " Human-only steps go through \`scripts/setup-wizard.sh\` (the human runs it with \`!\`); it is re-runnable and skips what is done. Do step 2 (connect) before it: its secret stages need a saved platform. Never ask for, read or print a secret value." : ""}
+From scaffold to production, in order. Why each step is needed: \`docs/setup.md\`. Run \`bun run doctor\` to see what is left; it prints names and PASS/FAIL only, and you may run it.${hasHuman(c) ? " Human-only steps go through \`scripts/setup-wizard.sh\` (the human runs it with \`!\`); it is re-runnable and skips what is done. Do step 2 (connect) before it: its secret stages need a saved platform. Never ask for, read or print a secret value." : ""}
 
 | # | Step | Who | Action | Verify (exit 0 when done) |
 | - | ---- | --- | ------ | ------------------------- |
@@ -171,6 +171,8 @@ export function composeSetupDoc(c: Config): string {
   });
   return `# Setup
 
+Run \`bun run doctor\` to see what is left (set \`APP_HOST\` to your deployed host for the Deploy row).
+
 Every step from scaffold to production for the flags this app was made with, in order. "Agent" steps have a CLI or API an agent can run. "Agent with browser" steps are dashboard-only; an agent can drive your signed-in browser while you watch. "Human only" steps need you${hasHuman(c) ? `: run \`bash scripts/setup-wizard.sh\`, which prints each link, says what to click, and stores values straight into ${c.secrets ? "Infisical and Void" : "Void"} without printing them` : ""}.
 
 ${body.join("\n\n")}
@@ -179,12 +181,14 @@ ${body.join("\n\n")}
 
 const sq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
+// Both scripts run from any directory in the app; void is a devDependency, not on PATH outside package scripts.
+const ROOT = `cd "$(dirname "$0")/.."
+PATH="$PWD/node_modules/.bin:$PATH"
+`;
+
 // The wizard library: the \`wizard\` skill's helper names, trimmed to what these steps need (no .env or GitHub writes).
 const LIB = `set -euo pipefail
-cd "$(dirname "$0")/.."
-# void is a devDependency, not on PATH outside package scripts.
-PATH="$PWD/node_modules/.bin:$PATH"
-
+${ROOT}
 TOTAL=__TOTAL__
 N=0
 TODO=()
@@ -243,14 +247,77 @@ run_wizard "$@"; exit
 `;
 }
 
-// docs/setup.md always; scripts/setup-wizard.sh only when a human step applies.
+// A guide verify's placeholders become environment variables in the doctor; a row that needs APP_HOST is not run without it.
+const PLACEHOLDER = { "<app-host>": "$APP_HOST", "<app-name>": "$APP_NAME" } as const;
+const doctorCmd = (s: Step) => {
+  const cmd = Object.entries(PLACEHOLDER).reduce((v, [k, e]) => v.replaceAll(k, e), s.verify);
+  const left = cmd.match(/<[A-Za-z][^<>]*>/);
+  if (left) throw new Error(`doctor: step ${s.id} verify still holds ${left[0]}`);
+  return cmd;
+};
+
+// scripts/doctor.sh: the local Void checks, then every applicable step's verify, then the remote env names. Prints PASS, FAIL (one fix line) or
+// NOT CHECKED per row, never a command's output. After a failed sign-in step every later row is NOT CHECKED (a signed-out CLI fails every check).
+export function composeDoctor(c: Config): string {
+  const row = (label: string, fix: string, cmd: string, extra = "") => `row ${sq(label)} ${sq(fix)} ${sq(cmd)}${extra}`;
+  const steps = stepsFor(c).map((s, i) =>
+    row(`${i + 1}. ${s.title}`, `docs/setup.md step ${i + 1}, ${s.title}${s.who === "human" ? "; then: bash scripts/setup-wizard.sh" : ""}`, doctorCmd(s),
+      ` ${s.exec ? 1 : 0} ${s.verify.includes("<app-host>") ? "APP_HOST" : "-"}`));
+  return `#!/usr/bin/env bash
+# Setup self-check (generated; the step rows are docs/setup.md). Reads names and exit codes only: every command's output is discarded.
+set -uo pipefail
+${ROOT}export APP_NAME="\${APP_NAME:-${c.name}}"
+LIMIT="\${DOCTOR_LIMIT:-30}"
+PASSED=0; FAILED=0; UNCHECKED=0; BLOCK=""
+
+# tree PID: PID and every descendant, listed before anything is signalled (a killed parent would orphan its children from pgrep).
+tree() { local c; for c in $(pgrep -P "$1"); do tree "$c"; done; printf '%s ' "$1"; }
+# probe CMD: exit 0 when CMD passes. No stdin, no output. After LIMIT seconds the whole process tree gets TERM, then KILL a second later for
+# whatever is still alive. The watcher leaves a marker before it kills, so a timeout is what the watcher did, not a guess from elapsed time:
+# a timed-out probe always fails, even when the CLI caught TERM and exited 0.
+probe() {
+  TIMEDOUT=0
+  bash -c "$1" </dev/null >/dev/null 2>&1 &
+  local p=$! x
+  local mark="\${TMPDIR:-/tmp}/doctor.$$.$p"
+  ( i=0; while kill -0 "$p" && (( i < LIMIT )); do sleep 1; i=$((i + 1)); done
+    if kill -0 "$p"; then all=$(tree "$p"); : > "$mark"; kill $all; sleep 1; for x in $all; do kill -0 "$x" && kill -9 "$x"; done; fi ) >/dev/null 2>&1 &
+  local w=$!
+  wait "$p" 2>/dev/null; local rc=$?
+  if [[ -e "$mark" ]]; then TIMEDOUT=1; wait "$w" 2>/dev/null; rm -f "$mark"; return 1; fi
+  kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; rm -f "$mark"
+  return $rc
+}
+# row LABEL FIX CMD [SIGNIN [NEEDS_ENV]]: SIGNIN=1 blocks every later row when it fails; NEEDS_ENV is an env var CMD cannot run without.
+row() {
+  if [[ -n "$BLOCK" ]]; then printf 'NOT CHECKED  %s\\n               sign in first: %s\\n' "$1" "$BLOCK"; UNCHECKED=$((UNCHECKED + 1)); return; fi
+  local fix=$2
+  TIMEDOUT=0
+  if [[ "\${5:--}" != "-" && -z "\${!5:-}" ]]; then fix="$5=<your host> bun run doctor"
+  elif probe "$3"; then printf 'PASS         %s\\n' "$1"; PASSED=$((PASSED + 1)); return; fi
+  if (( TIMEDOUT )); then fix="timed out after \${LIMIT}s"; fi
+  printf 'FAIL         %s\\n               fix: %s\\n' "$1" "$fix"; FAILED=$((FAILED + 1))
+  if [[ "\${4:-0}" == 1 ]]; then BLOCK="step \${1%%.*} \${1#*. }"; fi
+}
+
+${row("Local env (void env check)", "void env check", "void env check")}
+${row("Local migrations (void db status)", "void db migrate", `out=$(void db status) && ! grep -q 'pending locally' <<<"$out" && ! grep -qi 'drift detected' <<<"$out" && grep -Eq '^ *[0-9]+ migrations?$' <<<"$out"`)}
+${steps.join("\n")}
+${row("Remote env names (void env check --remote)", "void env check --remote", "void env check --remote")}
+
+printf '\\n%s passed, %s failed, %s not checked.\\n' "$PASSED" "$FAILED" "$UNCHECKED"
+if (( FAILED + UNCHECKED )); then printf 'Start with the first FAIL.\\n'; exit 1; fi
+`;
+}
+
+// docs/setup.md and scripts/doctor.sh always; scripts/setup-wizard.sh only when a human step applies.
 export function writeSetupFiles(dir: string, c: Config): void {
   mkdirSync(join(dir, "docs"), { recursive: true });
-  writeFileSync(join(dir, "docs/setup.md"), composeSetupDoc(c));
-  const wizard = composeWizard(c);
-  if (!wizard) return;
   mkdirSync(join(dir, "scripts"), { recursive: true });
-  const f = join(dir, "scripts/setup-wizard.sh");
-  writeFileSync(f, wizard);
-  chmodSync(f, 0o755);
+  writeFileSync(join(dir, "docs/setup.md"), composeSetupDoc(c));
+  for (const [n, body] of [["doctor.sh", composeDoctor(c)], ["setup-wizard.sh", composeWizard(c)]] as const) {
+    if (body === null) continue;
+    writeFileSync(join(dir, "scripts", n), body);
+    chmodSync(join(dir, "scripts", n), 0o755);
+  }
 }
