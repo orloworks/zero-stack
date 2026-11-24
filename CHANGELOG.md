@@ -10,13 +10,14 @@ Run it with `bunx github:orloworks/zero-stack#v0.5.0 <dir>`.
   - **Webhook:** signed, exempt from rate limiting, and it writes Stripe's live state, not the event's snapshot, so a retried older event can't bring back a canceled subscription or an old plan. A failed write makes Stripe retry. While the webhook secret is still the placeholder, every event is refused.
   - **Gating:** `requirePlan` for routes and pages. With `--admin`, a feature can be on for chosen plans; the kill switch and a per-user override still win.
   - **Deleting a user** (self-service or by an admin) first expires their open Checkout sessions and cancels their subscriptions in Stripe, ahead of the file purge. If Stripe can't be reached, the deletion stops and nothing is removed.
-  - **Admin** (with `--admin`): each user's page shows their plan, status and renewal date, with a link to the customer in the Stripe dashboard. Refunds and plan changes stay in Stripe.
+  - **Admin** (with `--admin`): each user's page shows their plan, its status and its renewal, trial-end or end date, with a link to the customer in the Stripe dashboard. Refunds and plan changes stay in Stripe.
   - Not included: one-off purchases, team or seat billing, usage billing.
-- **`bun run doctor` in every app:** runs `void env check`, a local migrations check and every setup step's own check, and prints PASS, FAIL or NOT CHECKED with a pointer to the step that fixes it. It reads names only, changes nothing, and stops a hung command after 30 seconds.
-- **Admin fixes** from a browser QA pass: a Sign out button on the Account page; each setting's input is labelled with its key; the invite email names the app and says what to do; saving an unchanged setting writes no audit entry.
+- **`bun run doctor` in every app:** runs `void env check`, a local migrations check and every setup step's own check, and prints PASS, FAIL or NOT CHECKED with a pointer to the step that fixes it. It reads names only, changes nothing, and stops a hung command after 30 seconds (`DOCTOR_LIMIT` changes this).
+- **Account page:** a Sign out button in every svelte `--auth` app.
+- **Admin fixes** from a browser QA pass: each setting's input is labelled with its key; the invite email names the app's host and says what to do; saving an unchanged setting writes no audit entry.
 - **Agent tooling:** svelte apps get the Svelte MCP server in `.mcp.json`. `docs/upgrading.md` explains how to bring an older app forward.
 - **Setup guide:** the email-sender step no longer passes when its config file is missing, and two steps that held `<placeholder>` text in their check now run as written.
-- **Gate:** one new permutation, `svelte-payments-admin`; a fake Stripe over HTTP with signed webhooks. Payments has not yet been run against a real Stripe sandbox or a deployed Worker.
+- **Gate:** two new permutations, `svelte-payments` (with `--account-deletion`) and `svelte-payments-admin`; a fake Stripe over HTTP with signed webhooks. Payments has not yet been run against a real Stripe sandbox or a deployed Worker.
 
 ## v0.4.1 (2026-11-24)
 
