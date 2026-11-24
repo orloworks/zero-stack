@@ -116,3 +116,8 @@ Scaffolded `--framework svelte --email` (void@1.8.0, better-auth@1.7.27), added 
 - Signed out, new app (platform none): `void cloudflare status` exit 1 "Not signed in to Cloudflare"; `void secret list` and `void env check --remote` exit 1 "Deployment is disabled. Run `void init`..."; `void email status --platform cloudflare` exit 1 "no Cloudflare account is pinned".
 - `void db migrate` is the local "apply pending migrations" command (fix line for the migrations row).
 - The app ships `node_modules/.bin/cf` (a dependency of void), which `scripts/doctor.sh` and the wizard put ahead of any global `cf`. Signed out, `cf auth whoami` exits 0 with `"authenticated": false` (so the step verify greps for `true`) and its stderr tells an agent to run `cf deploy --temporary-account`; the doctor discards output, so that advice never reaches an agent.
+
+## R2 bucket name (void@1.11.0, read from `npm pack void@1.11.0`, 2026-11-24)
+
+- `dist/deploy-2QjsBEGw.mjs` (`desired.r2`): the bucket is `suffixedResourceName(workerName, "storage")`, i.e. `<worker>-storage`, unless the generated wrangler config already stores a real `bucket_name`. `workerName` is `deriveWorkerName(root)`: package.json `name`, cleaned by `toValidWorkerName` (lowercase, max 63 chars; the scaffold's names are already `[a-z0-9-]`). Under `vp dev` the local bucket is `default` (`dist/index.mjs`).
+- So the app's bucket is exactly `<app-name>-storage`, known before connect or deploy. The doctor's R2 row still requires step 2 (`.void/project.json` names cloudflare) and matches the whole name as a token (not touching `[a-z0-9-]` on either side), because `cf r2 buckets list`'s output format is not pinned here. A name over about 56 characters is trimmed by Void and would not match.

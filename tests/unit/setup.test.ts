@@ -208,12 +208,12 @@ test("bash -n accepts the wizard for every flag set that has one", () => {
 // Runs scripts/doctor.sh under the system bash from a subdirectory, against fake CLIs that log argv and print SENTINEL on both streams.
 // The fake `void secret list` prints $LISTED; `void cloudflare status` exits $CF_STATUS; the file-only steps are satisfied by the files written here.
 const SENTINEL = "s3cr3t-sentinel-value";
-function doctorRun(c: ReturnType<typeof cfg>, env: Record<string, string> = {}, listed = stepsFor(c).flatMap((s) => s.covers ?? []).join("\n")) {
+function doctorRun(c: ReturnType<typeof cfg>, env: Record<string, string> = {}, listed = stepsFor(c).flatMap((s) => s.covers ?? []).join("\n"), connected = true) {
   const dir = mkdtempSync(join(tmpdir(), "zs-doc-"));
   writeSetupFiles(dir, c);
   mkdirSync(join(dir, ".void"));
   mkdirSync(join(dir, "src/sub"), { recursive: true });
-  writeFileSync(join(dir, ".void/project.json"), '{"platform":"cloudflare"}');
+  writeFileSync(join(dir, ".void/project.json"), `{"platform":"${connected ? "cloudflare" : "none"}"}`);
   writeFileSync(join(dir, ".infisical.yaml"), "x: 1\n");
   writeFileSync(join(dir, "void.config.ts"), "export default { email: { from: 'hi@mail.acme.com' } };\n");
   writeFileSync(join(dir, ".env"), "STRIPE_SECRET_KEY=sk_test_abc\nSTRIPE_WEBHOOK_SECRET=whsec_abc\n");
@@ -229,7 +229,7 @@ function doctorRun(c: ReturnType<typeof cfg>, env: Record<string, string> = {}, 
     '[ "$1 $2" = "secret list" ] && { echo "$LISTED"; exit 0; }',
     '[ "$1 $2" = "cloudflare status" ] && exit "${CF_STATUS:-0}"',
     '[ "$1 $2" = "auth whoami" ] && echo \'"authenticated": true\'',
-    '[ "$1 $2" = "r2 buckets" ] && echo storage',
+    '[ "$1 $2" = "r2 buckets" ] && { if [ -n "$BUCKETS_RAW" ]; then printf "%s\n" "$BUCKETS_RAW"; else printf "%s\n" $BUCKETS; fi; exit 0; }',
     '[ "$1 $2" = "db status" ] && { echo "${DB_OUT:-1 migration}"; exit 0; }',
     "exit 0",
   ].join("\n");
@@ -238,7 +238,7 @@ function doctorRun(c: ReturnType<typeof cfg>, env: Record<string, string> = {}, 
   writeFileSync(log, "");
   const r = Bun.spawnSync(["/bin/bash", join(dir, "scripts/doctor.sh")], {
     cwd: join(dir, "src/sub"), stdin: null,
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, LISTED: listed, APP_HOST: "app.example.com", ...env },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, LISTED: listed, BUCKETS: "app-storage", APP_HOST: "app.example.com", ...env },
   });
   const out = r.stdout.toString() + r.stderr.toString();
   return { code: r.exitCode, out, rows: out.split("\n").filter((l) => /^(PASS|FAIL|NOT CHECKED) /.test(l)), calls: readFileSync(log, "utf8"), dir };
@@ -339,6 +339,21 @@ test("doctor: the app name defaults to the scaffolded name and can be overridden
   const c = cfg({ storage: true });
   expect(doctorRun(c).calls).toContain("cf r2 buckets list --name-contains app");
   expect(doctorRun(c, { APP_NAME: "renamed" }).calls).toContain("cf r2 buckets list --name-contains renamed");
+});
+
+test("doctor: the R2 row passes only on the app's exact bucket name, never a look-alike", () => {
+  const res = (env: Record<string, string>) => doctorRun(cfg({ storage: true }), env).rows.find((l) => l.includes("R2 bucket"))!;
+  expect(res({ BUCKETS: "app-storage" })).toMatch(/^PASS/);
+  expect(res({ BUCKETS: "other-storage app-storage" })).toMatch(/^PASS/);
+  for (const b of ["myapp-storage", "app2-storage", "my-app-storage", "app-storage-old", "app"]) expect(res({ BUCKETS: b })).toMatch(/^FAIL/);
+  // The real CLI's output format is unconfirmed: a JSON line and a table cell must match too, and their look-alikes must not.
+  for (const line of ['  "name": "app-storage",', "│ app-storage │ 2026-11-24 │"]) expect(res({ BUCKETS_RAW: line })).toMatch(/^PASS/);
+  for (const line of ['  "name": "myapp-storage",', "│ app-storage-old │ 2026-11-24 │"]) expect(res({ BUCKETS_RAW: line })).toMatch(/^FAIL/);
+});
+
+test("doctor: the R2 row fails until the app is connected", () => {
+  const r = doctorRun(cfg({ storage: true }), {}, undefined, false);
+  expect(r.rows.find((l) => l.includes("R2 bucket"))).toMatch(/^FAIL/);
 });
 
 test("doctor: a step for a flag that is off has no row, and the script parses with no placeholder left", () => {
