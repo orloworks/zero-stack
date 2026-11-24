@@ -275,7 +275,7 @@ in `AGENTS.md`.
     direction, as with the purge). Stripe's `customer.subscription.deleted` for the cancellation then finds no user and answers 200. No `payment` table exists yet (#83).
   - **With `--admin`** (#85). One anchored edit fills the empty `sources` slot of `src/access.ts`: `PLAN_FEATURES` (feature to plan names, lowercase; the
     scaffold ships `example-feature` for `pro`) and `featuresForPlan(plan)`, fed by `currentPlan`. Precedence is unchanged (kill switch, per-user override, plan,
-    global). The Features page says "Also on for pro subscribers" for such a feature, and the user page shows why ("On: included in the user's plan").
+    global). The Features page says "Also on for users on the pro plan" for such a feature, and the user page shows why ("On: included in the user's plan").
     The admin user page gets a read-only Billing section: plan, status, renewal or end date (the Billing page's `billingView`), and a link to the customer in
     the Stripe dashboard, test mode unless the key starts `sk_live_` or `rk_live_` (derived on the server; the key never reaches the page); "No subscription." and
     "No Stripe customer yet" when there is none. No refund or plan-change buttons and no audit rows for plan changes (they happen in Stripe). Without `--payments`

@@ -1508,14 +1508,14 @@ try {
         check((await setUser(aId, "off")) === 200 && (await gated(a)) === 403, "an override off did not beat the plan");
         check((await setUser(bId, "default")) === 200 && (await setUser(aId, "default")) === 200 && (await gated(other)) === 403 && (await gated(a)) === 200, "resetting the overrides did not restore the plan result");
         const text = (path: string) => call(b, path, boss).then((r) => r.text());
-        check((await text("/admin/features")).includes("Also on for pro subscribers"), "/admin/features does not say the feature is on for pro subscribers");
+        check((await text("/admin/features")).includes("Also on for users on the pro plan"), "/admin/features does not say the feature is on for the pro plan");
         check((await text(`/admin/users/${aId}`)).includes("Effective: On: included in the user"), "user detail does not say On: included in the user's plan");
         const billing = await text(`/admin/users/${aId}`);
         check(billing.includes("Billing") && billing.includes("Active, renews on") && billing.includes(`https://dashboard.stripe.com/test/customers/${cus.id}`), "the admin Billing section lacks the plan, status or the test-mode dashboard link");
         check(!billing.includes("sk_test_gate"), "the admin page contains the Stripe key");
         const empty = await text(`/admin/users/${bId}`);
         check(empty.includes("No subscription.") && empty.includes("No Stripe customer yet") && !empty.includes("dashboard.stripe.com"), "the admin Billing section has no empty state for a user with no subscription");
-        console.log("gate: payments + admin: a plan-only feature is off without the plan, on with it, off under the kill switch, on for a comped user with no plan, off for an override off; Features says it is on for pro subscribers; the user page shows Billing (plan, status, test-mode Stripe link) and a clear empty state");
+        console.log("gate: payments + admin: a plan-only feature is off without the plan, on with it, off under the kill switch, on for a comped user with no plan, off for an override off; Features says it is on for users on the pro plan; the user page shows Billing (plan, status, test-mode Stripe link) and a clear empty state");
       }
 
       // Stripe's state changes (the fake's subscription is the live one the app reads back), then the event for it arrives.
@@ -1531,6 +1531,7 @@ try {
       // unpaid: inactive for requirePlan, and still no second Checkout.
       check((await emit("customer.subscription.updated", { status: "unpaid" })).status === 200, "updated unpaid -> not 200");
       check((await page(b, a)).includes("is paused because payments failed") && (await call(b, "/api/example-plan", a)).status === 403, "unpaid lacks the paused copy or passed requirePlan");
+      if (config.admin) check((await call(b, "/api/example-feature", a)).status === 403, "an unpaid subscription still grants a plan feature");
       const third = await call(b, "/api/auth/subscription/upgrade", a, UPGRADE);
       check(third.status === 400 && ((await third.json()) as Obj).code === "SUBSCRIPTION_NEEDS_CARD" && fake.sessions.size === sessions, `an unpaid user's second upgrade -> ${third.status}`);
       // A lost write: the database refuses the update (the plugin's and the sync's), so the event answers an error and Stripe retries; the retry lands.
@@ -1562,6 +1563,7 @@ try {
       const ended = await page(b, a);
       check(subRows(aId)[0].status === "canceled" && ended.includes("Your Pro plan has ended.") && ended.includes("Subscribe to Pro"), "/billing after deletion lacks the ended copy or the Subscribe button");
       check((await call(b, "/api/example-plan", a)).status === 403, "requirePlan let a canceled plan through");
+      if (config.admin) check((await call(b, "/api/example-feature", a)).status === 403, "a canceled subscription still grants a plan feature");
       // Out of order: that older update, retried after the deletion, must not bring the plan back.
       check((await webhook(b, { type: "customer.subscription.updated", data: subObj(older) })).status === 200, "a late older update -> not 200");
       check(subRows(aId)[0].status === "canceled" && (await call(b, "/api/example-plan", a)).status === 403, `a late older update revived the plan: row ${subRows(aId)[0].status}`);

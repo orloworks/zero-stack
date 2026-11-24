@@ -57,13 +57,13 @@ const sources: ((userId: string) => Promise<ReadonlySet<Feature>>)[] = [async (u
   // Features page: say, in words, when a feature is on through a plan.
   editFile(dir, FEATURES_SERVER, (s) => {
     s = replaceAnchor(s, "import { adminSwitches, FEATURES } from", "import { adminSwitches, FEATURES, PLAN_FEATURES } from", FEATURES_SERVER);
-    return replaceAnchor(s, '({ name, state: global[name] ?? ("off" as const) })', '({ name, state: global[name] ?? ("off" as const), via: PLAN_FEATURES[name] ?? [] })', FEATURES_SERVER);
+    return replaceAnchor(s, '({ name, state: global[name] ?? ("off" as const) })', '({ name, state: global[name] ?? ("off" as const), plans: PLAN_FEATURES[name] ?? [] })', FEATURES_SERVER);
   });
   editFile(dir, FEATURES_PAGE, (s) =>
     replaceAnchor(
       s,
       "        </fieldset>\n",
-      '        </fieldset>\n        {#if f.via.length}<p class="hint">Also on for {f.via.join(" and ")} subscribers, unless the kill switch or their own setting says otherwise.</p>{/if}\n',
+      '        </fieldset>\n        {#if f.plans.length}<p class="hint">Also on for users on the {f.plans.join(" or ")} plan, unless the kill switch or their own setting says otherwise.</p>{/if}\n',
       FEATURES_PAGE,
     ),
   );
@@ -85,7 +85,7 @@ const sources: ((userId: string) => Promise<ReadonlySet<Feature>>)[] = [async (u
   {:else}
     <dl>
       <dt>Plan</dt>
-      <dd>{billing.name}</dd>
+      <dd>{billing.plan}</dd>
       <dt>Status</dt>
       <dd>{billing.status}</dd>
     </dl>

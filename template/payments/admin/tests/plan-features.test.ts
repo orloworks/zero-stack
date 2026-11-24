@@ -5,7 +5,7 @@ vi.mock("void/env", () => ({ env: { ADMIN_EMAILS: "" } }));
 vi.mock("void/db", () => ({}));
 
 const { decide, FEATURES, featuresForPlan, PLAN_FEATURES } = await import("../src/access");
-const { dashboardUrl } = await import("../src/admin-billing");
+const { dashboardUrl, STATUS } = await import("../src/admin-billing");
 
 const f = FEATURES[0];
 const snap = (global: "on" | "off" | "kill" | undefined, override: "on" | "off" | undefined, plan: string | null) =>
@@ -25,6 +25,13 @@ it("a plan feature is off without the plan, on with it, off under the kill switc
   expect(decide(f, snap("kill", undefined, "pro"))).toBe(false);
   expect(decide(f, snap(undefined, "on", null))).toBe(true);
   expect(decide(f, snap(undefined, "off", "pro"))).toBe(false);
+});
+
+it("a status with no date says no date", () => {
+  expect(STATUS.active(null)).toBe("Active");
+  expect(STATUS.trialing(null)).toBe("Free trial");
+  expect(STATUS.cancelling(null)).toBe("Cancelling");
+  expect(STATUS.active("Jan 1, 2027")).toBe("Active, renews on Jan 1, 2027");
 });
 
 it("the dashboard link is test mode unless the key is live", () => {
