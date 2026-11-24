@@ -272,18 +272,20 @@ PASSED=0; FAILED=0; UNCHECKED=0; BLOCK=""
 
 # tree PID: PID and every descendant, listed before anything is signalled (a killed parent would orphan its children from pgrep).
 tree() { local c; for c in $(pgrep -P "$1"); do tree "$c"; done; printf '%s ' "$1"; }
-# probe CMD: exit 0 when CMD passes. No stdin, no output. After LIMIT seconds the whole process tree gets TERM, then KILL a second later;
-# a failure that took the full LIMIT is reported as a timeout.
+# probe CMD: exit 0 when CMD passes. No stdin, no output. After LIMIT seconds the whole process tree gets TERM, then KILL a second later for
+# whatever is still alive. The watcher leaves a marker before it kills, so a timeout is what the watcher did, not a guess from elapsed time:
+# a timed-out probe always fails, even when the CLI caught TERM and exited 0.
 probe() {
   TIMEDOUT=0
-  local t=$SECONDS
   bash -c "$1" </dev/null >/dev/null 2>&1 &
-  local p=$!
+  local p=$! x
+  local mark="\${TMPDIR:-/tmp}/doctor.$$.$p"
   ( i=0; while kill -0 "$p" && (( i < LIMIT )); do sleep 1; i=$((i + 1)); done
-    if kill -0 "$p"; then all=$(tree "$p"); kill $all; sleep 1; kill -9 $all; fi ) >/dev/null 2>&1 &
+    if kill -0 "$p"; then all=$(tree "$p"); : > "$mark"; kill $all; sleep 1; for x in $all; do kill -0 "$x" && kill -9 "$x"; done; fi ) >/dev/null 2>&1 &
   local w=$!
   wait "$p" 2>/dev/null; local rc=$?
-  if (( rc && SECONDS - t >= LIMIT )); then TIMEDOUT=1; wait "$w" 2>/dev/null; else kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; fi
+  if [[ -e "$mark" ]]; then TIMEDOUT=1; wait "$w" 2>/dev/null; rm -f "$mark"; return 1; fi
+  kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; rm -f "$mark"
   return $rc
 }
 # row LABEL FIX CMD [SIGNIN [NEEDS_ENV]]: SIGNIN=1 blocks every later row when it fails; NEEDS_ENV is an env var CMD cannot run without.

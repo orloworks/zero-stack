@@ -225,7 +225,7 @@ function doctorRun(c: ReturnType<typeof cfg>, env: Record<string, string> = {}, 
     'echo "$(basename "$0") $*" >> "$FAKE_LOG"',
     `echo ${SENTINEL}; echo ${SENTINEL} >&2`,
     // HANG="secret list": that command never returns. HANG_MODE=child makes it spawn its own child first; otherwise it ignores ALRM and exec's sleep.
-    '[ -n "$HANG" ] && [ "$1 $2" = "$HANG" ] && { if [ -n "$HANG_CHILD" ]; then sleep 30 & echo "$$ $!" > "$FAKE_LOG.pid"; wait; else trap "" ALRM; echo $$ > "$FAKE_LOG.pid"; exec sleep 30; fi; }',
+    '[ -n "$HANG" ] && [ "$1 $2" = "$HANG" ] && { if [ -n "$HANG_TRAP" ]; then echo $$ > "$FAKE_LOG.pid"; trap "exit 0" TERM; while :; do sleep 1; done; fi; if [ -n "$HANG_CHILD" ]; then sleep 30 & echo "$$ $!" > "$FAKE_LOG.pid"; wait; else trap "" ALRM; echo $$ > "$FAKE_LOG.pid"; exec sleep 30; fi; }',
     '[ "$1 $2" = "secret list" ] && { echo "$LISTED"; exit 0; }',
     '[ "$1 $2" = "cloudflare status" ] && exit "${CF_STATUS:-0}"',
     '[ "$1 $2" = "auth whoami" ] && echo \'"authenticated": true\'',
@@ -300,6 +300,13 @@ test("doctor: a CLI that ignores ALRM and is exec'd directly times out FAIL, and
   const t = Date.now();
   const r = doctorRun(cfg(), { HANG: "cloudflare status", DOCTOR_LIMIT: "1" });
   expect(Date.now() - t).toBeLessThan(15_000);
+  expect(r.out).toContain("FAIL         1. Sign in to Cloudflare\n               fix: timed out after 1s");
+  expect(r.code).toBe(1);
+  await expectKilled(r);
+}, 30_000);
+
+test("doctor: a timed-out CLI that catches TERM and exits 0 is still FAIL, not PASS", async () => {
+  const r = doctorRun(cfg(), { HANG: "cloudflare status", HANG_TRAP: "1", DOCTOR_LIMIT: "1" });
   expect(r.out).toContain("FAIL         1. Sign in to Cloudflare\n               fix: timed out after 1s");
   expect(r.code).toBe(1);
   await expectKilled(r);
