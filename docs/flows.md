@@ -95,8 +95,8 @@ The owner, as an admin: when there is news, they want to send one good-looking m
 
 ## Open questions
 
-- Which provider sends marketing mail. Cloudflare's Email Service, which the app's transactional mail uses, does not allow it. Waits on the owner (spec "email expansion", decision list).
-- Whether an email template can be a Svelte component rendered inside the Worker. A probe ticket answers it; plain functions returning HTML are the fallback.
+- Which provider sends marketing mail. Cloudflare's Email Service, which the app's transactional mail uses, does not allow it. Waits on the owner (spec #109, decision ticket #110).
+- Whether an email template can be a Svelte component rendered inside the Worker. A spike (#111) answers it; plain functions returning HTML are the fallback.
 - "Standard signup mechanisms" was read as ways to join a list. If the owner meant more ways to sign in to an account (social login, magic links), that is a separate plan.
 
-Settled by the planning panel: every branch of the upgrade flows (spec #100) and the email flows above other than these three.
+Settled by the planning panel: every branch of the upgrade flows (spec #100) and the email flows above other than these three (spec #109).
