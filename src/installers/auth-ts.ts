@@ -4,9 +4,9 @@ import type { Config } from "../flags";
 // still succeeds (D7); throwing after logging the code is what makes a failed send visible. Checks both failure shapes of sendEmail.
 // It lives under src/ because Void infers the email binding (and the dev inbox) only from files in its scanned dirs, not the root auth.ts;
 // void/email is imported on use because Void's plugin loads auth.ts at startup (vp test included), where a top-level import fails on a CJS dependency.
-export const MAIL_TS = `export async function send(to: string, subject: string, url: string) {
+export const MAIL_TS = `export async function send(to: string, subject: string, url: string, intro = subject) {
   const { sendEmail } = await import("void/email");
-  const result = await sendEmail({ to, subject, text: \`\${subject}\\n\\n\${url}\\n\` });
+  const result = await sendEmail({ to, subject, text: \`\${intro}\\n\\n\${url}\\n\` });
   if (result.ok) return;
   const codes = "error" in result ? [result.error.code] : result.deliveries.flatMap((d) => (d.ok ? [] : [d.error.code]));
   console.error(\`email send failed (\${subject}): \${codes.join(", ")}\`);

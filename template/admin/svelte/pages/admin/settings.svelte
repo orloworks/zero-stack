@@ -21,7 +21,7 @@
   async function save(e: SubmitEvent, key: string) {
     e.preventDefault();
     const out = await runAction(
-      (s) => (results[key] = s),
+      (s) => { results[key] = s; },
       () => fetch(`/api/admin/settings/${encodeURIComponent(key)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ value: draft[key] }) }),
       "Couldn't save the setting.",
     );
@@ -30,7 +30,7 @@
 
   async function reset(key: string, to: string | number | boolean) {
     const out = await runAction(
-      (s) => (results[key] = s),
+      (s) => { results[key] = s; },
       () => fetch(`/api/admin/settings/${encodeURIComponent(key)}`, { method: "DELETE" }),
       "Couldn't reset the setting.",
     );
@@ -55,22 +55,22 @@
         <h2 id={`${s.key}-title`}>{s.key}</h2>
         <p id={`${s.key}-desc`} class="hint">{s.description}</p>
         {#if s.type === "boolean"}
-          <p><label><input id={s.key} type="checkbox" bind:checked={draft[s.key] as boolean} aria-describedby={`${s.key}-desc`} /> On</label></p>
+          <p><label><input id={s.key} type="checkbox" bind:checked={draft[s.key] as boolean} aria-describedby={`${s.key}-desc`} /> {s.key} on</label></p>
         {:else if s.type === "choice"}
           <p>
-            <label for={s.key}>Value</label>
+            <label for={s.key}>{s.key} value</label>
             <select id={s.key} bind:value={draft[s.key]} aria-describedby={`${s.key}-desc`}>
               {#each s.values as v (v)}<option value={v}>{v}</option>{/each}
             </select>
           </p>
         {:else if s.type === "number"}
           <p>
-            <label for={s.key}>Value</label>
+            <label for={s.key}>{s.key} value</label>
             <input id={s.key} type="number" min={s.min ?? undefined} max={s.max ?? undefined} bind:value={draft[s.key]} aria-invalid={failure(s.key) ? "true" : undefined} aria-describedby={`${s.key}-desc${failure(s.key) ? ` ${s.key}-error` : ""}`} />
           </p>
         {:else}
           <p>
-            <label for={s.key}>Value</label>
+            <label for={s.key}>{s.key} value</label>
             <input id={s.key} type="text" bind:value={draft[s.key]} aria-invalid={failure(s.key) ? "true" : undefined} aria-describedby={`${s.key}-desc${failure(s.key) ? ` ${s.key}-error` : ""}`} />
           </p>
         {/if}

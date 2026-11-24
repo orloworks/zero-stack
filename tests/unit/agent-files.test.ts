@@ -30,6 +30,16 @@ test("scaffold appends one routing block to AGENTS.md and writes .mcp.json", asy
   );
 });
 
+test(".mcp.json adds the Svelte MCP server for svelte apps only", async () => {
+  const mcp = async (framework: "svelte" | "react") => {
+    const dir = join(tmp(), "app");
+    await scaffold({ name: "app", framework, tailwind: false, shadcn: false, zodRpc: false, auth: false }, dir, fake(dir));
+    return JSON.parse(readFileSync(join(dir, ".mcp.json"), "utf8")).mcpServers;
+  };
+  expect((await mcp("svelte")).svelte).toEqual({ type: "http", url: "https://mcp.svelte.dev/mcp" });
+  expect((await mcp("react")).svelte).toBeUndefined();
+});
+
 test("re-running replaces the block in place and keeps surrounding text", async () => {
   const dir = join(tmp(), "app");
   await scaffold({ name: "app", framework: "react", tailwind: false, shadcn: false, zodRpc: false, auth: false }, dir, fake(dir));

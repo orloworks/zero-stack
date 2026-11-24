@@ -110,6 +110,10 @@ It symlinks the skill into `~/.claude/skills/cloudflare-routing/`.
 Never create wrangler files. Void generates the Worker config and migrates a root
 `wrangler.jsonc` into `void.config.ts` itself; extra bindings go under `cloudflare:`.
 
+## Upgrading
+
+`docs/upgrading.md` explains how to move an existing app to a newer zero-stack.
+
 ## Development
 
 ```sh

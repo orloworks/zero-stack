@@ -46,7 +46,7 @@
 .admin input[type="text"], .admin input[type="search"], .admin input[type="email"] { width: 100%; max-width: 28rem; box-sizing: border-box; font: inherit; padding: 0.4rem 0.5rem; }
 .admin fieldset { border: 0; margin: 0; padding: 0; }
 .admin legend { padding: 0; }
-.admin .choice { display: inline-block; margin-right: 1.5rem; }
+.admin .choice { display: inline-flex; align-items: center; gap: 0.4rem; margin-right: 1.5rem; white-space: nowrap; }
 .admin .radio .hint { display: block; margin-left: 1.6rem; }
 .admin button { font: inherit; padding: 0.4rem 0.8rem; cursor: pointer; }
 .admin button:disabled { cursor: wait; opacity: 0.6; }

@@ -33,7 +33,7 @@
   async function saveOverride(e: SubmitEvent, name: string) {
     e.preventDefault();
     const out = await runAction(
-      (s) => (overrides[name] = s),
+      (s) => { overrides[name] = s; },
       () => fetch(`/api/admin/users/${user.id}/features/${encodeURIComponent(name)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ state: choice[name] }) }),
       "Couldn't save the override.",
     );

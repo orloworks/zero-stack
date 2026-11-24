@@ -1005,6 +1005,12 @@ try {
         need(page.includes(`aria-label="Reset ${N} to default"`) && page.includes("Reset to default") && page.includes('value="25"'), "the page does not show the saved number and its Reset to default");
         const logged = (verb: string, key: string, old: string, now: string) => changes().some((r) => r.verb === verb && r.detail === key && r.old_value === old && r.new_value === now);
         need(logged("set-setting", N, "10", "25") && logged("set-setting", "example-toggle", "false", "true") && logged("set-setting", "example-choice", "medium", "large"), `the audit log lacks a save: ${JSON.stringify(changes().map((r) => [r.verb, r.detail, r.old_value, r.new_value]))}`);
+        // Saving the value a setting already has answers 200 and writes no audit entry.
+        {
+          const n0 = auditRows().length;
+          need((await set(N, 25)).status === 200 && (await set("example-toggle", true)).status === 200, "a save of the current value did not answer 200");
+          need(auditRows().length === n0, `a save of the current value wrote ${auditRows().length - n0} audit entries`);
+        }
         console.log("gate: settings: the getters return the declared defaults, a save of each type is read back, shown with its reset, and audited with the old and new value");
         // Refusals: out of range 400 (both ends), a wrong type, an undeclared key, a missing user's rights, no or a foreign Origin. Nothing is written and the value stands.
         const before = auditRows().length;
@@ -1111,7 +1117,7 @@ try {
         await addInvite("email", sendTo);
         const sentInvite = await api("POST", `/api/admin/invites/${inviteId(sendTo)}/send`);
         if (sentInvite.status !== 200 || (await said(sentInvite)).message !== `Invite email requested for ${sendTo}.`) throw new Error(`send invite -> ${sentInvite.status}`);
-        const [inviteMail] = await waitMails(b, "Your invitation", sendTo, 1);
+        const [inviteMail] = await waitMails(b, `Your invitation to ${new URL(b).host}`, sendTo, 1);
         if (!inviteMail || inviteMail.pathname !== "/sign-up") throw new Error(`the invite mail is missing or does not link to /sign-up: ${inviteMail}`);
         if ((await api("POST", `/api/admin/invites/${inviteId("@corp.test")}/send`)).status !== 400) throw new Error("send invite for a domain was not 400");
         console.log("gate: admin send-invite mails the sign-up link to an exact email and refuses a domain");
