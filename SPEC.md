@@ -59,6 +59,7 @@ tests/
 | `--turnstile` | bool | Svelte only, implies `--auth`. Cloudflare Turnstile on sign-up, sign-in and password reset |
 | `--invite-only` | bool | Svelte only, implies `--email` and `--auth`. Sign-up limited to the `SIGNUP_ALLOWLIST` secret, with a verified email |
 | `--admin` | bool | Svelte only, implies `--email` and `--auth`. Admin area at `/admin`, see below |
+| `--payments` | bool | Svelte only, implies `--auth`. Stripe subscriptions through Better Auth's Stripe plugin (spec #81), see below |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes and helper |
 | `--secrets` | `infisical` (the only value) | Any framework, implies `--auth`. `secrets:pull` / `secrets:push` against Infisical `dev`, see below |
 
@@ -235,6 +236,24 @@ in `AGENTS.md`.
     section. Generated tests: `tests/admin*.test.ts` (matcher, `userStatus`, the guard over a real Better Auth, the action
     helper, D14 page checks) and, with `--storage`, `tests/upload-guard.test.ts`.
 
+- `--payments` (svelte, spec #81; #82 is subscriptions, one-off purchases, deletion and the admin view are #83 to #85): `@better-auth/stripe`,
+  `stripe` and `better-auth` pinned in `PAYMENTS_DEPS` (one better-auth copy, gate-asserted). `src/plans.ts` declares plans by Stripe price lookup
+  key (monthly price, optional trial days); `src/stripe.ts` builds the client and refuses `STRIPE_API_URL` off localhost;
+  `src/billing.ts` holds `requirePlan` / `currentPlan` (active, trialing or past_due; read from the app's copy, never Stripe), `billingPlugins(env)`
+  (the plugin plus the guard, spread into `auth.ts`), `billingGuard` (on upgrade, billing-portal, cancel and restore: 503 `STRIPE_NOT_CONFIGURED`
+  while `.env` has the placeholder key, 400 `SUBSCRIPTION_NEEDS_CARD` on upgrade while a past_due or unpaid row exists; the webhook answers 400
+  `STRIPE_WEBHOOK_NOT_CONFIGURED` while the secret is the placeholder) and `syncStripeEvent`, the plugin's `onEvent`: for a subscription event on
+  a declared price whose customer a user holds, `created` throws (a retried 400) when the row is missing, and `updated` / `deleted` read the live
+  subscription from Stripe and write its plan (from the live price's lookup key), status, cancel-at-period-end, cancel-at and period when the row
+  differs (so an older event retried late can't win), only to a row whose `referenceId` is that user; a failed read or write throws. No such
+  user, a subscription Stripe no longer has (`resource_missing`) or a live price that is not a declared plan answers 200. `auth.ts` exempts
+  `/stripe/webhook` from rate limiting. The Billing page `/billing` (linked from the Account page) reads the subscription table directly and
+  shows none, active, trialing, cancelling with its end date, past_due and unpaid (portal button, no Subscribe), canceled. `scripts/stripe-seed.ts`
+  (`bun run stripe:seed`) creates the declared prices by lookup key, skips existing ones and refuses live keys. `env.ts` declares
+  `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` (required; `.env` ships `sk_test_placeholder` and `whsec_placeholder`) and optional
+  `STRIPE_API_URL`. Setup: a sandbox agent step, and human steps for live Stripe plus its key and the live webhook endpoint plus its secret.
+  Gate: a fake Stripe over HTTP and webhooks signed with Web Crypto HMAC; generated test `tests/billing.test.ts`.
+
 Void imports `void/email` and `void/storage` lazily in generated helpers: its plugin loads
 `auth.ts` at startup and at build time, where a top-level import fails under `vp test`.
 
@@ -333,7 +352,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   `nice`, shared bun cache, scaffolds skipped when the hash of pins + template is
   unchanged. The matrix (`scripts/matrix.ts`) is every framework with all its valid flags,
   bare, and solo runs per add-on: `svelte-auth`, `svelte-account-deletion`, `svelte-email`,
-  `svelte-turnstile`, `svelte-invite-only`, `svelte-admin`, `svelte-admin-storage`, `svelte-admin-invite-only`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
+  `svelte-turnstile`, `svelte-invite-only`, `svelte-admin`, `svelte-admin-storage`, `svelte-admin-invite-only`, `svelte-payments`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
 - Gate checks per flag (`scripts/gate.ts`, HTTP against `vp dev`): `--auth` sign-up, sign-in,
   session, `/settings` signed in and out, wrong then right change-password, other session
   revoked, migration present, `.env` gitignored; `--email` reset mail in the dev inbox, link,

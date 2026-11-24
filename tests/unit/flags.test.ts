@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { argv, FEATURE_LIST, parseFeature, validateFlags } from "../../src/flags";
 
-const base = { admin: false, inviteOnly: false, tailwind: false, shadcn: false, zodRpc: false, auth: false, accountDeletion: false, email: false, turnstile: false, storage: false, secrets: false };
+const base = { admin: false, inviteOnly: false, tailwind: false, shadcn: false, zodRpc: false, auth: false, accountDeletion: false, email: false, turnstile: false, payments: false, storage: false, secrets: false };
 
 test("defaults: react, every installer off, no notes", () => {
   expect(validateFlags({ name: "my-app" })).toEqual({

@@ -35,6 +35,7 @@ is emptied. The CLI writes only inside that directory.
 | `--turnstile` | bool | Svelte only, implies `--auth`. Cloudflare Turnstile on sign-up, sign-in and password reset |
 | `--invite-only` | bool | Svelte only, implies `--email` and `--auth`. Only emails on the `SIGNUP_ALLOWLIST` secret (exact emails and `@domain` entries) can sign up, and they pick their password through a mailed set-password link, which also verifies the email (sign-in never waits on mail in other apps); a password sent with the sign-up is never kept; empty or missing list refuses everyone |
 | `--admin` | bool | Svelte only, implies `--email` and `--auth`. An admin area at `/admin` for the users on the `ADMIN_EMAILS` secret (verified email, checked live on every request; everyone else gets a 404): search users, ban and unban, send a reset link, view and revoke sessions, delete a user with their files, and an audit log of every change; with `--invite-only`, invites live in the database (add an exact email or a whole domain, revoke, send an invite email) and `SIGNUP_ALLOWLIST` becomes optional; onboarding steps you declare in code show per user; feature switches you declare in `src/access.ts` (on, off or kill switch, with a per-user override) gate routes with `requireFeature`; typed runtime settings you declare in `src/settings.ts` (text, number with min and max, on/off, or a fixed set), read with `await setting("key")` and edited, with a reset to the default, on the Settings page |
+| `--payments` | bool | Svelte only, implies `--auth`. Stripe subscriptions through Better Auth's Stripe plugin: plans declared by price lookup key in `src/plans.ts`, a Billing page (`/billing`) with Stripe Checkout and the Customer Portal, a signed webhook that keeps the subscription table in sync, `requirePlan` for routes, and `bun run stripe:seed` to create the plans in the Stripe sandbox (refuses live keys) |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes (`/api/files/:name`) behind sign-in, purged on account deletion |
 
 The starter is fixed to sqlite (D1). `--auth` on react, vue and solid is the same as in
@@ -62,6 +63,9 @@ A `create-void` app (vite-plus toolchain, sqlite starter, git) plus your chosen 
   (a placeholder: replace it before real users arrive). Unset or empty means no admins and `/admin` answers 404. To use
   `/admin`, sign in with an email on `ADMIN_EMAILS` and verify it.
   With `--admin --invite-only`, `SIGNUP_ALLOWLIST` is optional: add invites on the Invites page, no secret change or restart.
+- `--payments`: live Stripe is human-only (see the generated `docs/setup.md`): create the plans in live mode with the same lookup
+  keys, set failed-payment retries to cancel the subscription, then `void secret put STRIPE_SECRET_KEY` and, after creating the
+  live webhook endpoint (`https://<app-host>/api/auth/stripe/webhook`), `void secret put STRIPE_WEBHOOK_SECRET`.
 - `--email`: set `email.from` in `void.config.ts` to an address on your mail domain (scaffolded
   as `noreply@example.com`); without a mail domain sends fail and are logged.
 - `BETTER_AUTH_SECRET` is created by `void deploy` on first run. Nothing needs `BETTER_AUTH_URL` in production: Void sets the

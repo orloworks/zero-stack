@@ -107,6 +107,7 @@ try {
     const want: [string, boolean][] = [
       ["void cloudflare login", true], ["void connect", true], ["void deploy", true], ["cf auth login", !!config.turnstile || !!config.storage], ["BETTER_AUTH_SECRET", !!config.auth], ["email.from", !!config.email],
       ["TURNSTILE_SECRET_KEY", !!config.turnstile], ["ADMIN_EMAILS", !!config.admin], ["R2 bucket", !!config.storage], ["infisical login", !!config.secrets],
+      ["STRIPE_SECRET_KEY", !!config.payments], ["STRIPE_WEBHOOK_SECRET", !!config.payments], ["stripe:seed", !!config.payments],
     ];
     if (!agents.includes("## Setup")) throw new Error("AGENTS.md has no ## Setup section");
     for (const [s, on] of want)
@@ -550,7 +551,7 @@ try {
     for (const t of ["user", "session", "account", "verification"])
       if (!new RegExp(`CREATE TABLE\\s+[\`"']?${t}\\b`, "i").test(sql)) throw new Error(`no migration creates the ${t} table`);
     // D3: the shared rate limit is in auth.ts and its table in the migration.
-    if (!readFileSync(join(app, "auth.ts"), "utf8").includes('rateLimit: { storage: "database" }')) throw new Error('auth.ts lacks rateLimit storage: "database"');
+    if (!/rateLimit: \{\s*storage: "database"/.test(readFileSync(join(app, "auth.ts"), "utf8"))) throw new Error('auth.ts lacks rateLimit storage: "database"');
     if (!/CREATE TABLE\s+[`"']?rateLimit\b/.test(sql)) throw new Error("no migration creates the rate-limit table");
     if (!readFileSync(join(app, ".gitignore"), "utf8").split("\n").includes(".env")) throw new Error(".env not gitignored");
     if ((statSync(join(app, ".env")).mode & 0o777) !== 0o600) throw new Error(".env is not mode 0600");
@@ -1200,6 +1201,267 @@ try {
       writeFileSync(envFile, original);
     }
   }
+  // --payments: the app against a fake Stripe over HTTP (STRIPE_API_URL), with webhooks the gate signs itself (Web Crypto HMAC, as Stripe does).
+  const paymentsGate = async () => {
+    const envFile = join(app, ".env"), original = readFileSync(envFile, "utf8");
+    const check = (ok: unknown, what: string) => { if (!ok) throw new Error(`payments: ${what}`); };
+    // The fake answers exactly what the app and the plugin call; every request is recorded.
+    type Obj = Record<string, any>;
+    const fake = { customers: new Map<string, Obj>(), prices: new Map<string, Obj>(), sessions: new Map<string, Obj>(), subs: new Map<string, Obj>(), portals: 0, calls: [] as string[], n: 0 };
+    const id = (p: string) => `${p}_gate${++fake.n}`;
+    // Stripe's form encoding (`metadata[userId]=…`, `line_items[0][price]=…`) read into nested objects.
+    const form = (text: string): Obj => {
+      const out: Obj = {};
+      for (const [k, v] of new URLSearchParams(text)) {
+        const path = k.replace(/\]/g, "").split("[");
+        let o = out;
+        path.slice(0, -1).forEach((p) => (o = o[p] ??= {}));
+        o[path.at(-1)!] = v;
+      }
+      return out;
+    };
+    const missing = () => Response.json({ error: { type: "invalid_request_error", code: "resource_missing", message: "No such object" } }, { status: 404 });
+    const list = (data: Obj[]) => Response.json({ object: "list", data, has_more: false, url: "/v1/x" });
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      async fetch(req) {
+        const url = new URL(req.url), p = url.pathname, m = req.method;
+        fake.calls.push(`${m} ${p}`);
+        const body = m === "POST" ? form(await req.text()) : {};
+        let r: RegExpMatchArray | null;
+        if (m === "GET" && p === "/v1/customers/search") return Response.json({ object: "search_result", data: [], has_more: false, url: p });
+        if (m === "POST" && p === "/v1/customers") { const c = { id: id("cus"), object: "customer", email: body.email, name: body.name, metadata: body.metadata ?? {} }; fake.customers.set(c.id, c); return Response.json(c); }
+        if ((r = p.match(/^\/v1\/customers\/([^/]+)$/))) { const c = fake.customers.get(r[1]!); if (!c) return missing(); if (m === "POST") Object.assign(c, body); return Response.json(c); }
+        if (m === "GET" && p === "/v1/prices") { const keys = [...url.searchParams].filter(([k]) => k.startsWith("lookup_keys")).map(([, v]) => v); return list([...fake.prices.values()].filter((x) => keys.includes(x.lookup_key))); }
+        if (m === "POST" && p === "/v1/prices") {
+          const x = { id: id("price"), object: "price", active: true, currency: body.currency, unit_amount: Number(body.unit_amount), lookup_key: body.lookup_key, product: body.product ?? id("prod"), recurring: { interval: body.recurring?.interval, usage_type: "licensed" } };
+          fake.prices.set(x.id, x);
+          return Response.json(x);
+        }
+        if (m === "GET" && p === "/v1/subscriptions") return list([...fake.subs.values()].filter((s) => s.customer === url.searchParams.get("customer")));
+        if ((r = p.match(/^\/v1\/subscriptions\/([^/]+)$/))) { const s = fake.subs.get(r[1]!); if (!s) return missing(); if (m === "DELETE") s.status = "canceled"; return Response.json(s); }
+        if (m === "POST" && p === "/v1/checkout/sessions") { const s = { id: id("cs"), object: "checkout.session", url: "https://checkout.stripe.test/pay", subscription: null, payment_status: "unpaid", status: "open", ...body }; fake.sessions.set(s.id, s); return Response.json(s); }
+        if ((r = p.match(/^\/v1\/checkout\/sessions\/([^/]+)$/))) { const s = fake.sessions.get(r[1]!); return s ? Response.json(s) : missing(); }
+        if (m === "POST" && p === "/v1/billing_portal/sessions") { fake.portals++; return Response.json({ id: id("bps"), object: "billing_portal.session", url: "https://billing.stripe.test/session", customer: body.customer, return_url: body.return_url }); }
+        return Response.json({ error: { type: "invalid_request_error", message: `fake Stripe has no ${m} ${p}` } }, { status: 404 });
+      },
+    });
+    const SECRET = "whsec_gate_" + crypto.randomUUID().replaceAll("-", "");
+    const sign = async (payload: string, secret = SECRET) => {
+      const t = Math.floor(Date.now() / 1000);
+      const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+      const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${t}.${payload}`)));
+      return `t=${t},v1=${[...mac].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
+    };
+    // The app database: the sqlite file that has the subscription table.
+    const db = <T,>(fn: (d: Database) => T): T => {
+      for (const f of sqliteFiles(join(app, ".void"))) {
+        const d = openDb(f);
+        try {
+          if (d.query("SELECT 1 FROM sqlite_master WHERE name = 'subscription'").get()) return fn(d);
+        } finally { d.close(); }
+      }
+      throw new Error("payments: no database with a subscription table");
+    };
+    const subRows = (userId: string) => db((d) => d.query("SELECT * FROM subscription WHERE referenceId = ? ORDER BY id").all(userId) as Obj[]);
+    const allSubs = () => db((d) => JSON.stringify(d.query("SELECT id, status, plan, referenceId, stripeSubscriptionId FROM subscription ORDER BY id").all()));
+    const restart = async (vars: Record<string, string | null>) => {
+      await killChildren();
+      let text = original;
+      for (const [k, v] of Object.entries(vars)) text = text.replace(new RegExp(`^${k}=.*\\n`, "m"), "") + (v === null ? "" : `${k}=${v}\n`);
+      writeFileSync(envFile, text);
+      return `http://localhost:${(await startDev()).port}`;
+    };
+    const user = async (b: string, address: string) => {
+      if (config.inviteOnly) return signUpVerified(b, address);
+      if (!(await authPost(b, "/api/auth/sign-up/email", { name: "Payer", email: address, password: gatePw })).ok) throw new Error(`payments: sign-up for ${address} failed`);
+      const inn = await authPost(b, "/api/auth/sign-in/email", { email: address, password: gatePw });
+      check(inn.ok, `sign-in for ${address} -> ${inn.status}`);
+      return cookieOf(inn);
+    };
+    const idOf = (address: string) => onUser(address, "SELECT ?").id;
+    const call = (b: string, path: string, cookie = "", body?: object, origin = b) =>
+      fetch(b + path, { method: body ? "POST" : "GET", redirect: "manual", headers: { origin, ...(cookie && { cookie }), ...(body && { "content-type": "application/json" }) }, body: body && JSON.stringify(body) });
+    const page = (b: string, cookie = "") => call(b, "/billing", cookie).then((r) => r.text());
+    const UPGRADE = { plan: "pro", successUrl: "/billing", cancelUrl: "/billing" };
+    const webhook = async (b: string, ev: Obj, sig?: string, secret = SECRET) => {
+      const payload = JSON.stringify({ id: id("evt"), object: "event", api_version: "2025-01-01", created: Math.floor(Date.now() / 1000), livemode: false, ...ev });
+      return fetch(`${b}/api/auth/stripe/webhook`, { method: "POST", headers: { "content-type": "application/json", ...(sig !== "" && { "stripe-signature": sig ?? (await sign(payload, secret)) }) }, body: payload });
+    };
+    const now = Math.floor(Date.now() / 1000);
+    const subObj = (s: Obj) => ({ object: s });
+    const stripeSub = (o: { id: string; customer: string; status: string; metadata?: Obj; cancel?: boolean }) => {
+      const price = [...fake.prices.values()].find((x) => x.lookup_key === "pro_monthly")!;
+      const s = {
+        id: o.id, object: "subscription", customer: o.customer, status: o.status, metadata: o.metadata ?? {}, cancel_at_period_end: !!o.cancel, cancel_at: null, canceled_at: null, ended_at: null, trial_start: null, trial_end: null, schedule: null,
+        items: { object: "list", data: [{ id: `si_${o.id}`, object: "subscription_item", quantity: 1, current_period_start: now, current_period_end: now + 30 * 86400, price }] },
+      };
+      fake.subs.set(s.id, s);
+      return s;
+    };
+    try {
+      let b = `http://localhost:${port}`;
+      // Placeholder keys (a fresh scaffold): the app serves, and subscription actions say Stripe isn't set up.
+      b = await restart({});
+      const early = await user(b, `payer-early-${Date.now()}@example.com`);
+      check((await page(b, early)).includes("Stripe isn't set up yet."), "/billing with placeholder keys lacks \"Stripe isn't set up yet.\"");
+      const unset = await call(b, "/api/auth/subscription/upgrade", early, UPGRADE);
+      check(unset.status === 503 && ((await unset.json()) as Obj).code === "STRIPE_NOT_CONFIGURED", `upgrade with placeholder keys -> ${unset.status}, expected 503 STRIPE_NOT_CONFIGURED`);
+      // The placeholder webhook secret is public: an event signed with it is refused.
+      const forged = await webhook(b, { type: "customer.subscription.updated", data: { object: { id: "sub_forged", customer: "cus_forged", status: "active", items: { data: [] } } } }, undefined, "whsec_placeholder");
+      check(forged.status === 400 && ((await forged.json()) as Obj).code === "STRIPE_WEBHOOK_NOT_CONFIGURED", `a webhook signed with whsec_placeholder -> ${forged.status}, expected 400`);
+      console.log("gate: payments with placeholder keys: the app serves, /billing and the upgrade route say Stripe isn't set up yet (503), a webhook signed with whsec_placeholder is 400");
+
+      const STRIPE = { STRIPE_SECRET_KEY: "sk_test_gate", STRIPE_WEBHOOK_SECRET: SECRET, STRIPE_API_URL: `http://127.0.0.1:${server.port}` };
+      // The seed script: refuses live keys before calling Stripe, creates the declared price once, and a rerun creates nothing.
+      // Async: the fake Stripe runs in this process, so a sync spawn would block it from answering.
+      const seed = async (env: Record<string, string>) => {
+        const p = spawnTracked([process.execPath, "run", "stripe:seed"], { cwd: app, env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+        const [stdout, stderr, exitCode] = await Promise.all([new Response(p.stdout as ReadableStream).text(), new Response(p.stderr as ReadableStream).text(), p.exited]);
+        return { stdout, stderr, exitCode };
+      };
+      const before = fake.calls.length;
+      for (const k of ["sk_live_gate", "rk_live_gate"]) {
+        const r = await seed({ ...STRIPE, STRIPE_SECRET_KEY: k });
+        check(r.exitCode === 1 && r.stderr.includes("refuses live keys"), `stripe:seed with a ${k.slice(0, 7)} key exited ${r.exitCode}`);
+      }
+      check(fake.calls.length === before, "stripe:seed called Stripe with a live key");
+      const first = await seed(STRIPE), again = await seed(STRIPE);
+      check(first.exitCode === 0 && first.stdout.includes("created: pro_monthly"), `stripe:seed -> ${first.exitCode}: ${first.stdout}${first.stderr}`);
+      check(again.exitCode === 0 && again.stdout.includes("exists: pro_monthly") && fake.prices.size === 1, `stripe:seed rerun -> ${again.exitCode}, ${fake.prices.size} prices`);
+      console.log("gate: stripe:seed refuses sk_live_ and rk_live_ keys before any call, creates the declared price by lookup key, and a rerun creates nothing");
+
+      b = await restart(STRIPE);
+      const [aMail, bMail] = [`payer-a-${Date.now()}@example.com`, `payer-b-${Date.now()}@example.com`];
+      const a = await user(b, aMail), other = await user(b, bMail);
+      const aId = idOf(aMail), bId = idOf(bMail);
+      // Signed out and cross-site requests are refused, and no Stripe call is made for them.
+      check((await page(b)).includes("Sign in to manage billing"), "/billing signed out lacks the sign-in line");
+      const calls0 = fake.calls.length;
+      for (const path of ["/api/auth/subscription/upgrade", "/api/auth/subscription/billing-portal"]) {
+        const out = (await call(b, path, "", UPGRADE)).status, cross = (await call(b, path, a, { ...UPGRADE, returnUrl: "/billing" }, "https://evil.test")).status;
+        check(out === 401 && cross === 403, `${path}: signed out -> ${out} (expected 401), cross-site -> ${cross} (expected 403)`);
+      }
+      check(fake.calls.length === calls0, `refused requests reached Stripe: ${fake.calls.slice(calls0).join(", ")}`);
+      const none = await page(b, a);
+      check(none.includes("You're not on a plan.") && none.includes("Subscribe to Pro") && !none.includes("Manage billing"), "/billing for a user with no plan lacks the no-plan copy or the Subscribe button");
+      check((await call(b, "/api/example-plan", a)).status === 403 && (await call(b, "/api/example-plan")).status === 401, "requirePlan: no plan should be 403, signed out 401");
+      console.log("gate: payments: /billing signed out and with no plan; checkout and portal refuse signed-out (401) and cross-site (403) requests with no Stripe call; requirePlan 401/403");
+
+      // Checkout: the plugin makes the customer (metadata.userId) and an incomplete row, then a Checkout session for the declared price.
+      const up = await call(b, "/api/auth/subscription/upgrade", a, UPGRADE);
+      const upBody = (await up.json()) as Obj;
+      check(up.ok && upBody.url === "https://checkout.stripe.test/pay", `upgrade -> ${up.status} ${JSON.stringify(upBody)}`);
+      const cus = [...fake.customers.values()].find((c) => c.metadata.userId === aId);
+      if (!cus) throw new Error("payments: upgrade made no Stripe customer with metadata.userId");
+      const cs = [...fake.sessions.values()].at(-1)!;
+      check(db((d) => (d.query("SELECT stripeCustomerId AS c FROM user WHERE id = ?").get(aId) as Obj).c) === cus.id, "the user's stripeCustomerId is not the customer Stripe made");
+      check(cs.mode === "subscription" && cs.customer === cus.id && cs.line_items["0"].price === [...fake.prices.keys()][0] && cs.client_reference_id === aId, `checkout session: ${JSON.stringify(cs)}`);
+      const [incomplete] = subRows(aId);
+      check(incomplete?.status === "incomplete" && cs.metadata.subscriptionId === incomplete.id, `rows after upgrade: ${JSON.stringify(subRows(aId))}`);
+      // Bad signatures change nothing.
+      const subA = stripeSub({ id: "sub_gateA", customer: cus.id, status: "active", metadata: { subscriptionId: incomplete.id, userId: aId, referenceId: aId } });
+      const snapshot = allSubs();
+      for (const [what, sig] of [["unsigned", ""], ["wrongly signed", await sign("{}", SECRET)], ["signed with another secret", undefined]] as [string, string | undefined][]) {
+        const ev = { type: "customer.subscription.updated", data: subObj({ ...subA, status: "past_due" }) };
+        const payload = JSON.stringify(ev);
+        const r = await fetch(`${b}/api/auth/stripe/webhook`, { method: "POST", headers: { "content-type": "application/json", ...(sig !== "" && { "stripe-signature": sig ?? (await sign(payload, "whsec_not_the_secret")) }) }, body: payload });
+        check(r.status === 400, `${what} webhook -> ${r.status}, expected 400`);
+      }
+      check(allSubs() === snapshot, "a refused webhook changed the subscription table");
+      console.log("gate: payments: upgrade makes the customer and an incomplete row and opens Checkout for the declared price; unsigned, wrongly signed and foreign-secret webhooks get 400 and change nothing");
+      // Checkout completes: the success redirect syncs from Stripe at once; then the webhooks arrive (created is skipped for the checkout's own row).
+      Object.assign(cs, { subscription: subA.id, payment_status: "paid", status: "complete" });
+      const back = await call(b, `/api/auth/subscription/success?callbackURL=%2Fbilling&checkoutSessionId=${cs.id}`, a);
+      check(back.status === 302 && new URL(back.headers.get("location") ?? "", b).pathname === "/billing", `success redirect -> ${back.status} ${back.headers.get("location")}`);
+      check(subRows(aId)[0].status === "active", "the success redirect did not sync the plan");
+      for (const ev of [{ type: "customer.subscription.created", data: subObj(subA) }, { type: "checkout.session.completed", data: subObj(cs) }]) check((await webhook(b, ev)).status === 200, `${ev.type} -> not 200`);
+      check(subRows(aId).length === 1 && subRows(aId)[0].stripeSubscriptionId === subA.id, `rows after checkout: ${JSON.stringify(subRows(aId))}`);
+      const active = await page(b, a);
+      check(active.includes("Pro. Renews on") && active.includes("Manage billing") && !active.includes("Subscribe to Pro"), "/billing after checkout lacks the active plan");
+      check((await call(b, "/api/example-plan", a)).status === 200, "requirePlan refused an active plan");
+      // Another user sees and manages only their own billing.
+      check((await page(b, other)).includes("You're not on a plan."), "another user's /billing shows A's plan");
+      const theirs = await call(b, `/api/auth/subscription/list?referenceId=${aId}`, other);
+      check(theirs.status === 400 && (await call(b, "/api/auth/subscription/list", other).then((r) => r.json())).length === 0, `another user listing A's subscription -> ${theirs.status}`);
+      check((await call(b, "/api/auth/subscription/billing-portal", other, { returnUrl: "/billing", referenceId: aId })).status === 400, "another user opened A's portal");
+      check((await call(b, "/api/auth/subscription/billing-portal", other, { returnUrl: "/billing" })).status === 404, "a user with no customer got a portal");
+      const portal = await call(b, "/api/auth/subscription/billing-portal", a, { returnUrl: "/billing" });
+      check(portal.ok && ((await portal.json()) as Obj).url === "https://billing.stripe.test/session", `portal -> ${portal.status}`);
+      console.log("gate: payments: the success redirect shows the plan before any webhook; created and checkout.session.completed answer 200 and keep one row; requirePlan 200; another user can't read or manage it; the portal opens");
+
+      // Stripe's state changes (the fake's subscription is the live one the app reads back), then the event for it arrives.
+      const emit = (type: string, change: Obj) => webhook(b, { type, data: subObj({ ...Object.assign(subA, change) }) });
+      // past_due: shown with the fix-your-card copy, still counts for requirePlan, and blocks a second Checkout.
+      check((await emit("customer.subscription.updated", { status: "past_due" })).status === 200, "updated past_due -> not 200");
+      const due = await page(b, a);
+      check(due.includes("Your last payment failed") && due.includes("Manage billing") && !due.includes("Subscribe to Pro"), "/billing for past_due lacks the failure copy or still offers Subscribe");
+      check((await call(b, "/api/example-plan", a)).status === 200, "requirePlan refused a past_due plan");
+      const sessions = fake.sessions.size;
+      const second = await call(b, "/api/auth/subscription/upgrade", a, UPGRADE);
+      check(second.status === 400 && ((await second.json()) as Obj).code === "SUBSCRIPTION_NEEDS_CARD" && fake.sessions.size === sessions, `a past_due user's second upgrade -> ${second.status}`);
+      // unpaid: inactive for requirePlan, and still no second Checkout.
+      check((await emit("customer.subscription.updated", { status: "unpaid" })).status === 200, "updated unpaid -> not 200");
+      check((await page(b, a)).includes("is paused because payments failed") && (await call(b, "/api/example-plan", a)).status === 403, "unpaid lacks the paused copy or passed requirePlan");
+      const third = await call(b, "/api/auth/subscription/upgrade", a, UPGRADE);
+      check(third.status === 400 && ((await third.json()) as Obj).code === "SUBSCRIPTION_NEEDS_CARD" && fake.sessions.size === sessions, `an unpaid user's second upgrade -> ${third.status}`);
+      // A lost write: the database refuses the update (the plugin's and the sync's), so the event answers an error and Stripe retries; the retry lands.
+      db((d) => d.run("CREATE TRIGGER gate_fail BEFORE UPDATE ON subscription WHEN NEW.status = 'active' BEGIN SELECT RAISE(ABORT, 'gate'); END"));
+      const lost = await emit("customer.subscription.updated", { status: "active", cancel_at_period_end: true });
+      db((d) => d.run("DROP TRIGGER gate_fail"));
+      check(lost.status >= 400 && subRows(aId)[0].status === "unpaid", `an update whose write failed -> ${lost.status}, row ${subRows(aId)[0].status}`);
+      check((await emit("customer.subscription.updated", {})).status === 200, "the retried update -> not 200");
+      check((await page(b, a)).includes("Pro. Cancelling, ends on"), "/billing for a cancelling plan lacks the end date");
+      console.log("gate: payments: past_due shows the fix-your-card copy, still passes requirePlan and refuses a second Checkout; unpaid fails requirePlan and refuses one too; a failed write answers an error and the retry lands; cancelling shows its end date");
+
+      // No user holds the customer (a dashboard subscription, or a deleted user whose rows are gone): 200 and nothing changes.
+      const ghostMail = `payer-ghost-${Date.now()}@example.com`;
+      const ghost = await user(b, ghostMail);
+      check((await call(b, "/api/auth/subscription/upgrade", ghost, UPGRADE)).ok, "the ghost user's upgrade failed");
+      const ghostId = idOf(ghostMail), ghostCus = [...fake.customers.values()].find((c) => c.metadata.userId === ghostId)!.id;
+      db((d) => { d.run("DELETE FROM subscription WHERE referenceId = ?", [ghostId]); d.run("DELETE FROM session WHERE userId = ?", [ghostId]); d.run("DELETE FROM account WHERE userId = ?", [ghostId]); d.run("DELETE FROM user WHERE id = ?", [ghostId]); });
+      const quiet = allSubs();
+      for (const [customer, why] of [["cus_unknown_gate", "an unknown customer"], [ghostCus, "a deleted user"]])
+        for (const type of ["customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"]) {
+          const r = await webhook(b, { type, data: subObj(stripeSub({ id: `sub_${customer}`, customer, status: "past_due" })) });
+          check(r.status === 200, `${type} for ${why} -> ${r.status}, expected 200`);
+        }
+      check(allSubs() === quiet, "an event for a customer no user holds changed the subscription table");
+      console.log("gate: payments: subscription events for an unknown customer and for a deleted user's customer answer 200 and change nothing");
+
+      const older = { ...subA, status: "active", cancel_at_period_end: false }; // an update Stripe sent before the deletion
+      check((await emit("customer.subscription.deleted", { status: "canceled" })).status === 200, "deleted -> not 200");
+      const ended = await page(b, a);
+      check(subRows(aId)[0].status === "canceled" && ended.includes("Your Pro plan has ended.") && ended.includes("Subscribe to Pro"), "/billing after deletion lacks the ended copy or the Subscribe button");
+      check((await call(b, "/api/example-plan", a)).status === 403, "requirePlan let a canceled plan through");
+      // Out of order: that older update, retried after the deletion, must not bring the plan back.
+      check((await webhook(b, { type: "customer.subscription.updated", data: subObj(older) })).status === 200, "a late older update -> not 200");
+      check(subRows(aId)[0].status === "canceled" && (await call(b, "/api/example-plan", a)).status === 403, `a late older update revived the plan: row ${subRows(aId)[0].status}`);
+      console.log("gate: payments: a deleted subscription shows as ended with Subscribe back, requirePlan refuses it, and an older update retried afterwards leaves it canceled");
+
+      // Static checks: one better-auth, the webhook's rate-limit exemption, the plugin's tables in the migration.
+      const copies: string[] = [];
+      const walk = (dir: string) => {
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+          if (!e.isDirectory()) continue;
+          const sub = join(dir, e.name);
+          if (e.name === "better-auth" && existsSync(join(sub, "package.json"))) copies.push(sub);
+          if (e.name.startsWith("@")) walk(sub);
+          else if (existsSync(join(sub, "node_modules"))) walk(join(sub, "node_modules"));
+        }
+      };
+      walk(join(app, "node_modules"));
+      check(copies.length === 1, `expected one better-auth, found ${copies.join(", ") || "none"}`);
+      check(/customRules:\s*\{\s*"\/stripe\/webhook":\s*false/.test(readFileSync(join(app, "auth.ts"), "utf8")), "auth.ts does not exempt /stripe/webhook from rate limiting");
+      const sql = readdirSync(join(app, "db/migrations")).filter((f) => f.endsWith(".sql")).map((f) => readFileSync(join(app, "db/migrations", f), "utf8")).join("\n");
+      check(/CREATE TABLE\s+[`"']?subscription\b/.test(sql) && /stripeCustomerId/.test(sql), "no migration creates the subscription table and user.stripeCustomerId");
+      console.log("gate: payments: exactly one better-auth installed; the webhook path is exempt from rate limiting; the migration has the plugin's tables");
+    } finally {
+      server.stop(true);
+      writeFileSync(envFile, original);
+    }
+  };
+  if (config.payments) await paymentsGate();
   if (config.secrets) {
     // A fake `infisical` first on PATH records its argv (FAKE_LOG) and is driven by env: FAKE_EXIT, FAKE_EXPORT (file contents), FAKE_STDERR.
     // Like the real CLI, it rejects a --file holding an empty value.

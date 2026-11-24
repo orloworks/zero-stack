@@ -86,6 +86,35 @@ export const STEPS: Step[] = [
     verify: `${SECRET_LIST} ADMIN_EMAILS`, covers: ["ADMIN_EMAILS"],
   },
   {
+    id: "stripe-sandbox", on: (c) => !!c.payments, title: "Try billing in the Stripe sandbox", who: "agent",
+    why: "Local billing runs against your Stripe sandbox only; agents never write to live Stripe. `.env` ships placeholder keys, so the Billing page says \"Stripe isn't set up yet.\" until real sandbox keys are there. Put the repo's sandbox key (from the repo's Stripe CLI profile, never printed) in `.env` as `STRIPE_SECRET_KEY`, write the secret from `stripe listen --print-secret` into `.env` as `STRIPE_WEBHOOK_SECRET` without printing it, then forward events with `stripe listen --forward-to localhost:5173/api/auth/stripe/webhook` while `vp dev` runs. `STRIPE_API_URL` is for tests against a fake Stripe only and is never set in production. A restricted key (`rk_test_`) needs read access to subscriptions, customers and prices, and write access to Checkout sessions and Customer portal sessions (plus write on customers, which the first checkout creates, and on prices and products for `stripe:seed`).",
+    action: "`bun run stripe:seed` (creates the plans in `src/plans.ts` by lookup key, skips existing ones, refuses live keys)", verify: "grep -Eq '^STRIPE_SECRET_KEY=[sr]k_test_' .env && ! grep -q '^STRIPE_SECRET_KEY=sk_test_placeholder' .env && grep -q '^STRIPE_WEBHOOK_SECRET=whsec_' .env && ! grep -q '^STRIPE_WEBHOOK_SECRET=whsec_placeholder' .env",
+    covers: ["STRIPE_API_URL"],
+  },
+  {
+    id: "stripe-live-key", on: (c) => !!c.payments, title: "Set up live Stripe and store the secret key", who: "human",
+    why: "Live mode charges real cards, so only you touch it. The deploy fails until the key is stored.",
+    action: "In the Stripe dashboard (live mode), then `void secret put STRIPE_SECRET_KEY` (masked prompt), or run the wizard", capture: "STRIPE_SECRET_KEY",
+    click: [
+      "Create each plan in src/plans.ts as a product with a recurring price whose lookup key matches the file.",
+      "Billing, Revenue recovery: when all retries fail, cancel the subscription (so a failed payment always ends).",
+      "Set up the Customer portal, and Stripe Tax and branding if you use them.",
+      "Developers, API keys: copy the secret key (sk_live_...) or a restricted key.",
+    ],
+    verify: `${SECRET_LIST} STRIPE_SECRET_KEY`, covers: ["STRIPE_SECRET_KEY"],
+  },
+  {
+    id: "stripe-webhook", on: (c) => !!c.payments, title: "Create the live webhook endpoint and store its secret", who: "human",
+    why: "The webhook is the only way subscription changes reach the app. Create the endpoint first, then store its signing secret.",
+    action: "In the Stripe dashboard (live mode), then `void secret put STRIPE_WEBHOOK_SECRET` (masked prompt), or run the wizard", capture: "STRIPE_WEBHOOK_SECRET",
+    click: [
+      "Developers, Webhooks, Add endpoint: https://<app-host>/api/auth/stripe/webhook",
+      "Events: checkout.session.completed, customer.subscription.created, customer.subscription.updated, customer.subscription.deleted.",
+      "Copy the signing secret (whsec_...).",
+    ],
+    verify: `${SECRET_LIST} STRIPE_WEBHOOK_SECRET`, covers: ["STRIPE_WEBHOOK_SECRET"],
+  },
+  {
     id: "deploy", on: () => true, title: "Deploy", who: "agent",
     why: "Builds, provisions the database and any other resource the code uses, applies migrations and publishes. It fails until every required server key exists remotely, and never uploads `.env`. Run it in a terminal you watch: the first deploy can ask you to pick an account or accept a setup prompt.",
     action: (c) => `\`${c.turnstile ? "VITE_TURNSTILE_SITE_KEY=<site key> " : ""}void deploy --platform cloudflare\`${c.secrets ? "; with Infisical, the production route in the Secrets section (it ends in `infisical run --env=prod -- void deploy`)" : ""}`,

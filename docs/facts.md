@@ -63,6 +63,35 @@ rests on this. App tables are not created by `vp dev` alone: they need `void db 
 Importing `@auth-schema` from `db/schema.ts` failed at dev start ("Cannot find module '@auth-schema'"); the probe used
 `../.void/better-auth-schema`. Docs show `@auth-schema`; unresolved here, so check it before telling users to use it.
 
+## `--payments`: Stripe CLI key and Checkout (2026-11-24, #82)
+
+**Not checked: the repo's Stripe CLI profile does not exist yet.** `STRIPE_PROJECT_NAME=create-void-app-scaffold` (set by the
+SessionStart hook), and `stripe get /v1/account` answered "no config for that project was found. Please run `stripe login
+--project-name ...`". Per the machine's Stripe rules the agent did not log in. So whether the profile's restricted key (`rk_test_`)
+can create a Checkout session in the sandbox is still open: after `! stripe login --project-name create-void-app-scaffold`, run
+`stripe get /v1/account` (print only `id`), then create a throwaway price and a `mode=subscription` Checkout session with it,
+expire the session and archive the price and product. A restricted key without Checkout write needs a full `sk_test_` key in
+`.env` instead (the seed script and the app accept both).
+
+What a restricted key (`rk_test_`, or a live `rk_live_`) needs, from the calls the app and the plugin make (read from the plugin's 1.7.28
+source and `src/billing.ts`, not yet tried against Stripe): read on subscriptions (the sync after every update or deletion, and upgrade's
+list), customers and prices; write on Checkout sessions and Customer portal sessions; write on customers (the first checkout creates one,
+and the plugin updates its email); and, for `bun run stripe:seed` only, write on prices and products.
+
+## `--payments`: @better-auth/stripe 1.7.28 under Void 1.11.0 (2026-11-24, #82)
+
+- `bun add @better-auth/stripe@1.7.28 stripe@23.2.0` in a fresh scaffold keeps one `better-auth` (1.7.28, the version void's
+  `^1.7.25` resolves); the app pins `better-auth` to the same version so a later release can't add a second copy.
+- `void db generate` with the plugin adds the `subscription` table and `user.stripeCustomerId`; the generated schema exports
+  `subscriptionTable` from `.void/better-auth-schema.ts`.
+- `new Stripe("")` throws ("Neither apiKey nor config.authenticator provided"); Void evaluates `auth.ts` at build time with no
+  server env, so `src/stripe.ts` falls back to the placeholder key.
+- The plugin's `onEvent` gets only the event (no context), and a throw from it becomes 400 `STRIPE_WEBHOOK_ERROR`, which Stripe
+  retries. Its subscription handlers catch their own errors, so `syncStripeEvent` reads and writes through `void/db` (and reads the live subscription from Stripe).
+- Void turns Better Auth rate limiting on only for deployed Cloudflare requests (a `cf` object and a non-loopback
+  `cf-connecting-ip`), so the webhook exemption (`customRules: { "/stripe/webhook": false }`) can't be exercised under `vp dev`;
+  the gate checks `auth.ts` for it.
+
 ## `--admin` probes P6 and P7 (2026-11-22)
 
 Scaffolded `--framework svelte --email` (void@1.8.0, better-auth@1.7.27), added `admin()` to `auth.ts`, `void db generate`

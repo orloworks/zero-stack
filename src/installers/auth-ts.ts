@@ -159,6 +159,10 @@ const invitePlugin = (db: boolean) => `{
     }`;
 export const INVITE_ONLY_PLUGIN = invitePlugin(false);
 
+// --payments (src/plans.ts, src/stripe.ts, src/billing.ts). Better Auth's Stripe plugin owns checkout, the portal, the webhook and the subscription table;
+// a Stripe customer is made at first checkout, not at sign-up. billingPlugins (src/billing.ts) builds the plugin, its onEvent sync and the billing guard.
+const PAYMENTS_IMPORTS = 'import { billingPlugins } from "./src/billing";\n';
+
 // With --admin and --invite-only, a link requested on the server (the admin's send-link route has no browser request behind it) for an unverified user is mailed
 // as "Set your password", matching the admin page's copy; a user's own "Forgot password" keeps the reset subject.
 // The root auth.ts, written whole from the enabled features (one owner; add-ons contribute parts here, never patch the file).
@@ -173,7 +177,8 @@ function userOption(config: Config): string[] {
 export function composeAuthTs(config: Config): string {
   const options = [
     // One count across Worker instances (D3, Void docs/guide/auth.md); costs one D1 write per auth request. Off in dev, on for deployed Cloudflare requests.
-    '  rateLimit: { storage: "database" },',
+    // --payments: Stripe sends webhook bursts from shared IPs, so its endpoint is never rate limited (it is signature-checked instead).
+    config.payments ? '  rateLimit: { storage: "database", customRules: { "/stripe/webhook": false } },' : '  rateLimit: { storage: "database" },',
     // Sign-in never waits on mail (D8), except --invite-only: the allowlist must see a proven address, so verification is required (sign-up creates no session)
     // and is proven by the set-password link (INVITE_ONLY_PLUGIN). Reset revokes every other session (D30).
     ...(config.email
@@ -191,13 +196,14 @@ export function composeAuthTs(config: Config): string {
         ]
       : []),
     // Better Auth's captcha plugin guards its default endpoints (sign-up, sign-in, request-password-reset); the guard refuses a test secret off localhost (D14).
-    ...(config.turnstile || config.inviteOnly || config.admin
+    ...(config.turnstile || config.inviteOnly || config.admin || config.payments
       ? [
           `  plugins: [${[
             config.turnstile && 'captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })',
             config.inviteOnly && invitePlugin(!!config.admin),
             config.admin && `admin({ bannedUserMessage: "${BANNED_MESSAGE}" })`,
             config.admin && `adminGuard({ isAdmin: (user) => isAdmin(env.ADMIN_EMAILS, user), audit: recordAudit${config.storage ? ", purge: purgeUserFiles" : ""} })`,
+            config.payments && "...billingPlugins(env)",
           ]
             .filter(Boolean)
             .join(", ")}],`,
@@ -214,8 +220,8 @@ export function composeAuthTs(config: Config): string {
   const del = (config.accountDeletion || config.admin) && config.storage;
   const ba = config.accountDeletion || config.inviteOnly ? `import { APIError, createAuthMiddleware${config.inviteOnly ? ", isAPIError" : ""} } from "better-auth/api";\n` : "";
   return `import { defineAuth } from "void/auth";
-${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}
-export default defineAuth(({ defaults${config.turnstile || config.inviteOnly || config.admin ? ", env" : ""} }) => ({
+${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.payments ? PAYMENTS_IMPORTS : ""}
+export default defineAuth(({ defaults${config.turnstile || config.inviteOnly || config.admin || config.payments ? ", env" : ""} }) => ({
   ...defaults,
 ${options.map((o) => o + "\n").join("")}}));
 `;
