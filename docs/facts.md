@@ -73,6 +73,11 @@ can create a Checkout session in the sandbox is still open: after `! stripe logi
 expire the session and archive the price and product. A restricted key without Checkout write needs a full `sk_test_` key in
 `.env` instead (the seed script and the app accept both).
 
+What a restricted key (`rk_test_`, or a live `rk_live_`) needs, from the calls the app and the plugin make (read from the plugin's 1.7.28
+source and `src/billing.ts`, not yet tried against Stripe): read on subscriptions (the sync after every update or deletion, and upgrade's
+list), customers and prices; write on Checkout sessions and Customer portal sessions; write on customers (the first checkout creates one,
+and the plugin updates its email); and, for `bun run stripe:seed` only, write on prices and products.
+
 ## `--payments`: @better-auth/stripe 1.7.28 under Void 1.11.0 (2026-11-24, #82)
 
 - `bun add @better-auth/stripe@1.7.28 stripe@23.2.0` in a fresh scaffold keeps one `better-auth` (1.7.28, the version void's

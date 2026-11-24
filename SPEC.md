@@ -244,8 +244,9 @@ in `AGENTS.md`.
   while `.env` has the placeholder key, 400 `SUBSCRIPTION_NEEDS_CARD` on upgrade while a past_due or unpaid row exists; the webhook answers 400
   `STRIPE_WEBHOOK_NOT_CONFIGURED` while the secret is the placeholder) and `syncStripeEvent`, the plugin's `onEvent`: for a subscription event on
   a declared price whose customer a user holds, `created` throws (a retried 400) when the row is missing, and `updated` / `deleted` read the live
-  subscription from Stripe and write its status, cancel-at-period-end, cancel-at and period when the row differs (so an older event retried late
-  can't win); a failed read or write throws. No such user answers 200. `auth.ts` exempts
+  subscription from Stripe and write its plan (from the live price's lookup key), status, cancel-at-period-end, cancel-at and period when the row
+  differs (so an older event retried late can't win), only to a row whose `referenceId` is that user; a failed read or write throws. No such
+  user, a subscription Stripe no longer has (`resource_missing`) or a live price that is not a declared plan answers 200. `auth.ts` exempts
   `/stripe/webhook` from rate limiting. The Billing page `/billing` (linked from the Account page) reads the subscription table directly and
   shows none, active, trialing, cancelling with its end date, past_due and unpaid (portal button, no Subscribe), canceled. `scripts/stripe-seed.ts`
   (`bun run stripe:seed`) creates the declared prices by lookup key, skips existing ones and refuses live keys. `env.ts` declares

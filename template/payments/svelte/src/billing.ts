@@ -4,7 +4,7 @@ import { HTTPException } from "hono/http-exception";
 import type Stripe from "stripe";
 import { requireAuth } from "void/auth";
 import { stripe } from "@better-auth/stripe";
-import { lookupKeys, type PlanName, stripePlans } from "./plans";
+import { lookupKeys, planForLookupKey, type PlanName, stripePlans } from "./plans";
 import { PLACEHOLDER_WEBHOOK_SECRET, stripeClient, stripeConfigured } from "./stripe";
 
 // Billing on the server. The subscription table is written by Better Auth's Stripe plugin, from Stripe's webhook and the checkout success redirect,
@@ -106,7 +106,9 @@ type LiveSource = { subscriptions: { retrieve: (id: string) => Promise<Stripe.Su
 // The plugin's onEvent, called after it handled the event. Two gaps it leaves: it catches its own database errors and still answers 200 (a lost
 // write is never retried), and it writes each event's snapshot as it arrives, so a retried older event can overwrite a newer state.
 //   created: the row must exist (the checkout's own row counts); else throw so Stripe retries.
-//   updated, deleted: read the live subscription from Stripe and, if the row differs, write the live state; a failed write or read throws (retried).
+//   updated, deleted: read the live subscription from Stripe and, if the row differs, write the live state (plan, status, cancellation, period);
+//     a failed read or write throws (retried). A subscription Stripe no longer has (resource_missing) leaves nothing to sync: 200.
+// Only the row of the user who holds the event's customer is read or written, whatever row the event's metadata names.
 // Nothing throws when no user holds the event's customer (made in the dashboard, or the user was deleted with their rows): a retry could never
 // store it, and Stripe would retry for days and then disable the endpoint. A subscription on an undeclared price is left to the plugin's log.
 export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Event): Promise<void> => {
@@ -114,7 +116,7 @@ export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Even
   const sub = event.data.object;
   const keys = lookupKeys();
   if (!sub.items.data.some((i) => !!i.price.lookup_key && keys.includes(i.price.lookup_key))) return;
-  const { db, eq, or, subscriptionTable, userTable } = await store();
+  const { db, and, eq, or, subscriptionTable, userTable } = await store();
   // No user holds this customer (made in the dashboard, or the user was deleted with their rows): a retry can never store it, and Stripe would
   // retry for days and then disable the endpoint. Log it and answer 200.
   const [owner] = await db.select({ id: userTable.id }).from(userTable).where(eq(userTable.stripeCustomerId, String(sub.customer))).limit(1);
@@ -124,7 +126,8 @@ export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Even
   }
   const metaId = sub.metadata?.subscriptionId;
   const byStripeId = eq(subscriptionTable.stripeSubscriptionId, sub.id);
-  const [row] = await db.select().from(subscriptionTable).where(metaId ? or(eq(subscriptionTable.id, metaId), byStripeId) : byStripeId).limit(1);
+  const mine = eq(subscriptionTable.referenceId, owner.id);
+  const [row] = await db.select().from(subscriptionTable).where(and(mine, metaId ? or(eq(subscriptionTable.id, metaId), byStripeId) : byStripeId)).limit(1);
   if (!row) {
     // A deletion for a row we never had leaves nothing to fix; a retry could not change that.
     if (event.type === "customer.subscription.deleted") return;
@@ -132,9 +135,23 @@ export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Even
   }
   // created: the plugin skips a row the checkout already made; its status comes from checkout.session.completed or the next update.
   if (event.type === "customer.subscription.created") return;
-  const live = await client.subscriptions.retrieve(sub.id);
+  let live: Stripe.Subscription;
+  try {
+    live = await client.subscriptions.retrieve(sub.id);
+  } catch (e) {
+    if ((e as { code?: string } | null)?.code !== "resource_missing") throw e;
+    console.warn(`stripe ${event.type} for ${sub.id}: Stripe no longer has it; nothing to sync`);
+    return;
+  }
   const item = live.items.data[0];
+  // The plan comes from the live price, not the event's: a retried older event must not bring an old plan back.
+  const plan = planForLookupKey(item?.price.lookup_key);
+  if (!plan) {
+    console.warn(`stripe ${event.type} for ${sub.id}: its live price is not a declared plan; ignored`);
+    return;
+  }
   const state = {
+    plan: plan.name.toLowerCase(),
     status: live.status,
     cancelAtPeriodEnd: live.cancel_at_period_end,
     cancelAt: live.cancel_at ? new Date(live.cancel_at * 1000) : null,
@@ -142,10 +159,11 @@ export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Even
   };
   const time = (d: Date | null | undefined) => (d ? new Date(d).getTime() : null);
   const same =
+    row.plan === state.plan &&
     row.status === state.status &&
     !!row.cancelAtPeriodEnd === state.cancelAtPeriodEnd &&
     time(row.cancelAt) === time(state.cancelAt) &&
     (!item || time(row.periodEnd) === time(state.periodEnd));
   if (same) return;
-  await db.update(subscriptionTable).set(state).where(eq(subscriptionTable.id, row.id));
+  await db.update(subscriptionTable).set(state).where(and(mine, eq(subscriptionTable.id, row.id)));
 };

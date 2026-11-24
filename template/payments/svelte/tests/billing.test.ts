@@ -31,6 +31,17 @@ vi.mock("void/db", async () => {
   };
 });
 
+// A second declared plan, "business", beside whatever src/plans.ts declares, so a plan change can be tested.
+vi.mock("../src/plans", async (original) => {
+  const real = await original<typeof import("../src/plans")>();
+  const business = { name: "business", label: "Business", currency: "usd", monthly: { lookupKey: "business_monthly", amount: 5000 } };
+  return {
+    ...real,
+    lookupKeys: () => [...real.lookupKeys(), business.monthly.lookupKey],
+    planForLookupKey: (k: string | null | undefined) => (k === business.monthly.lookupKey ? business : real.planForLookupKey(k)),
+  };
+});
+
 const { currentPlan, requirePlan, syncStripeEvent } = await import("../src/billing");
 const sqlite = ((await import("void/db")) as unknown as { sqlite: { exec: (s: string) => void } }).sqlite;
 const setRows = (...rows: string[]) => sqlite.exec(`delete from subscription; ${rows.map((r) => `insert into subscription (id, plan, referenceId, stripeCustomerId, stripeSubscriptionId, status) values ${r};`).join(" ")}`);
@@ -91,10 +102,20 @@ const event = (type: string, o: { id?: string; status?: string; customer?: strin
     data: { object: { id: o.id ?? "sub_1", status: o.status ?? "active", customer: o.customer ?? "cus_1", metadata: o.metadata ?? {}, items: { data: [{ price: { lookup_key: o.lookup ?? key } }] } } },
   }) as never; // the fields the sync reads, not a whole Stripe.Event
 // Stripe's live state, as subscriptions.retrieve answers it.
-const live = { status: "active", cancel_at_period_end: false, cancel_at: null as number | null, items: { data: [{ current_period_start: 1_790_000_000, current_period_end: 1_792_592_000 }] } };
+const live = { status: "active", cancel_at_period_end: false, cancel_at: null as number | null, items: { data: [{ current_period_start: 1_790_000_000, current_period_end: 1_792_592_000, price: { lookup_key: key as string } }] } };
 const retrieved: string[] = [];
-const sync = syncStripeEvent({ subscriptions: { retrieve: async (id: string) => (retrieved.push(id), structuredClone(live)) as never } });
-const stored = () => (sqlite as unknown as { prepare: (s: string) => { get: () => { status: string; cancelAtPeriodEnd: number | null } } }).prepare("select status, cancelAtPeriodEnd from subscription where id = 's1'").get();
+const failure = { error: null as object | null }; // what subscriptions.retrieve rejects with, when set
+const sync = syncStripeEvent({
+  subscriptions: {
+    retrieve: async (id: string) => {
+      retrieved.push(id);
+      if (failure.error) throw failure.error;
+      return structuredClone(live) as never;
+    },
+  },
+});
+const rowOf = (id: string) => (sqlite as unknown as { prepare: (s: string) => { get: (id: string) => { plan: string; status: string; cancelAtPeriodEnd: number | null } } }).prepare("select plan, status, cancelAtPeriodEnd from subscription where id = ?").get(id);
+const stored = () => { const { status, cancelAtPeriodEnd } = rowOf("s1"); return { status, cancelAtPeriodEnd }; };
 
 it("syncStripeEvent: updated and deleted write Stripe's live state, so a retried older event can't overwrite a newer one", async () => {
   setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
@@ -109,6 +130,42 @@ it("syncStripeEvent: updated and deleted write Stripe's live state, so a retried
   setRows(`('s9', 'pro', 'u1', 'cus_1', null, 'incomplete')`);
   await sync(event("customer.subscription.created", { id: "sub_new", metadata: { subscriptionId: "s9" } }));
   expect(retrieved).toHaveLength(2);
+});
+
+it("syncStripeEvent: the plan comes from the live price, so a stale update can't bring the old plan back; an undeclared live price is skipped", async () => {
+  setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
+  Object.assign(live, { status: "active", cancel_at_period_end: false });
+  live.items.data[0]!.price.lookup_key = "business_monthly"; // the user switched pro -> business in Stripe
+  await sync(event("customer.subscription.updated", { lookup: key })); // a retried older event still says pro
+  expect(rowOf("s1")).toMatchObject({ plan: "business", status: "active" });
+  live.items.data[0]!.price.lookup_key = "not_declared";
+  Object.assign(live, { status: "past_due" });
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  await sync(event("customer.subscription.updated"));
+  expect(rowOf("s1")).toMatchObject({ plan: "business", status: "active" });
+  live.items.data[0]!.price.lookup_key = key;
+});
+
+it("syncStripeEvent: only the row of the user who holds the event's customer is written", async () => {
+  // The event is for u1's customer, but its metadata names another user's row.
+  setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`, `('s2', 'pro', 'u2', 'cus_2', 'sub_2', 'active')`);
+  Object.assign(live, { status: "canceled" });
+  await sync(event("customer.subscription.updated", { metadata: { subscriptionId: "s2" } }));
+  expect([rowOf("s1").status, rowOf("s2").status]).toEqual(["canceled", "active"]);
+  await expect(sync(event("customer.subscription.updated", { id: "sub_2", metadata: { subscriptionId: "s2" } }))).rejects.toThrow(/was not stored/);
+  expect(rowOf("s2").status).toBe("active");
+});
+
+it("syncStripeEvent: a failed Stripe read throws so Stripe retries; a subscription Stripe no longer has (404) does not", async () => {
+  setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
+  Object.assign(live, { status: "canceled" });
+  failure.error = Object.assign(new Error("Stripe is down"), { code: "api_error", statusCode: 500 });
+  await expect(sync(event("customer.subscription.updated"))).rejects.toThrow(/Stripe is down/);
+  failure.error = Object.assign(new Error("No such subscription"), { code: "resource_missing", statusCode: 404 });
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  await sync(event("customer.subscription.updated"));
+  expect(rowOf("s1").status).toBe("active"); // nothing written either way
+  failure.error = null;
 });
 
 it("syncStripeEvent: a lost write for a known customer throws so Stripe retries", async () => {

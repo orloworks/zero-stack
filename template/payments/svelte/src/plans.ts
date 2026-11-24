@@ -20,6 +20,9 @@ export const planNamed = (name: string): Plan | undefined => all.find((p) => p.n
 // Every lookup key a declared plan uses.
 export const lookupKeys = (): string[] => all.map((p) => p.monthly.lookupKey);
 
+// The declared plan a Stripe price belongs to, by its lookup key.
+export const planForLookupKey = (key: string | null | undefined): Plan | undefined => (key ? all.find((p) => p.monthly.lookupKey === key) : undefined);
+
 // The plans in the shape Better Auth's Stripe plugin takes.
 export const stripePlans = () =>
   all.map((p) => ({ name: p.name, lookupKey: p.monthly.lookupKey, ...(p.trialDays && { freeTrial: { days: p.trialDays } }) }));
