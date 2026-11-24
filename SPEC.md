@@ -236,23 +236,43 @@ in `AGENTS.md`.
     section. Generated tests: `tests/admin*.test.ts` (matcher, `userStatus`, the guard over a real Better Auth, the action
     helper, D14 page checks) and, with `--storage`, `tests/upload-guard.test.ts`.
 
-- `--payments` (svelte, spec #81; #82 is subscriptions, one-off purchases, deletion and the admin view are #83 to #85): `@better-auth/stripe`,
+- `--payments` (svelte, spec #81; #82 is subscriptions, #84 is deletion; one-off purchases and the admin view are #83 and #85): `@better-auth/stripe`,
   `stripe` and `better-auth` pinned in `PAYMENTS_DEPS` (one better-auth copy, gate-asserted). `src/plans.ts` declares plans by Stripe price lookup
   key (monthly price, optional trial days); `src/stripe.ts` builds the client and refuses `STRIPE_API_URL` off localhost;
   `src/billing.ts` holds `requirePlan` / `currentPlan` (active, trialing or past_due; read from the app's copy, never Stripe), `billingPlugins(env)`
   (the plugin plus the guard, spread into `auth.ts`), `billingGuard` (on upgrade, billing-portal, cancel and restore: 503 `STRIPE_NOT_CONFIGURED`
   while `.env` has the placeholder key, 400 `SUBSCRIPTION_NEEDS_CARD` on upgrade while a past_due or unpaid row exists; the webhook answers 400
   `STRIPE_WEBHOOK_NOT_CONFIGURED` while the secret is the placeholder) and `syncStripeEvent`, the plugin's `onEvent`: for a subscription event on
-  a declared price whose customer a user holds, `created` throws (a retried 400) when the row is missing, and `updated` / `deleted` read the live
-  subscription from Stripe and write its plan (from the live price's lookup key), status, cancel-at-period-end, cancel-at and period when the row
+  a declared price whose customer a user holds, `created` throws (a retried 400) when the row is missing (only for an event under an hour old; an older one is logged and answers 200), and `updated` / `deleted` read the live
+  subscription from Stripe and write its plan (from the lookup key of the live item that is a declared plan, wherever it sits in the list), status, cancel-at-period-end, cancel-at and period when the row
   differs (so an older event retried late can't win), only to a row whose `referenceId` is that user; a failed read or write throws. No such
-  user, a subscription Stripe no longer has (`resource_missing`) or a live price that is not a declared plan answers 200. `auth.ts` exempts
+  user or a subscription Stripe no longer has (`resource_missing`) answers 200. An `updated` or `deleted` event that carries no declared
+  price is still synced when that user already has a row for the subscription (it was moved to an undeclared price in the dashboard); one
+  with no row is ignored. A live subscription with no declared plan keeps the row's plan and still gets the live status, cancel fields and
+  period, so a canceled one can't stay active. `auth.ts` exempts
   `/stripe/webhook` from rate limiting. The Billing page `/billing` (linked from the Account page) reads the subscription table directly and
   shows none, active, trialing, cancelling with its end date, past_due and unpaid (portal button, no Subscribe), canceled. `scripts/stripe-seed.ts`
   (`bun run stripe:seed`) creates the declared prices by lookup key, skips existing ones and refuses live keys. `env.ts` declares
   `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` (required; `.env` ships `sk_test_placeholder` and `whsec_placeholder`) and optional
   `STRIPE_API_URL`. Setup: a sandbox agent step, and human steps for live Stripe plus its key and the live webhook endpoint plus its secret.
   Gate: a fake Stripe over HTTP and webhooks signed with Web Crypto HMAC; generated test `tests/billing.test.ts`.
+  - **Deleting a user** (#84). `cancelSubscriptions(env, userId)` in `src/billing.ts` runs first on both paths, ahead of the storage purge:
+    in `deleteUser.beforeDelete` (`--account-deletion`) and, as the guard's `cancelBilling` option, in the admin guard's remove-user before-hook
+    (`--admin`, after the admin and not-self checks). Better Auth's database delete hooks run after the purge, so the cancel is not there. It reads
+    the user's `stripeCustomerId` (none: nothing to do, no Stripe call), expires the customer's open Checkout sessions (one paid after the
+    deletion would start a subscription nobody owns), then lists that customer's subscriptions in Stripe (any status, not the table, so a
+    past_due one or one whose webhook hasn't arrived ends too) and cancels each that is not `canceled` or `incomplete_expired`. Sessions go
+    first, so a Checkout completed meanwhile is caught: its expire fails (retry), or its subscription is already in the list. A customer Stripe
+    doesn't have (`resource_missing` on `customer`: sandbox ids after a move to live keys, or deleted in Stripe) leaves nothing to cancel, and
+    the deletion goes ahead. That is "this key's Stripe account has no such customer", not proof nothing is billing: a key swapped to a
+    different live account leaves the old account's subscriptions running. When only the cancel fails, the sessions are already expired.
+    Fail closed: any error (the database, Stripe unreachable, a refused cancel or expire) stops the deletion with 500 `BILLING_CANCEL_FAILED` and the
+    message "Couldn't cancel the subscription in Stripe, so the account was not deleted. Try again.", which the Account page and the admin
+    user page show as it is; the user, their rows and their files are intact (subscriptions cancelled before the failing one stay cancelled,
+    and a retry skips them). After the delete, the one `databaseHooks.user.delete.after` (composed for `--admin`, or `--payments` with
+    `--account-deletion`) calls `deleteSubscriptionRows(userId)`: the plugin's rows have no foreign key; a failure there is logged, not thrown.
+    The cancel comes before the delete, so if the delete itself then fails the user remains with their subscriptions cancelled (the safe
+    direction, as with the purge). Stripe's `customer.subscription.deleted` for the cancellation then finds no user and answers 200. No `payment` table exists yet (#83).
 
 Void imports `void/email` and `void/storage` lazily in generated helpers: its plugin loads
 `auth.ts` at startup and at build time, where a top-level import fails under `vp test`.
@@ -352,7 +372,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   `nice`, shared bun cache, scaffolds skipped when the hash of pins + template is
   unchanged. The matrix (`scripts/matrix.ts`) is every framework with all its valid flags,
   bare, and solo runs per add-on: `svelte-auth`, `svelte-account-deletion`, `svelte-email`,
-  `svelte-turnstile`, `svelte-invite-only`, `svelte-admin`, `svelte-admin-storage`, `svelte-admin-invite-only`, `svelte-payments`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
+  `svelte-turnstile`, `svelte-invite-only`, `svelte-admin`, `svelte-admin-storage`, `svelte-admin-invite-only`, `svelte-payments` (with `--account-deletion`), `svelte-payments-admin`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
 - Gate checks per flag (`scripts/gate.ts`, HTTP against `vp dev`): `--auth` sign-up, sign-in,
   session, `/settings` signed in and out, wrong then right change-password, other session
   revoked, migration present, `.env` gitignored; `--email` reset mail in the dev inbox, link,
@@ -376,7 +396,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   set-password link for an unverified invite-only user); self-ban and self-delete 400; delete removes the row, sessions and files and leaves no audit entry
   holding the deleted email; the audit page newest first and `?user=`; onboarding "n of m" in the list and the steps on user detail, and onboarding rows gone with the user; feature switches: nothing set is off (401 signed out, 403 signed in), global on and off, an override in both directions, the kill switch beats an override on, the pages show the effective result and reason, an undeclared row is dropped, refused changes write no audit entry and every change is audited; settings: the getters return the declared defaults, a save of each type is read back and audited with the old and new value, an out-of-range number, a wrong type, a value outside the set, an undeclared key, a non-admin and a missing or foreign Origin are refused with no audit entry, reset restores the default with one entry, a reset at the default and the loser of two concurrent resets write nothing, an invalid stored value reads as the default and is flagged, an undeclared row is dropped; `--admin --invite-only` with no `SIGNUP_ALLOWLIST`: a database invite (exact and domain) admits at once with no restart, a lookalike and no source are refused, revoke refuses again and leaves the existing account, the reset-password re-check reads the database, send-invite lands in the dev inbox, every change is audited, a search with no account says not invited or invited, and with a secret the secret still admits, shows read-only and a revoke of a covered entry says "Still invited through SIGNUP_ALLOWLIST."; `--account-deletion` missing/empty password 400, wrong password rejected, right password deletes; `--storage` 401
   without a session, upload and download under `users/<id>/`, escaping names rejected, exactly 10 MB stored and 10 MB + 1 byte refused 413 with nothing stored (keys
-  read back from the local R2 state), object gone after account deletion. The
+  read back from the local R2 state), object gone after account deletion; `--payments` with `--account-deletion` and with `--admin`: while the fake Stripe is down (every call, or only the cancel) the deletion answers 500 `BILLING_CANCEL_FAILED` with the user, their subscription rows and (with `--storage`) their files intact, then it cancels the past_due and active subscriptions (ended ones are left alone) and expires the open Checkout session in the fake Stripe, the user, files and subscription rows go, and a late `customer.subscription.deleted` answers 200. The
   `STORAGE_PURGE_FAILED` path is covered by string tests only, not over HTTP.
 - Each wave also gets one manual svelte `/qa-only` browser pass (gstack browse) on the
   generated app, run by the controller before merge, not by the gate.

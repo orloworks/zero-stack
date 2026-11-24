@@ -92,13 +92,51 @@ export function billingGuard(opts: { configured: boolean; webhookConfigured: boo
 }
 
 // Everything auth.ts needs for billing: the Stripe plugin (with the one client) and the guard.
-export function billingPlugins(env: { STRIPE_SECRET_KEY?: unknown; STRIPE_WEBHOOK_SECRET?: unknown; STRIPE_API_URL?: unknown }) {
+export function billingPlugins(env: BillingEnv) {
   const client = stripeClient(env.STRIPE_SECRET_KEY, env.STRIPE_API_URL);
   const secret = typeof env.STRIPE_WEBHOOK_SECRET === "string" ? env.STRIPE_WEBHOOK_SECRET : "";
   return [
     stripe({ stripeClient: client, stripeWebhookSecret: secret, subscription: { enabled: true, plans: stripePlans() }, onEvent: syncStripeEvent(client) }),
     billingGuard({ configured: stripeConfigured(env.STRIPE_SECRET_KEY), webhookConfigured: !!secret && secret !== PLACEHOLDER_WEBHOOK_SECRET }),
   ];
+}
+
+type BillingEnv = { STRIPE_SECRET_KEY?: unknown; STRIPE_WEBHOOK_SECRET?: unknown; STRIPE_API_URL?: unknown };
+type CancelSource = {
+  subscriptions: { list: (p: { customer: string; status: "all"; limit: number }) => AsyncIterable<{ id: string; status: string }>; cancel: (id: string) => Promise<unknown> };
+  checkout: { sessions: { list: (p: { customer: string; status: "open"; limit: number }) => AsyncIterable<{ id: string }>; expire: (id: string) => Promise<unknown> } };
+};
+
+// Runs before a user is deleted, on both paths and ahead of the storage purge: auth.ts's deleteUser.beforeDelete and the admin guard's remove-user hook.
+// It expires the customer's open Checkout sessions first (one paid after the deletion would start a subscription nobody owns), then asks Stripe,
+// not the table, for the customer's subscriptions (a past_due one, or one whose webhook hasn't arrived, must end too) and cancels each that hasn't
+// ended. Sessions go first so a Checkout completed meanwhile is caught: its expire fails (retry), or its subscription is already in the list.
+// Fails closed: a deleted user who keeps being billed is worse than a failed deletion. No Stripe customer, or one Stripe doesn't have
+// (the app moved from sandbox to live keys, or the customer was deleted in Stripe): nothing to cancel, so the deletion goes ahead.
+export async function cancelSubscriptions(env: BillingEnv, userId: string, client: CancelSource = stripeClient(env.STRIPE_SECRET_KEY, env.STRIPE_API_URL)): Promise<void> {
+  try {
+    const { db, eq, userTable } = await store();
+    const [user] = await db.select({ customer: userTable.stripeCustomerId }).from(userTable).where(eq(userTable.id, userId)).limit(1);
+    if (!user?.customer) return;
+    for await (const open of client.checkout.sessions.list({ customer: user.customer, status: "open", limit: 100 })) await client.checkout.sessions.expire(open.id);
+    for await (const sub of client.subscriptions.list({ customer: user.customer, status: "all", limit: 100 }))
+      if (sub.status !== "canceled" && sub.status !== "incomplete_expired") await client.subscriptions.cancel(sub.id);
+  } catch (e) {
+    const err = e as { code?: string; param?: string } | null;
+    if (err?.code === "resource_missing" && err.param === "customer") return console.warn(`no Stripe customer for ${userId}; nothing to cancel`);
+    console.error(`subscription cancel failed for ${userId}`, e);
+    throw new APIError("INTERNAL_SERVER_ERROR", { code: "BILLING_CANCEL_FAILED", message: "Couldn't cancel the subscription in Stripe, so the account was not deleted. Try again." });
+  }
+}
+
+// After the user is deleted (databaseHooks.user.delete.after): the plugin's rows have no foreign key, so they don't cascade. Never throws: the user is already gone.
+export async function deleteSubscriptionRows(userId: string): Promise<void> {
+  try {
+    const { db, eq, subscriptionTable } = await store();
+    await db.delete(subscriptionTable).where(eq(subscriptionTable.referenceId, userId));
+  } catch (e) {
+    console.error(`subscription rows not deleted for ${userId}`, e);
+  }
 }
 
 type LiveSource = { subscriptions: { retrieve: (id: string) => Promise<Stripe.Subscription> } };
@@ -111,17 +149,21 @@ type LiveSource = { subscriptions: { retrieve: (id: string) => Promise<Stripe.Su
 // Only the row of the user who holds the event's customer is read or written, whatever row the event's metadata names.
 // Nothing throws when no user holds the event's customer (made in the dashboard, or the user was deleted with their rows): a retry could never
 // store it, and Stripe would retry for days and then disable the endpoint. A subscription on an undeclared price is left to the plugin's log.
+// For the same reason a missing row throws only for an event under an hour old.
 export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Event): Promise<void> => {
   if (event.type !== "customer.subscription.created" && event.type !== "customer.subscription.updated" && event.type !== "customer.subscription.deleted") return;
   const sub = event.data.object;
   const keys = lookupKeys();
-  if (!sub.items.data.some((i) => !!i.price.lookup_key && keys.includes(i.price.lookup_key))) return;
+  // An event with no declared price is ours only if we already hold a row for the subscription (moved to an undeclared price in the dashboard):
+  // its status must still follow Stripe. One we never stored is not ours.
+  const declared = sub.items.data.some((i) => !!i.price.lookup_key && keys.includes(i.price.lookup_key));
+  if (!declared && event.type === "customer.subscription.created") return;
   const { db, and, eq, or, subscriptionTable, userTable } = await store();
   // No user holds this customer (made in the dashboard, or the user was deleted with their rows): a retry can never store it, and Stripe would
   // retry for days and then disable the endpoint. Log it and answer 200.
   const [owner] = await db.select({ id: userTable.id }).from(userTable).where(eq(userTable.stripeCustomerId, String(sub.customer))).limit(1);
   if (!owner) {
-    console.warn(`stripe ${event.type} for ${sub.id}: no user has customer ${String(sub.customer)}; ignored`);
+    if (declared) console.warn(`stripe ${event.type} for ${sub.id}: no user has customer ${String(sub.customer)}; ignored`);
     return;
   }
   const metaId = sub.metadata?.subscriptionId;
@@ -130,7 +172,12 @@ export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Even
   const [row] = await db.select().from(subscriptionTable).where(and(mine, metaId ? or(eq(subscriptionTable.id, metaId), byStripeId) : byStripeId)).limit(1);
   if (!row) {
     // A deletion for a row we never had leaves nothing to fix; a retry could not change that.
-    if (event.type === "customer.subscription.deleted") return;
+    if (!declared || event.type === "customer.subscription.deleted") return;
+    // Throw (Stripe retries) only while the row's write could still be in flight. After an hour it never will be, and Stripe would retry for days.
+    if (event.created < Date.now() / 1000 - 3600) {
+      console.warn(`stripe ${event.type} ${event.id} for ${sub.id}: customer ${String(sub.customer)} (user ${owner.id}) has no row for it after an hour; ignored`);
+      return;
+    }
     throw new Error(`subscription ${sub.id} for a known customer was not stored`);
   }
   // created: the plugin skips a row the checkout already made; its status comes from checkout.session.completed or the next update.
@@ -143,15 +190,14 @@ export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Even
     console.warn(`stripe ${event.type} for ${sub.id}: Stripe no longer has it; nothing to sync`);
     return;
   }
-  const item = live.items.data[0];
+  // The plan's item, wherever it sits: an undeclared add-on can be listed first.
+  const item = live.items.data.find((i) => planForLookupKey(i.price.lookup_key)) ?? live.items.data[0];
   // The plan comes from the live price, not the event's: a retried older event must not bring an old plan back.
+  // No declared plan on the live subscription: the row keeps its plan, but its status still follows Stripe, so a canceled one can't stay active.
   const plan = planForLookupKey(item?.price.lookup_key);
-  if (!plan) {
-    console.warn(`stripe ${event.type} for ${sub.id}: its live price is not a declared plan; ignored`);
-    return;
-  }
+  if (!plan) console.warn(`stripe ${event.type} for ${sub.id}: its live price is not a declared plan; the plan stays ${row.plan}`);
   const state = {
-    plan: plan.name.toLowerCase(),
+    ...(plan && { plan: plan.name.toLowerCase() }),
     status: live.status,
     cancelAtPeriodEnd: live.cancel_at_period_end,
     cancelAt: live.cancel_at ? new Date(live.cancel_at * 1000) : null,
@@ -159,7 +205,7 @@ export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Even
   };
   const time = (d: Date | null | undefined) => (d ? new Date(d).getTime() : null);
   const same =
-    row.plan === state.plan &&
+    (!state.plan || row.plan === state.plan) &&
     row.status === state.status &&
     !!row.cancelAtPeriodEnd === state.cancelAtPeriodEnd &&
     time(row.cancelAt) === time(state.cancelAt) &&

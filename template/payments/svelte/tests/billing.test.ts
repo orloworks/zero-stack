@@ -42,7 +42,7 @@ vi.mock("../src/plans", async (original) => {
   };
 });
 
-const { currentPlan, requirePlan, syncStripeEvent } = await import("../src/billing");
+const { cancelSubscriptions, currentPlan, deleteSubscriptionRows, requirePlan, syncStripeEvent } = await import("../src/billing");
 const sqlite = ((await import("void/db")) as unknown as { sqlite: { exec: (s: string) => void } }).sqlite;
 const setRows = (...rows: string[]) => sqlite.exec(`delete from subscription; ${rows.map((r) => `insert into subscription (id, plan, referenceId, stripeCustomerId, stripeSubscriptionId, status) values ${r};`).join(" ")}`);
 const c = () => ({ req: { raw: new Request("http://localhost/") } }) as never;
@@ -132,7 +132,7 @@ it("syncStripeEvent: updated and deleted write Stripe's live state, so a retried
   expect(retrieved).toHaveLength(2);
 });
 
-it("syncStripeEvent: the plan comes from the live price, so a stale update can't bring the old plan back; an undeclared live price is skipped", async () => {
+it("syncStripeEvent: the plan comes from the live price, so a stale update can't bring the old plan back; an undeclared live price keeps the plan but still syncs the rest", async () => {
   setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
   Object.assign(live, { status: "active", cancel_at_period_end: false });
   live.items.data[0]!.price.lookup_key = "business_monthly"; // the user switched pro -> business in Stripe
@@ -142,8 +142,42 @@ it("syncStripeEvent: the plan comes from the live price, so a stale update can't
   Object.assign(live, { status: "past_due" });
   vi.spyOn(console, "warn").mockImplementation(() => {});
   await sync(event("customer.subscription.updated"));
-  expect(rowOf("s1")).toMatchObject({ plan: "business", status: "active" });
+  expect(rowOf("s1")).toMatchObject({ plan: "business", status: "past_due" });
+  // The worst case: moved to an undeclared price, then canceled. The row must not stay active.
+  Object.assign(live, { status: "canceled" });
+  await sync(event("customer.subscription.deleted"));
+  expect(rowOf("s1")).toMatchObject({ plan: "business", status: "canceled" });
   live.items.data[0]!.price.lookup_key = key;
+});
+
+it("syncStripeEvent: a stored subscription moved to an undeclared price in the dashboard and then cancelled ends canceled", async () => {
+  setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
+  const undeclared = { lookup: "not_declared" }; // every event from here on carries only the undeclared price
+  live.items.data[0]!.price.lookup_key = "not_declared";
+  Object.assign(live, { status: "active", cancel_at_period_end: false });
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  await sync(event("customer.subscription.updated", undeclared));
+  expect(rowOf("s1")).toMatchObject({ plan: "pro", status: "active" });
+  Object.assign(live, { status: "canceled" });
+  await sync(event("customer.subscription.deleted", { ...undeclared, status: "canceled" }));
+  expect(rowOf("s1")).toMatchObject({ plan: "pro", status: "canceled" });
+  // One we never stored is still not ours: no throw, no Stripe read.
+  retrieved.length = 0;
+  for (const type of ["created", "updated", "deleted"]) await sync(event(`customer.subscription.${type}`, { ...undeclared, id: "sub_dashboard" }));
+  expect(retrieved).toEqual([]);
+  live.items.data[0]!.price.lookup_key = key;
+});
+
+it("syncStripeEvent: the live item is picked by declared plan, not position, so an undeclared add-on listed first doesn't block the sync", async () => {
+  setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
+  const plan = live.items.data[0]!;
+  const addOn = { current_period_start: 1, current_period_end: 2, price: { lookup_key: "seat_addon" } };
+  live.items.data = [addOn, { ...plan, price: { lookup_key: "business_monthly" } }];
+  Object.assign(live, { status: "past_due", cancel_at_period_end: false });
+  await sync(event("customer.subscription.updated"));
+  const periodEnd = (sqlite as unknown as { prepare: (s: string) => { get: () => { periodEnd: number } } }).prepare("select periodEnd from subscription where id = 's1'").get().periodEnd;
+  expect([rowOf("s1").plan, rowOf("s1").status, new Date(periodEnd).getTime()]).toEqual(["business", "past_due", plan.current_period_end * 1000]); // the plan item's period, not the add-on's
+  live.items.data = [plan];
 });
 
 it("syncStripeEvent: only the row of the user who holds the event's customer is written", async () => {
@@ -172,6 +206,12 @@ it("syncStripeEvent: a lost write for a known customer throws so Stripe retries"
   setRows();
   await expect(sync(event("customer.subscription.created"))).rejects.toThrow(/was not stored/);
   await expect(sync(event("customer.subscription.updated"))).rejects.toThrow(/was not stored/);
+  // Only while the write could still be in flight: an event older than an hour is logged and answered 200, so Stripe can't retry it for days.
+  const at = (secondsAgo: number) => ({ ...(event("customer.subscription.updated") as object), created: Math.floor(Date.now() / 1000) - secondsAgo }) as never;
+  await expect(sync(at(3000))).rejects.toThrow(/was not stored/);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await expect(sync(at(3700))).resolves.toBeUndefined();
+  expect(warn.mock.calls.at(-1)?.[0]).toMatch(/sub_1.*cus_1/);
   setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
   Object.assign(live, { status: "unpaid" });
   session.down = true;
@@ -191,6 +231,98 @@ it("syncStripeEvent: no user with the customer, undeclared prices and other even
   await sync(event("customer.subscription.deleted"));
   await sync(event("invoice.paid"));
   expect(retrieved).toEqual([]);
+});
+
+it("cancelSubscriptions: cancels in Stripe every subscription that hasn't ended and expires open Checkout sessions, skips a user with no customer, and fails closed", async () => {
+  const subs = [{ id: "sub_a", status: "active" }, { id: "sub_p", status: "past_due" }, { id: "sub_c", status: "canceled" }, { id: "sub_x", status: "incomplete_expired" }, { id: "sub_i", status: "incomplete" }];
+  const calls: string[] = [];
+  const state = { listFails: false, cancelFails: false, sessionsFail: false, expireFails: false };
+  const client = {
+    checkout: {
+      sessions: {
+        list: (p: { customer: string; status: string }) => {
+          calls.push(`sessions ${p.customer} ${p.status}`);
+          return (async function* () {
+            if (state.sessionsFail) throw new Error("stripe down");
+            yield { id: "cs_open" };
+          })();
+        },
+        expire: async (id: string) => {
+          if (state.expireFails) throw new Error("stripe refused");
+          calls.push(`expire ${id}`);
+        },
+      },
+    },
+    subscriptions: {
+      list: (p: { customer: string; status: string }) => {
+        calls.push(`list ${p.customer} ${p.status}`);
+        return (async function* () {
+          if (state.listFails) throw new Error("stripe down");
+          yield* subs;
+        })();
+      },
+      cancel: async (id: string) => {
+        if (state.cancelFails) throw new Error("stripe refused");
+        calls.push(`cancel ${id}`);
+      },
+    },
+  };
+  const code = (p: Promise<unknown>) => p.then(() => "ok", (e) => (e as { body?: { code?: string } }).body?.code);
+  await cancelSubscriptions({}, "u1", client);
+  // Sessions first: a Checkout completed meanwhile either fails its expire or has its subscription in the list that follows.
+  expect(calls).toEqual(["sessions cus_1 open", "expire cs_open", "list cus_1 all", "cancel sub_a", "cancel sub_p", "cancel sub_i"]);
+  calls.length = 0;
+  sqlite.exec("insert into user values ('u2', 'U2', 'u2@example.com', 1, 0, 0, null)");
+  await cancelSubscriptions({}, "u2", client); // never checked out: no Stripe customer, no Stripe call
+  expect(calls).toEqual([]);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  for (const k of ["listFails", "cancelFails", "sessionsFail", "expireFails"] as const) {
+    state[k] = true;
+    expect([k, await code(cancelSubscriptions({}, "u1", client))]).toEqual([k, "BILLING_CANCEL_FAILED"]);
+    state[k] = false;
+  }
+  session.down = true; // the customer can't be read: the deletion must not go ahead unchecked
+  expect(await code(cancelSubscriptions({}, "u1", client))).toBe("BILLING_CANCEL_FAILED");
+  session.down = false;
+  // Stripe doesn't have the customer (sandbox ids after a move to live keys): nothing to cancel, so the user can still be deleted.
+  // Any other missing object still fails closed.
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const missing = (param: string) => ({ ...client, checkout: { sessions: { ...client.checkout.sessions, list: () => (async function* (): AsyncGenerator<{ id: string }> { throw Object.assign(new Error("No such customer"), { code: "resource_missing", param }); })() } } });
+  expect(await code(cancelSubscriptions({}, "u1", missing("customer")))).toBe("ok");
+  expect(await code(cancelSubscriptions({}, "u1", missing("session")))).toBe("BILLING_CANCEL_FAILED");
+});
+
+it("cancelSubscriptions: when the second cancel fails the deletion stops, and a retry cancels only what is left", async () => {
+  const subs = [{ id: "sub_a", status: "active" }, { id: "sub_p", status: "past_due" }, { id: "sub_t", status: "trialing" }];
+  const calls: string[] = [];
+  let failOn = "sub_p";
+  const client = {
+    subscriptions: {
+      list: () => (async function* () { yield* subs.map((x) => ({ ...x })); })(),
+      cancel: async (id: string) => {
+        if (id === failOn) throw new Error("stripe refused");
+        calls.push(id);
+        subs.find((x) => x.id === id)!.status = "canceled"; // Stripe remembers
+      },
+    },
+    checkout: { sessions: { list: () => (async function* () {})(), expire: async () => {} } },
+  };
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  await expect(cancelSubscriptions({}, "u1", client)).rejects.toMatchObject({ body: { code: "BILLING_CANCEL_FAILED" } });
+  expect(calls).toEqual(["sub_a"]); // stopped at the failure: sub_t was not reached
+  failOn = "";
+  await cancelSubscriptions({}, "u1", client);
+  expect(calls).toEqual(["sub_a", "sub_p", "sub_t"]); // sub_a is not cancelled twice
+});
+
+it("deleteSubscriptionRows removes that user's rows only, and never throws", async () => {
+  setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'canceled')`, `('s2', 'pro', 'u1', 'cus_1', 'sub_2', 'active')`, `('s3', 'pro', 'other', 'cus_2', 'sub_3', 'active')`);
+  await deleteSubscriptionRows("u1");
+  const left = (sqlite as unknown as { prepare: (s: string) => { all: () => { id: string }[] } }).prepare("select id from subscription").all();
+  expect(left).toEqual([{ id: "s3" }]);
+  session.down = true;
+  await expect(deleteSubscriptionRows("other")).resolves.toBeUndefined();
+  session.down = false;
 });
 
 it("stripeClient refuses STRIPE_API_URL off this machine; the placeholder key is not configured", () => {

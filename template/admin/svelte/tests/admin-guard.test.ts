@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
+import { APIError } from "better-auth/api";
 import { admin } from "better-auth/plugins";
 import { expect, it } from "vite-plus/test";
 import { adminGuard } from "../src/admin-guard";
@@ -7,7 +8,7 @@ import { adminGuard } from "../src/admin-guard";
 // The real Better Auth server API over an in-memory database: the guard's hooks run for auth.api calls exactly as for HTTP requests.
 const PW = "correct-horse-battery";
 const SLOW = 30_000; // a loaded machine: the default 5s is for tests that do not build a Better Auth instance
-function setup(opts: { purgeFails?: boolean; auditFails?: boolean } = {}) {
+function setup(opts: { purgeFails?: boolean; auditFails?: boolean; cancelFails?: boolean } = {}) {
   const db: Record<string, any[]> = { user: [], session: [], account: [], verification: [] };
   const listed = new Set<string>();
   const audit: any[] = [];
@@ -30,6 +31,9 @@ function setup(opts: { purgeFails?: boolean; auditFails?: boolean } = {}) {
         purge: async (id) => {
           if (state.purgeFails) throw new Error("r2 down");
           purged.push(id);
+        },
+        cancelBilling: async () => {
+          if (state.cancelFails) throw new APIError("INTERNAL_SERVER_ERROR", { code: "BILLING_CANCEL_FAILED", message: "stripe down" });
         },
       }),
     ],
@@ -154,6 +158,18 @@ it("delete purges the user's files first and refuses, leaving everything intact,
   expect(t.db.user!.some((u) => u.id === victim.id)).toBe(false);
   // O1: no target id, no email, no free text beyond the action and the id
   expect(t.audit).toEqual([{ actor: { id: boss.id, email: "boss@x.com" }, verb: "delete-user", target: null, detail: `deleted user ${victim.id}` }]);
+}, SLOW);
+
+it("delete cancels billing ahead of the purge: a failed cancel refuses with its own code and nothing is purged or deleted", async () => {
+  const t = setup({ cancelFails: true });
+  const boss = await t.user("boss@x.com");
+  t.listed.add("boss@x.com");
+  const victim = await t.user("victim@x.com");
+  expect(await code(t.auth.api.removeUser({ headers: boss.headers, body: { userId: victim.id } }))).toBe("BILLING_CANCEL_FAILED");
+  expect([t.purged, t.audit, t.db.user!.some((u) => u.id === victim.id)]).toEqual([[], [], true]);
+  t.state.cancelFails = false;
+  expect(await status(t.auth.api.removeUser({ headers: boss.headers, body: { userId: victim.id } }))).toBe(200);
+  expect(t.purged).toEqual([victim.id]);
 }, SLOW);
 
 it("a self-delete is refused before anything is purged", async () => {
