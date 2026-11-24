@@ -5,6 +5,7 @@ import { argv, FEATURE_LIST, type FlagInput, parseFeature, validateFlags } from 
 import { closingLines } from "./closing";
 import { clackUi, fillPrompts } from "./prompts";
 import { preflight, scaffold } from "./pipeline";
+import { upgrade } from "./upgrade";
 
 const USAGE = `Usage: create-zero-stack <directory> [--framework react|vue|svelte|solid] ${FEATURE_LIST.map((f) => `[${argv(f).join(" ")}]`).join(" ")}`;
 
@@ -18,6 +19,10 @@ try {
   });
   if (positionals.length > 1) throw new Error(USAGE);
   preflight();
+  if (positionals[0] === "upgrade") {
+    if (Object.keys(values).length) throw new Error("upgrade takes no arguments: run `bunx github:orloworks/zero-stack#v<new> upgrade` in the app.");
+    process.exit(await upgrade(process.cwd()));
+  }
   const interactive = !!process.stdin.isTTY && !!process.stdout.isTTY;
   if (!positionals.length && !interactive) throw new Error(USAGE);
   let input: Partial<FlagInput> = {

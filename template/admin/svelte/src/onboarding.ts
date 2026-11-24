@@ -1,8 +1,9 @@
 // Onboarding progress: the steps your app declares, and which of them each user has reached. Pages call these functions, never the onboarding_step table.
-// Declare a step by adding its name to STEPS; mark it for a user with `await markStep(userId, "name")` where your code knows they reached it.
+// Declare a step in src/app/onboarding.ts (this file never changes for that); mark it for a user with `await markStep(userId, "name")` where your code knows they reached it.
 // "Signed up" and "Email verified" are derived from the user row, never stored, so they cannot drift (E14).
-// The scaffold ships one example step: replace it with your own, or empty the list to hide the Users column and the user detail section.
-export const STEPS = ["example-step"] as const;
+import { STEPS } from "./app/onboarding";
+
+export { STEPS };
 export type Step = (typeof STEPS)[number];
 
 export const showOnboarding = STEPS.length > 0;

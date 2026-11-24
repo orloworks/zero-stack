@@ -142,3 +142,8 @@ test("--admin is refused on react, vue and solid, naming svelte", () => {
       `--admin requires --framework svelte (got ${framework}); drop --admin or use --framework svelte.`,
     );
 });
+
+test("upgrade is reserved: refused as an app name, with the reason", () => {
+  expect(() => validateFlags({ name: "upgrade" })).toThrow(/reserved.*command that upgrades the app/);
+  expect(validateFlags({ name: "upgrade-me" }).config.name).toBe("upgrade-me");
+});

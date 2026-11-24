@@ -2,6 +2,37 @@
 
 Two separate things change over time: the packages in your app, and the files zero-stack generated for you. Upgrade them one at a time.
 
+## 0. The upgrade command (svelte apps with a `.zero-stack/` folder)
+
+A svelte app made with a zero-stack that records a manifest has a `.zero-stack/` folder (commit it). Upgrade it in one command, from the app's folder, with a clean git tree (commit or stash first; untracked files count):
+
+```bash
+bunx github:orloworks/zero-stack#v<new-version> upgrade
+```
+
+It scaffolds the new version with the flags the manifest recorded into `.zero-stack/upgrade-tmp` (removed afterwards) and prints one line per file it changed:
+
+- an untouched file is **replaced** by the new version;
+- a file you edited and the new version also changed is **merged** (your edits stay); a line you both changed is left as conflict markers (`<<<<<<< your app` ... `>>>>>>> zero-stack <new> (new)`), listed as `CONFLICT`, and the command exits 1;
+- a file the new version added is **added** when nothing is at that path; one it removed is **removed** when you never edited it;
+- a file you deleted stays deleted.
+
+It never commits, never touches `.env` or your migrations, and never runs a migration. When the database schema changed it says so: run `void db generate` and read the migration before you deploy. After it runs, read `git diff`, run `bun install` if `package.json` changed, run `bun run verify`, and commit.
+
+**To undo it**, in the app's folder: `git checkout .` and `git clean -fd` (the tree was clean before, so that removes only what the upgrade added).
+
+Files that start with "Scaffold-owned by zero-stack" are maintained by zero-stack: put your changes in your own files (`AGENTS.md` lists which are which; the onboarding steps live in `src/app/onboarding.ts`). An edit in a scaffold-owned file is merged like any other, but it will keep meeting upstream changes.
+
+An app without `.zero-stack/` (made before it existed, or react, vue or solid) is not on the upgrade path: use the manual method below, and for a svelte app port it once.
+
+### Port an older svelte app
+
+1. Apply the template diff by hand (section 2 below).
+2. Scaffold a fresh app of the same version with the same name and flags, and copy its `.zero-stack/` folder into yours. Add `.zero-stack/upgrade-tmp` to your `.gitignore`.
+3. Commit. From then on, `upgrade` works; it lists anything the port missed as a merge or a conflict.
+
+Two separate things change over time: the packages in your app, and the files zero-stack generated for you. Upgrade them one at a time.
+
 ## 1. Packages
 
 Dependencies live in your app's own `package.json`. Update them there as you would in any project.

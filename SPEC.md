@@ -44,6 +44,29 @@ tests/
    in `src/versions.ts` (empty since create-void 1.11.0; see `docs/facts.md`).
 8. Write the routing block into `AGENTS.md` and a `.mcp.json` with the Cloudflare Docs
    MCP (`https://docs.mcp.cloudflare.com/mcp`). Re-run `bun install` if deps changed.
+9. Svelte only (react, vue and solid output is unchanged, byte for byte). The formatting run of step 6 happens last, after step 8 and the setup files; around it:
+   before it, add the notice to every scaffold-owned file (`src/ownership.ts`: one path rule; a comment on line 1, on line 2 under a shebang, an HTML comment in a svelte or markdown file; none in JSON)
+   and add `.zero-stack/upgrade-tmp` to the app's `.gitignore`; after it, write `.zero-stack/manifest.json` and `.zero-stack/base.json` (`src/manifest.ts`).
+
+## Upgrade seam (svelte; spec #100, ADR 0001 and 0002)
+
+- **Manifest** (`.zero-stack/manifest.json`): `formatVersion` (1), `zeroStack` (the version), `config` (exactly what `scaffold()` takes: name, framework, every flag) and
+  `migrations` (sha256 of `db/migrations/*.sql` in name order, null with none). The SQL is byte-identical between two scaffolds; names, timestamps and the journal differ, so only the SQL is hashed (`docs/facts.md`).
+- **Base copy** (`.zero-stack/base.json`): every generated file by path as `{ mode, encoding, content }` (`utf8`, or `base64` for binary), as zero-stack wrote it after formatting.
+  One fixed skip list (`skipped` in `src/manifest.ts`): `.env` and `.env.*`, `node_modules`, `.git`, `dist`, `.void`, `.void-wrangler.jsonc`, `.wrangler`, `.cloudflare`,
+  `bun.lock`, `db/migrations`, `*.tsbuildinfo`, `.DS_Store`, and `.zero-stack/` itself. Both files are `JSON.stringify(_, null, 2)` so `vp check` (which scans the folder) passes.
+- **Ownership** (`scaffoldOwned` in `src/ownership.ts`): scaffold-owned are `auth.ts`, `src/` except `src/app/`, `pages/admin/` except `layout.svelte`, `routes/admin/`,
+  `routes/api/admin/`, `routes/api/files/[name].ts`, `middleware/10.admin.ts`, `db/schema/`, `tests/`, `scripts/` and `docs/setup.md`. Everything else is app-owned.
+  Ownership is a label (the notice, `AGENTS.md`, the report); it does not decide what an upgrade overwrites.
+- **`upgrade`** (`bunx github:orloworks/zero-stack#v<new> upgrade`, in the app; `upgrade` is not a valid app name; no options). Refuses, changing nothing, with no manifest, outside a git
+  work tree, or with uncommitted or untracked changes. Scaffolds the running version with the manifest's configuration into `.zero-stack/upgrade-tmp/<name>` (removed first if
+  left over, and always after), decides every file from (the app's file, the base copy, the new version's copy), then writes: untouched, replaced (new file mode); unchanged upstream, left; both changed,
+  `git merge-file` with labels `your app` / `zero-stack <old> (your last upgrade)` / `zero-stack <new> (new)`, conflicts left as markers, listed, exit 1; new, written when the path is free and merged against an empty base when not;
+  removed upstream, deleted when untouched and kept when edited; deleted by the app, stays deleted; binary changed on both sides, or a file/folder clash, kept and listed. A merge error aborts before any write.
+  It then replaces the manifest and base copy with the new scaffold's, prints one line per changed file and, when the migration hash changed, the `void db generate` reminder.
+  It never commits, never touches `.env` or migrations, and writes only inside the app (a recorded path with `..` or an absolute path is refused).
+- **Gate** (`svelte-upgrade` in `scripts/matrix.ts`; the gate-only flag `--upgrade`; logic in `scripts/gate.ts`, so the `ci:full` hash covers it): scaffold, edit `src/app/onboarding.ts`, age the app four ways,
+  run the upgrade, assert exit 0, no conflict, scaffold-owned files and `.zero-stack/` equal to a fresh scaffold's, the edit intact, and `bun run verify` green.
 
 ## Flags
 
@@ -200,7 +223,7 @@ in `AGENTS.md`.
     A Users search with no account in an invite-only app adds "x@y.com is not invited. Invite them" (opening Invites with the email filled in) or "Invited, but hasn't signed up
     yet."; an unverified user's status line says "Not invited (removed from the list)" when no source covers them. Generated tests: `tests/invites.test.ts`
     (`inviteAllowed`: env hit, database exact, database domain, lookalike refused, miss; entry parsing; the D6 copy) `tests/invites-db.test.ts` (the real queries on in-memory SQLite: concurrent revokes and adds, a send racing a revoke, the 60-second resend, the domain note) and `tests/invites-pages.test.ts`.
-  - **Onboarding** (`--admin`, #53; E14, D20). `STEPS` in `src/onboarding.ts` (the scaffold ships `example-step`), `markStep(userId, step)` (first time only;
+  - **Onboarding** (`--admin`, #53; E14, D20). `STEPS` is declared in `src/app/onboarding.ts` (the scaffold ships `example-step`; a data-only declaration file) and re-exported from `src/onboarding.ts`, which also has `markStep(userId, step)` (first time only;
     an undeclared name throws) and `progressFor(users)` (from rows the page already has); `onboarding_step` (user id `cascade`, step, reached at; primary key user and step). "Signed up" and
     "Email verified" come from the user row and are never stored. The Users list shows "n of m" in an Onboarding column and user detail the steps; both are
     hidden when `STEPS` is empty. Test: `tests/onboarding.test.ts`.

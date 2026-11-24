@@ -7,6 +7,7 @@ import { installShadcn } from "../../src/installers/shadcn";
 import { installZodRpc } from "../../src/installers/zod-rpc";
 import { installTailwind } from "../../src/installers/tailwind";
 import { scaffold } from "../../src/pipeline";
+import { listFiles } from "../../src/manifest";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "zs-test-"));
 const cfg = { name: "app", framework: "react", tailwind: false, shadcn: false, zodRpc: false, auth: false } as const;
@@ -272,11 +273,28 @@ test("svelte --auth ships /settings with its loader, a plain composed auth.ts an
   const { dir, run } = authApp("svelte");
   await run();
   expect(readdirSync(join(dir, "pages")).sort()).toEqual(["settings.server.ts", "settings.svelte", "sign-in.svelte", "sign-up.svelte"]);
-  expect(readFileSync(join(dir, "auth.ts"), "utf8")).toBe(
+  expect(readFileSync(join(dir, "auth.ts"), "utf8")).toStartWith("// Scaffold-owned by zero-stack"); // the notice is added by the pipeline; the composed text follows it
+  expect(readFileSync(join(dir, "auth.ts"), "utf8").replace(/^\/\/ Scaffold-owned by zero-stack[^\n]*\n/, "")).toBe(
     'import { defineAuth } from "void/auth";\n\nexport default defineAuth(({ defaults }) => ({\n  ...defaults,\n  rateLimit: { storage: "database" },\n}));\n',
   );
   expect(readFileSync(join(dir, "pages/settings.svelte"), "utf8")).toContain("<!-- zero-stack:account-deletion -->");
   expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain("`/settings`");
+});
+
+test("a svelte scaffold writes the manifest and base copy last, with notices; react, vue and solid get no .zero-stack/ and no notice", async () => {
+  for (const fw of ["react", "vue", "solid", "svelte"] as const) {
+    const { dir, run } = authApp(fw);
+    await run();
+    const files = listFiles(dir);
+    expect(existsSync(join(dir, ".zero-stack"))).toBe(fw === "svelte");
+    expect(files.filter((f) => readFileSync(join(dir, f), "utf8").includes("Scaffold-owned by zero-stack")).length > 0).toBe(fw === "svelte");
+    if (fw !== "svelte") continue;
+    const base = JSON.parse(readFileSync(join(dir, ".zero-stack/base.json"), "utf8"));
+    expect(Object.keys(base)).toEqual(files); // every generated file, and nothing the skip list holds back
+    expect(Object.keys(base)).not.toContain(".env");
+    for (const f of files) expect([f, base[f].content]).toEqual([f, readFileSync(join(dir, f), "utf8")]); // written after the last change to any file
+    expect(JSON.parse(readFileSync(join(dir, ".zero-stack/manifest.json"), "utf8"))).toMatchObject({ formatVersion: 1, config: { name: "app", framework: "svelte", auth: true } });
+  }
 });
 
 test("svelte --account-deletion adds the Delete account section, deleteUser in auth.ts and the AGENTS.md rules; absent without the flag", async () => {
@@ -586,7 +604,8 @@ test("--admin --invite-only puts invites in the database: table, module, page, r
   const agents = read("AGENTS.md");
   for (const t of ["Invites live in the database", "SIGNUP_ALLOWLIST\` is **optional**", "Revoking an invite never touches an existing account", "### Onboarding", "markStep(userId", "invite.added_by_user_id"]) expect([t, agents.includes(t)]).toEqual([t, true]);
   expect(agents).not.toContain("${");
-  expect(read("src/onboarding.ts")).toContain("export const STEPS");
+  expect(read("src/app/onboarding.ts")).toContain("export const STEPS"); // the declaration file; the module imports and re-exports it
+  expect(read("src/onboarding.ts")).toContain('import { STEPS } from "./app/onboarding"');
   expect(read("db/schema/admin.ts")).toContain('"onboarding_step"');
 });
 

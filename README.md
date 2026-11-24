@@ -116,7 +116,7 @@ Never create wrangler files. Void generates the Worker config and migrates a roo
 
 ## Upgrading
 
-`docs/upgrading.md` explains how to move an existing app to a newer zero-stack.
+A svelte app made with this version carries a `.zero-stack/` record, and `bunx github:orloworks/zero-stack#v<new> upgrade` (run in the app, clean git tree) moves it to a newer zero-stack and merges every file. `docs/upgrading.md` explains it, how to undo it, and the manual method for older, react, vue and solid apps.
 
 ## Development
 

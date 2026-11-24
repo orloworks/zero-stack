@@ -7,6 +7,8 @@ import { installAdmin } from "./installers/admin";
 import { installAuth } from "./installers/auth";
 import { installPayments } from "./installers/payments";
 import { ignoreLine } from "./installers/shared";
+import { addNotices } from "./ownership";
+import { UPGRADE_TMP, writeRecord } from "./manifest";
 import { writeSetupFiles } from "./setup";
 import { installStorage } from "./installers/storage";
 import { installShadcn } from "./installers/shadcn";
@@ -103,8 +105,15 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     if (config.auth) await exec([join(targetDir, "node_modules/.bin/void"), "db", "generate"], targetDir);
     writeAgentFiles(targetDir, config); // before vp check so the block gets formatted too
     writeSetupFiles(targetDir, config);
+    // Svelte apps record what they were made from (react, vue and solid stay as v0.1): the notice goes on before formatting, the record after it.
+    const record = config.framework === "svelte";
+    if (record) {
+      ignoreLine(targetDir, UPGRADE_TMP);
+      addNotices(targetDir);
+    }
     // create-void output fails its own `vp check` on formatting (docs/facts.md).
     await exec([join(targetDir, "node_modules/.bin/vp"), "check", "--fix"], targetDir);
+    if (record) writeRecord(targetDir, config);
   } catch (e) {
     cleanup();
     throw e;
