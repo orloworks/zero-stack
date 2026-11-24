@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.1 (2026-11-24)
+
+Run it with `bunx github:orloworks/zero-stack#v0.4.1 <dir>`.
+
+- **create-void 1.11.0** (was 1.8.0). Both version overrides are gone. better-auth stays on 1.7.x. Void's auth wiring now forwards cookies that `auth.api.*` calls in routes set (1.8.0 dropped them), and its cross-site cookie check is stricter: it now covers WebSocket upgrades.
+- **Staying current:** `bun scripts/bump-void.ts` moves the pin to the latest create-void in one command, and lists what moved under it. `bun run ci` prints a one-line note when a newer create-void is out. It never fails.
+
 ## v0.4.0 (2026-11-23)
 
 Run it with `bunx github:orloworks/zero-stack#v0.4.0 <dir>`.
