@@ -175,7 +175,7 @@ try {
       const calls = readFileSync(log, "utf8");
       // Only fakes and the offline local checks ran; no write, deploy, connect or network call.
       if (/^(curl|void (connect|deploy|secret put|cloudflare login))/m.test(calls)) throw new Error(`doctor made an account call:\n${calls}`);
-      console.log(`gate: doctor, ${want.length} rows: local PASS, "${connect}" FAIL, exit 1, no account call`);
+      console.log(`gate: doctor, ${want.length} rows each as expected ("${connect}" FAIL), signed-out run NOT CHECKED after step 1, exit 1, no account call`);
 
       // A required env key missing flips the env row; adding it flips it back.
       const envTs = join(app, "env.ts"), dotEnv = join(app, ".env");

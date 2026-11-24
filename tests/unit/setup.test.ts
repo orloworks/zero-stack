@@ -224,7 +224,8 @@ function doctorRun(c: ReturnType<typeof cfg>, env: Record<string, string> = {}, 
     "#!/bin/sh",
     'echo "$(basename "$0") $*" >> "$FAKE_LOG"',
     `echo ${SENTINEL}; echo ${SENTINEL} >&2`,
-    '[ "$1 $2" = "secret list" ] && [ -n "$SLOW" ] && { echo $$ > "$FAKE_LOG.pid"; exec sleep 30; }',
+    // HANG="secret list": that command never returns. HANG_MODE=child makes it spawn its own child first; otherwise it ignores ALRM and exec's sleep.
+    '[ -n "$HANG" ] && [ "$1 $2" = "$HANG" ] && { if [ -n "$HANG_CHILD" ]; then sleep 30 & echo "$$ $!" > "$FAKE_LOG.pid"; wait; else trap "" ALRM; echo $$ > "$FAKE_LOG.pid"; exec sleep 30; fi; }',
     '[ "$1 $2" = "secret list" ] && { echo "$LISTED"; exit 0; }',
     '[ "$1 $2" = "cloudflare status" ] && exit "${CF_STATUS:-0}"',
     '[ "$1 $2" = "auth whoami" ] && echo \'"authenticated": true\'',
@@ -287,15 +288,34 @@ test("doctor: migration drift fails the migrations row, even when the summary li
   expect(r.code).toBe(1);
 });
 
-test("doctor: a row that outlives the limit is FAIL with a timed-out line, and its child CLI is killed", async () => {
-  const r = doctorRun(cfg({ admin: true }), { SLOW: "1", DOCTOR_LIMIT: "1" });
+// A hung CLI must not hang the doctor, and nothing it started may survive: every pid the fake wrote is dead afterwards.
+async function expectKilled(r: ReturnType<typeof doctorRun>) {
+  const pids = readFileSync(join(r.dir, "calls.log.pid"), "utf8").trim().split(" ").map(Number);
+  const alive = (p: number) => { try { process.kill(p, 0); return true; } catch { return false; } };
+  for (let i = 0; i < 30 && pids.some(alive); i++) await Bun.sleep(100);
+  expect(pids.filter(alive)).toEqual([]);
+}
+
+test("doctor: a CLI that ignores ALRM and is exec'd directly times out FAIL, and is killed", async () => {
+  const t = Date.now();
+  const r = doctorRun(cfg(), { HANG: "cloudflare status", DOCTOR_LIMIT: "1" });
+  expect(Date.now() - t).toBeLessThan(15_000);
+  expect(r.out).toContain("FAIL         1. Sign in to Cloudflare\n               fix: timed out after 1s");
+  expect(r.code).toBe(1);
+  await expectKilled(r);
+}, 30_000);
+
+test("doctor: a CLI inside $(...) (the migrations row) is killed on timeout", async () => {
+  const r = doctorRun(cfg(), { HANG: "db status", DOCTOR_LIMIT: "1" });
+  expect(r.out).toContain("FAIL         Local migrations (void db status)\n               fix: timed out after 1s");
+  await expectKilled(r);
+}, 30_000);
+
+test("doctor: a CLI's own child process is killed on timeout too", async () => {
+  const r = doctorRun(cfg({ admin: true }), { HANG: "secret list", HANG_CHILD: "1", DOCTOR_LIMIT: "1" });
   const n = stepsFor(cfg({ admin: true })).findIndex((s) => s.id === "admin-emails") + 1;
   expect(r.out).toContain(`FAIL         ${n}. Set the admin emails\n               fix: timed out after 1s`);
-  expect(r.code).toBe(1);
-  const pid = Number(readFileSync(join(r.dir, "calls.log.pid"), "utf8"));
-  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  for (let i = 0; i < 20 && alive(); i++) await Bun.sleep(100);
-  expect(alive()).toBe(false);
+  await expectKilled(r);
 }, 30_000);
 
 test("the Set the sending address step fails when void.config.ts is missing", () => {

@@ -270,18 +270,20 @@ ${ROOT}export APP_NAME="\${APP_NAME:-${c.name}}"
 LIMIT="\${DOCTOR_LIMIT:-30}"
 PASSED=0; FAILED=0; UNCHECKED=0; BLOCK=""
 
-# probe CMD: exit 0 when CMD passes. No stdin, no output. After LIMIT seconds the shell is stopped with SIGALRM (status 142, so a timeout is
-# told from a failure) and its child processes (the CLIs of a pipeline) are killed with it.
+# tree PID: PID and every descendant, listed before anything is signalled (a killed parent would orphan its children from pgrep).
+tree() { local c; for c in $(pgrep -P "$1"); do tree "$c"; done; printf '%s ' "$1"; }
+# probe CMD: exit 0 when CMD passes. No stdin, no output. After LIMIT seconds the whole process tree gets TERM, then KILL a second later;
+# a failure that took the full LIMIT is reported as a timeout.
 probe() {
   TIMEDOUT=0
+  local t=$SECONDS
   bash -c "$1" </dev/null >/dev/null 2>&1 &
   local p=$!
-  ( i=0; while kill -0 "$p" 2>/dev/null && (( i < LIMIT )); do sleep 1; i=$((i + 1)); done
-    if kill -0 "$p" 2>/dev/null; then kids=$(pgrep -P "$p"); kill -ALRM "$p"; [[ -z "$kids" ]] || kill $kids; fi ) >/dev/null 2>&1 &
+  ( i=0; while kill -0 "$p" && (( i < LIMIT )); do sleep 1; i=$((i + 1)); done
+    if kill -0 "$p"; then all=$(tree "$p"); kill $all; sleep 1; kill -9 $all; fi ) >/dev/null 2>&1 &
   local w=$!
-  wait "$p"; local rc=$?
-  kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
-  if (( rc == 142 )); then TIMEDOUT=1; fi
+  wait "$p" 2>/dev/null; local rc=$?
+  if (( rc && SECONDS - t >= LIMIT )); then TIMEDOUT=1; wait "$w" 2>/dev/null; else kill "$w" 2>/dev/null; wait "$w" 2>/dev/null; fi
   return $rc
 }
 # row LABEL FIX CMD [SIGNIN [NEEDS_ENV]]: SIGNIN=1 blocks every later row when it fails; NEEDS_ENV is an env var CMD cannot run without.
@@ -297,7 +299,7 @@ row() {
 }
 
 ${row("Local env (void env check)", "void env check", "void env check")}
-${row("Local migrations (void db status)", "void db migrate", `out=$(void db status) && ! grep -q 'pending locally' <<<"$out" && ! grep -qi drift <<<"$out" && grep -Eq '^ *[0-9]+ migrations?$' <<<"$out"`)}
+${row("Local migrations (void db status)", "void db migrate", `out=$(void db status) && ! grep -q 'pending locally' <<<"$out" && ! grep -qi 'drift detected' <<<"$out" && grep -Eq '^ *[0-9]+ migrations?$' <<<"$out"`)}
 ${steps.join("\n")}
 ${row("Remote env names (void env check --remote)", "void env check --remote", "void env check --remote")}
 
