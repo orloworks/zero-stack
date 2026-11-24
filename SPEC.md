@@ -192,7 +192,7 @@ in `AGENTS.md`.
     nav entry after Users) adds an exact email or a whole domain with inline validation and the "Anyone at @x.com can sign up" preview, lists
     "Added here" with Revoke and, for exact emails, Send invite, and the secret's entries read-only. Routes: `POST /api/admin/invites`,
     `POST /api/admin/invites/:id/revoke` and `/send` (admin, same-origin). Add and revoke write the change and their audit entry in one `db.batch`;
-    send mails the sign-up link (`send()`, subject "Your invitation") and then writes `last_sent_at` and its audit entry in one batch. One entry per change that happened (spec #51, PR #67 review): the audit insert in the batch selects from the invite row, so a revoke or send that lost a race writes nothing and
+    send mails the sign-up link (`send()`, subject "Your invitation to <host>", body naming the host and saying to sign up with that email) and then writes `last_sent_at` and its audit entry in one batch. One entry per change that happened (spec #51, PR #67 review): the audit insert in the batch selects from the invite row, so a revoke or send that lost a race writes nothing and
     answers 404; a concurrent duplicate add hits UNIQUE(entry) and answers 409; a resend within 60 seconds of `last_sent_at` is 429 "An invite was just sent. Try again in a minute." Copy: "Invited x@y.com." /
     "Invited anyone at @x.com." / "Invite removed." / "Invite email requested for x@y.com."; a revoke also says "Still invited through SIGNUP_ALLOWLIST."
     when the secret covers the entry and "Still invited through @x.com." when a remaining domain invite admits the address, and always "Existing accounts are not affected. Ban the user to block them." (an existing account is never touched).

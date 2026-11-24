@@ -11,9 +11,13 @@
   let wrongCurrent = $state(false);
   let done = $state(false);
 
+  let signOutFailed = $state(false);
+
   async function signOut() {
-    await auth.signOut();
-    window.location.href = "/sign-in";
+    // The client returns an error instead of throwing; only leave the page once the session is really ended.
+    const res = await auth.signOut().catch(() => ({ error: true }));
+    signOutFailed = !!res.error;
+    if (!signOutFailed) window.location.href = "/sign-in";
   }
 
   async function changePassword(e: SubmitEvent) {
@@ -45,6 +49,7 @@
     <h1 tabindex="-1">Account</h1>
     <p>Signed in as {user.email}</p>
     <p><button type="button" onclick={signOut}>Sign out</button></p>
+    {#if signOutFailed}<p role="alert">Couldn't sign out. Check your connection and try again.</p>{/if}
     <section aria-labelledby="change-password-title">
       <h2 id="change-password-title">Change password</h2>
       <form onsubmit={changePassword}>
