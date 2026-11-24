@@ -1468,12 +1468,13 @@ try {
           const put = await fetch(`${b}/api/files/keep.txt`, { method: "PUT", body: "keep", headers: { cookie, "content-type": "text/plain" } });
           check(put.status === 201 && r2Keys().includes(file), `${how}: the doomed user's upload -> ${put.status}`);
         }
-        // Stripe is down: the deletion stops with the code and message the pages show; the user, their rows, their files and Stripe are untouched.
+        // Stripe is down: the deletion stops with the code and message the pages show; the user, their rows, their files and their subscriptions are
+        // untouched. Checkout sessions are expired first, so when only the cancel fails the open session is already expired (a retry is safe).
         fake.down = outage;
         const refused = await remove(d), why = (await refused.json()) as Obj;
         fake.down = "";
         check(refused.status === 500 && why.code === "BILLING_CANCEL_FAILED" && why.message === "Couldn't cancel the subscription in Stripe, so the account was not deleted. Try again.", `${how} with Stripe down (${outage}) -> ${refused.status} ${JSON.stringify(why)}`);
-        check(userRow(mail) && subRows(uid).length === 1 && statuses() === "past_due,active,canceled,incomplete_expired" && checkout.status === "open", `${how} with Stripe down deleted the user or their rows, or cancelled something`);
+        check(userRow(mail) && subRows(uid).length === 1 && statuses() === "past_due,active,canceled,incomplete_expired" && checkout.status === (outage === "all" ? "open" : "expired"), `${how} with Stripe down deleted the user or their rows, or cancelled something`);
         check(!config.storage || r2Keys().includes(file), `${how} with Stripe down purged the user's files`);
         // Stripe is back: every subscription that hadn't ended is cancelled (past_due included, the ended ones left alone), then the user, rows and files go.
         const mark = fake.calls.length;

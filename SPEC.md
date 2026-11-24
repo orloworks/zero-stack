@@ -264,7 +264,8 @@ in `AGENTS.md`.
     past_due one or one whose webhook hasn't arrived ends too) and cancels each that is not `canceled` or `incomplete_expired`. Sessions go
     first, so a Checkout completed meanwhile is caught: its expire fails (retry), or its subscription is already in the list. A customer Stripe
     doesn't have (`resource_missing` on `customer`: sandbox ids after a move to live keys, or deleted in Stripe) leaves nothing to cancel, and
-    the deletion goes ahead.
+    the deletion goes ahead. That is "this key's Stripe account has no such customer", not proof nothing is billing: a key swapped to a
+    different live account leaves the old account's subscriptions running. When only the cancel fails, the sessions are already expired.
     Fail closed: any error (the database, Stripe unreachable, a refused cancel or expire) stops the deletion with 500 `BILLING_CANCEL_FAILED` and the
     message "Couldn't cancel the subscription in Stripe, so the account was not deleted. Try again.", which the Account page and the admin
     user page show as it is; the user, their rows and their files are intact (subscriptions cancelled before the failing one stay cancelled,
