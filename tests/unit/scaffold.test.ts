@@ -1,3 +1,4 @@
+import { ADMIN_TEST_DEV_DEPS } from "../../src/versions";
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, chmodSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -541,7 +542,7 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
   expect(read("pages/admin/layout.svelte")).toContain('const APP_NAME = "app";');
   expect(read("src/admin.ts")).toContain("export const INVITE_ONLY = false;");
   // tests/onboarding.test.ts imports these directly, so the app declares them (#74).
-  expect(JSON.parse(read("package.json")).devDependencies).toMatchObject({ "better-sqlite3": "^13.2.0", "drizzle-orm": "^0.45.4" });
+  expect(JSON.parse(read("package.json")).devDependencies).toMatchObject(ADMIN_TEST_DEV_DEPS);
   expect(read("env.ts")).toContain('ADMIN_EMAILS: string().default(""),');
   expect(read(".env")).toContain("\nADMIN_EMAILS=@example.com\n");
   const account = read("pages/settings.svelte");
