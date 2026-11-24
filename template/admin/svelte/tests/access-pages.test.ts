@@ -38,5 +38,5 @@ it("user detail has a labelled select per feature with Use global, On and Off, a
 it("the pages take the effective result from access.ts and keep no precedence of their own", () => {
   const loader = read("pages/admin/users/[id].server.ts");
   expect(loader).toContain("sw.effective(name).reason");
-  for (const src of [loader, read("pages/admin/features.server.ts"), page, detail]) expect(src).not.toMatch(/\bkill\b.*(===|!==)|\bdecide\b|\bresolve\b|\.plan\.has/);
+  for (const src of [loader, read("pages/admin/features.server.ts"), page, detail]) expect(src).not.toMatch(/\bkill\b.*(===|!==)|(===|!==)\s*"kill"|\bdecide\b|\bresolve\b|\.plan\.has|\bfeaturesForPlan\b|\bcurrentPlan\b|\brequirePlan\b/);
 });
