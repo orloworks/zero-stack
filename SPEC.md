@@ -371,6 +371,12 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
 - M3: routing doc, `AGENTS.md` block, `.mcp.json`, `link-skill`. Manual `npm publish`
   of `create-zero-stack` v0.1.0 only after `ci:full` is green.
 
+- MVP freeze (owner, 2026-11-21): no new features after `--secrets infisical` (#38) and
+  `--invite-only` (#43). Then a dogfood run (a real svelte app with secrets and the invite gate,
+  a real Infisical project, a real deploy, both specs' post-deploy checks), fixes for what it
+  breaks, a version bump, and a manual `npm publish`. Issues labelled `post-mvp` wait until a
+  real app needs them.
+
 ## Non-goals for v0.1.0 (revisit in v0.2)
 
 AI / Durable Object installers (R2 storage and Turnstile shipped in wave 1), `add` and brownfield `migrate`
