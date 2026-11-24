@@ -16,13 +16,14 @@ The owner's recorded voice for unattended planning (`/autopilot plan --auto` and
   - Installable web app with push, `--pwa` (#90), starting with its pass/fail push test.
   - Mobile app with Capacitor, `--mobile` (#79), after #90.
   - `bun run doctor`: a generated app checks its own setup (secrets by name, migrations, bindings).
+  - The upgrade seam: generated apps split into scaffold-owned and app-owned files, with a manifest and a `zero-stack upgrade` command (asked for by the owner on 2026-11-24; spec #100).
 - **Won't (until a real app asks)**
-  - One-off purchases (#83), Stripe Connect (#68), referrals and affiliates (#17, #18, #19), API-only scaffold (#21), workspace scaffolding (#22), a `zero-stack upgrade` command.
+  - One-off purchases (#83), Stripe Connect (#68), referrals and affiliates (#17, #18, #19), API-only scaffold (#21), workspace scaffolding (#22).
   - New work for React, Vue or Solid: they stay frozen at v0.1.
 
 ## Users and jobs
 
-- **The owner** scaffolds a new app, follows its setup guide, deploys it, and runs it from `/admin`. They also upgrade an older app with `docs/upgrading.md`.
+- **The owner** scaffolds a new app, follows its setup guide, deploys it, and runs it from `/admin`. They also upgrade an older app: with `zero-stack upgrade` once the app has a manifest, and with `docs/upgrading.md` for the one-time port before that.
 - **A coding agent in a generated app** reads `AGENTS.md` and `docs/setup.md` and does every step marked for agents without ever seeing a secret value.
 - **An end user of a generated app** signs up, pays, manages billing, uses paid features, and can delete their account.
 

@@ -41,3 +41,33 @@ _Avoid_: feature flag
 **Setting**:
 A value that the app declares with a type and a default, and that an admin can change while the app runs. It is never a secret.
 _Avoid_: config, option, env var
+
+## Upgrades
+
+**Upgrade**:
+Bringing a generated app to a newer zero-stack: scaffold-owned files move to the new version and upstream changes are merged into app-owned files. It never commits and never migrates the database.
+_Avoid_: update (that is for packages), sync, regenerate
+
+**Scaffold-owned file**:
+A file in a generated app that zero-stack maintains. It says so in its first lines, and an upgrade brings it to the new version. An app changes what it does through app-owned files, not by editing it.
+_Avoid_: generated file (every file in a new app is generated), machinery, vendor file
+
+**App-owned file**:
+A file in a generated app that belongs to the app after the first scaffold: its declaration files, its auth extension, its user-facing pages and its configuration. An upgrade merges upstream changes into it and never discards the app's edits.
+_Avoid_: user file, custom file
+
+**Declaration file**:
+An app-owned file that holds only one of the app's lists: its features, settings, onboarding steps or plans.
+_Avoid_: config file, registry
+
+**Auth extension**:
+The app-owned file where an app adds its own sign-in plugins and trusted origins to the scaffold-owned auth setup.
+_Avoid_: auth override, auth config
+
+**Manifest**:
+The record in a generated app of what it was made from: the zero-stack version, the app's name and framework, and its flags.
+_Avoid_: lockfile, config
+
+**Base copy**:
+The copy, kept in the app, of each file as zero-stack last generated it. An upgrade compares against it to tell the app's edits from upstream changes.
+_Avoid_: snapshot, cache
