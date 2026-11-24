@@ -36,6 +36,7 @@ test("--payments declares the Stripe keys in env.ts and ships placeholders in .e
 
 test("the matrix runs --payments without --admin, and svelte-all picks it up from the table", () => {
   expect(MATRIX.find((p) => p.name === "svelte-payments")?.args).toEqual(["--framework", "svelte", "--auth", "--payments", "--account-deletion"]);
+  expect(MATRIX.find((p) => p.name === "svelte-payments-admin")?.args).toEqual(["--framework", "svelte", "--auth", "--payments", "--admin"]);
   expect(MATRIX.find((p) => p.name === "svelte-all")!.args).toContain("--payments");
 });
 

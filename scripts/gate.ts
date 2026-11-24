@@ -1243,6 +1243,8 @@ try {
         if (m === "GET" && p === "/v1/subscriptions") return list([...fake.subs.values()].filter((s) => s.customer === url.searchParams.get("customer")));
         if ((r = p.match(/^\/v1\/subscriptions\/([^/]+)$/))) { const s = fake.subs.get(r[1]!); if (!s) return missing(); if (m === "DELETE") s.status = "canceled"; return Response.json(s); }
         if (m === "POST" && p === "/v1/checkout/sessions") { const s = { id: id("cs"), object: "checkout.session", url: "https://checkout.stripe.test/pay", subscription: null, payment_status: "unpaid", status: "open", ...body }; fake.sessions.set(s.id, s); return Response.json(s); }
+        if (m === "GET" && p === "/v1/checkout/sessions") return list([...fake.sessions.values()].filter((x) => x.customer === url.searchParams.get("customer") && x.status === url.searchParams.get("status")));
+        if (m === "POST" && (r = p.match(/^\/v1\/checkout\/sessions\/([^/]+)\/expire$/))) { const x = fake.sessions.get(r[1]!); if (!x) return missing(); x.status = "expired"; return Response.json(x); }
         if ((r = p.match(/^\/v1\/checkout\/sessions\/([^/]+)$/))) { const s = fake.sessions.get(r[1]!); return s ? Response.json(s) : missing(); }
         if (m === "POST" && p === "/v1/billing_portal/sessions") { fake.portals++; return Response.json({ id: id("bps"), object: "billing_portal.session", url: "https://billing.stripe.test/session", customer: body.customer, return_url: body.return_url }); }
         return Response.json({ error: { type: "invalid_request_error", message: `fake Stripe has no ${m} ${p}` } }, { status: 404 });
@@ -1458,6 +1460,9 @@ try {
         const customer = [...fake.customers.values()].find((c) => c.metadata.userId === uid)!.id;
         const subs = ["past_due", "active", "canceled", "incomplete_expired"].map((status) => stripeSub({ id: `sub_${uid}_${status}`, customer, status }));
         const statuses = () => subs.map((x) => x.status).join(",");
+        // The upgrade left a Checkout session open: paid after the deletion it would start a subscription nobody owns.
+        const checkout = [...fake.sessions.values()].find((x) => x.customer === customer)!;
+        check(checkout.status === "open", `${how}: the doomed user's Checkout session is ${checkout.status}, expected open`);
         const file = `users/${uid}/keep.txt`;
         if (config.storage) {
           const put = await fetch(`${b}/api/files/keep.txt`, { method: "PUT", body: "keep", headers: { cookie, "content-type": "text/plain" } });
@@ -1468,7 +1473,7 @@ try {
         const refused = await remove(d), why = (await refused.json()) as Obj;
         fake.down = "";
         check(refused.status === 500 && why.code === "BILLING_CANCEL_FAILED" && why.message === "Couldn't cancel the subscription in Stripe, so the account was not deleted. Try again.", `${how} with Stripe down (${outage}) -> ${refused.status} ${JSON.stringify(why)}`);
-        check(userRow(mail) && subRows(uid).length === 1 && statuses() === "past_due,active,canceled,incomplete_expired", `${how} with Stripe down deleted the user or their rows, or cancelled something`);
+        check(userRow(mail) && subRows(uid).length === 1 && statuses() === "past_due,active,canceled,incomplete_expired" && checkout.status === "open", `${how} with Stripe down deleted the user or their rows, or cancelled something`);
         check(!config.storage || r2Keys().includes(file), `${how} with Stripe down purged the user's files`);
         // Stripe is back: every subscription that hadn't ended is cancelled (past_due included, the ended ones left alone), then the user, rows and files go.
         const mark = fake.calls.length;
@@ -1476,12 +1481,15 @@ try {
         check(gone.status === 200, `${how} -> ${gone.status}`);
         const cancelled = fake.calls.slice(mark).filter((c) => c.startsWith("DELETE "));
         check(statuses() === "canceled,canceled,canceled,incomplete_expired" && cancelled.join() === [subs[0]!, subs[1]!].map((x) => `DELETE /v1/subscriptions/${x.id}`).join(), `${how}: Stripe has ${statuses()} after ${cancelled.join(", ") || "no cancel"}`);
+        check(checkout.status === "expired", `${how} left the user's Checkout session ${checkout.status}`);
         check(!userRow(mail) && subRows(uid).length === 0, `${how} left the user or their subscription rows`);
         check(!config.storage || !r2Keys().some((k) => k.startsWith(`users/${uid}/`)), `${how} left the user's files`);
-        // Stripe's event for the cancellation arrives after the user is gone: 200, so Stripe doesn't retry.
+        // Stripe's event for the cancellation arrives after the user is gone: 200, so Stripe doesn't retry. It is on a declared price, so the
+        // sync does not skip it as someone else's: it gets as far as finding that no user holds the customer.
+        check(subs[0]!.items.data[0]!.price.lookup_key === "pro_monthly" && !db((d) => d.query("SELECT 1 FROM user WHERE stripeCustomerId = ?").get(customer)), `${how}: the late event is not on a declared price, or a user still holds ${customer}`);
         const late = await webhook(b, { type: "customer.subscription.deleted", data: subObj(subs[0]!) });
         check(late.status === 200 && subRows(uid).length === 0, `${how}: a late customer.subscription.deleted -> ${late.status}`);
-        console.log(`gate: payments: ${how} stops with 500 BILLING_CANCEL_FAILED while Stripe is down (user, rows${config.storage ? ", files" : ""} and Stripe untouched); then cancels the past_due and active subscriptions in Stripe first, deletes the user${config.storage ? ", files" : ""} and subscription rows, and a late customer.subscription.deleted answers 200`);
+        console.log(`gate: payments: ${how} stops with 500 BILLING_CANCEL_FAILED while Stripe is down (user, rows${config.storage ? ", files" : ""} and Stripe untouched); then cancels the past_due and active subscriptions and expires the open Checkout session in Stripe first, deletes the user${config.storage ? ", files" : ""} and subscription rows, and a late customer.subscription.deleted answers 200`);
       }
 
       // Static checks: one better-auth, the webhook's rate-limit exemption, the plugin's tables in the migration.
