@@ -37,7 +37,7 @@ tests/
    --starter sqlite --deploy none --git`. It always installs and cannot be prevented.
 5. Apply installers by anchored string replace against the known generated output of the
    pinned version. A missing anchor is a hard error (caught by tests on every pin bump).
-6. Run `vp check --fix` in the new app: untouched `create-void@1.8.0` output fails its own
+6. Run `vp check --fix` in the new app: untouched `create-void@1.11.0` output fails its own
    `vp check` on formatting in 11 files (see `docs/facts.md`). Re-test on every pin bump.
 7. Add `trustedDependencies: ["esbuild","workerd","sharp"]` to package.json (Void does
    not handle bun script approvals). Verified by the scaffold gate. Also write the `overrides`
@@ -307,13 +307,13 @@ shown. Three composers read it: the `## Setup` table in `AGENTS.md`, `docs/setup
 `human` step; a done step is detected by its verify command and skipped; typed values are read hidden, never printed, and go to
 `void secret put` by stdin, plus Infisical `prod` by stdin (`--file /dev/stdin` fed `NAME=value`, never a file on disk) with `--secrets`; `void` is found through `node_modules/.bin`; a failed put is reported, not fatal). The wizard never opens a browser: it prints links. A unit test fails when a flag adds an env name in `authEnv`
 or `env.ts` that no step covers. The gate checks the steps against the flags and runs `bash -n` on the wizard. Commands are Void
-1.8.0, `cf` and `infisical` only, never wrangler; Void-side browser driving stays in the agent's harness, not in the app.
+1.11.0, `cf` and `infisical` only, never wrangler; Void-side browser driving stays in the agent's harness, not in the app.
 
 ## Routing docs
 
 One source, `docs/cloudflare-routing.md`: need -> product -> Void module or `cloudflare:`
 pass-through -> docs URL, with a status column (`verified` / `unverified — read docs
-first`) and the Void version it was checked against (1.8.0). Hand-regenerated on pin
+first`) and the Void version it was checked against (1.11.0). Hand-regenerated on pin
 bump. Preamble rules: check `node_modules/void/docs/` and the table before raw Wrangler
 config; for Containers requests look at `void/sandbox` first (needs Workers Paid and
 Docker); brownfield apps use Void's `migrate-vite-cloudflare-to-void` skill.
