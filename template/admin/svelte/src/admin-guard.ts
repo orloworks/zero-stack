@@ -5,7 +5,7 @@ import type { AuditInput, Verb } from "./admin";
 // Guards and audits the Better Auth admin plugin's /admin/* endpoints. The plugin trusts user.role, which would go stale (a de-listed admin
 // would keep working until the session expires), so this runs first and decides from ADMIN_EMAILS, live, on every call.
 //   before: 404 unless the path is allowlisted and the signed-in user passes isAdmin now; then it is the only writer of user.role, so the plugin's
-//           own check (which reads the user fresh from the database) agrees; on remove-user, refuse self, then purge the user's files first (U1).
+//           own check (which reads the user fresh from the database) agrees; on remove-user, refuse self, then cancel billing and purge the user's files first (U1).
 //   after:  one audit entry for each successful change; a failed write answers 500 AUDIT_WRITE_FAILED (the change stands; the page shows a warning).
 // Not on the list, so refused with a 404 even for an admin: list-user-sessions (it returns raw session tokens; the pages read sessions server-side),
 // set-role, create-user, update-user, set-user-password, impersonate-user,
@@ -25,6 +25,8 @@ export type GuardOptions = {
   audit: (i: AuditInput) => Promise<void>;
   // Deletes the user's stored files; given only with --storage. A failure refuses the delete with everything intact.
   purge?: (userId: string) => Promise<void>;
+  // Cancels the user's Stripe subscriptions; given only with --payments. It throws the 500 itself, and runs ahead of the purge so a failure leaves the files too.
+  cancelBilling?: (userId: string) => Promise<void>;
 };
 
 type Pending = Pick<AuditInput, "actor" | "verb" | "target" | "detail" | "oldValue" | "newValue">;
@@ -78,6 +80,7 @@ export function adminGuard(opts: GuardOptions) {
             if (!target) return; // the plugin answers 404 or 400
             if (path === "/admin/remove-user") {
               if (target.id === user.id) throw new APIError("BAD_REQUEST", { code: "YOU_CANNOT_REMOVE_YOURSELF", message: "You cannot remove yourself" });
+              await opts.cancelBilling?.(target.id);
               if (opts.purge) {
                 try {
                   await opts.purge(target.id);

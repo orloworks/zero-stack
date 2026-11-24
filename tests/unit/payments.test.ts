@@ -20,7 +20,7 @@ test("--payments composes the Stripe plugin, the billing guard and the webhook r
     const src = composeAuthTs(cfg(o));
     expect(src).toContain('rateLimit: { storage: "database", customRules: { "/stripe/webhook": false } },');
     expect(src).toContain("...billingPlugins(env)");
-    expect(src).toContain('import { billingPlugins } from "./src/billing";');
+    expect(src).toContain(`import { billingPlugins${"admin" in o ? ", cancelSubscriptions, deleteSubscriptionRows" : ""} } from "./src/billing";`);
     expect(src).toContain("defineAuth(({ defaults, env })");
     expect(src.match(/^ {2}plugins:/gm)).toHaveLength(1);
   }
@@ -35,6 +35,32 @@ test("--payments declares the Stripe keys in env.ts and ships placeholders in .e
 });
 
 test("the matrix runs --payments without --admin, and svelte-all picks it up from the table", () => {
-  expect(MATRIX.find((p) => p.name === "svelte-payments")?.args).toEqual(["--framework", "svelte", "--auth", "--payments"]);
+  expect(MATRIX.find((p) => p.name === "svelte-payments")?.args).toEqual(["--framework", "svelte", "--auth", "--payments", "--account-deletion"]);
   expect(MATRIX.find((p) => p.name === "svelte-all")!.args).toContain("--payments");
+});
+
+test("--payments cancels subscriptions before a user is deleted, ahead of the storage purge, on both paths (#84)", () => {
+  // Self-service: deleteUser.beforeDelete, alone and ahead of the purge.
+  const self = composeAuthTs(cfg({ payments: true, accountDeletion: true }));
+  expect(self).toContain("      beforeDelete: async (user) => {\n        await cancelSubscriptions(env, user.id);\n      },");
+  expect(self).toContain('import { billingPlugins, cancelSubscriptions, deleteSubscriptionRows } from "./src/billing";');
+  const stored = composeAuthTs(cfg({ payments: true, accountDeletion: true, storage: true }));
+  expect(stored.match(/beforeDelete:/g)).toHaveLength(1);
+  expect(stored.indexOf("await cancelSubscriptions(env, user.id);")).toBeGreaterThan(stored.indexOf("beforeDelete:"));
+  expect(stored.indexOf("await cancelSubscriptions(env, user.id);")).toBeLessThan(stored.indexOf("await purgeUserFiles(user.id);"));
+  expect(stored).toContain("afterDelete:");
+  // Admin removal: the guard gets the same helper; it calls it ahead of its purge.
+  const admin = composeAuthTs(cfg({ payments: true, admin: true, storage: true }));
+  expect(admin).toContain("purge: purgeUserFiles, cancelBilling: (id) => cancelSubscriptions(env, id) })");
+  expect(admin).not.toContain("beforeDelete:");
+  // After any deletion the plugin's rows go, in the one databaseHooks delete entry.
+  for (const src of [self, stored, admin, composeAuthTs(cfg({ payments: true, admin: true, accountDeletion: true, storage: true, inviteOnly: true }))]) {
+    expect(src.match(/^ {6}delete: \{/gm)).toHaveLength(1);
+    expect(src.match(/^ {2}databaseHooks:/gm)).toHaveLength(1);
+    expect(src).toContain("await deleteSubscriptionRows(user.id);");
+  }
+  expect(admin.indexOf("await redactAudit(user.email);")).toBeLessThan(admin.indexOf("await deleteSubscriptionRows(user.id);"));
+  // No deletion path, or no payments: nothing is composed.
+  expect(composeAuthTs(cfg({ payments: true }))).not.toMatch(/cancelSubscriptions|deleteSubscriptionRows|databaseHooks/);
+  for (const o of [{ accountDeletion: true, storage: true }, { admin: true, storage: true, accountDeletion: true }]) expect(composeAuthTs(cfg(o))).not.toMatch(/cancelSubscriptions|deleteSubscriptionRows|cancelBilling/);
 });

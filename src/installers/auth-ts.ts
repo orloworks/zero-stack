@@ -16,14 +16,14 @@ export const MAIL_TS = `export async function send(to: string, subject: string, 
 
 // deleteUser with --storage (D7, D13): purge before deleting the user, and fail closed (the error aborts the deletion before any row is removed);
 // sweep again after, for an upload that raced the deletion. The thrown code is what the Account page maps to its partial-purge copy.
-const STORAGE_BEFORE_DELETE = `      beforeDelete: async (user) => {
-        try {
+const STORAGE_BEFORE_DELETE = `        try {
           await purgeUserFiles(user.id);
         } catch (e) {
           console.error(\`storage purge failed for \${user.id}\`, e);
           throw APIError.from("INTERNAL_SERVER_ERROR", { code: "STORAGE_PURGE_FAILED", message: "Could not delete the account's files." });
-        }
-      },`;
+        }`;
+// deleteUser with --payments (#84): cancel the user's Stripe subscriptions first, ahead of the purge; it throws 500 BILLING_CANCEL_FAILED, so nothing is purged or deleted.
+const BILLING_BEFORE_DELETE = "        await cancelSubscriptions(env, user.id);";
 const STORAGE_AFTER_DELETE = `      afterDelete: async (user) => {
         try {
           await purgeUserFiles(user.id);
@@ -31,11 +31,17 @@ const STORAGE_AFTER_DELETE = `      afterDelete: async (user) => {
           console.error(\`storage resweep failed for \${user.id}\`, e);
         }
       },`;
-// With --admin the resweep after any delete (self or admin) lives in databaseHooks.user.delete.after, so deleteUser keeps only the purge-first hook (U1).
-const storageDeleteUser = (afterDelete: boolean) => `    deleteUser: {
+// With --admin the resweep after any delete (self or admin) lives in databaseHooks.user.delete.after, so deleteUser keeps only the before hook (U1).
+function deleteUser(config: Config): string {
+  const before = [config.payments && BILLING_BEFORE_DELETE, config.storage && STORAGE_BEFORE_DELETE].filter(Boolean);
+  if (!before.length) return "    deleteUser: { enabled: true },";
+  return `    deleteUser: {
       enabled: true,
-${STORAGE_BEFORE_DELETE}${afterDelete ? `\n${STORAGE_AFTER_DELETE}` : ""}
+      beforeDelete: async (user) => {
+${before.join("\n")}
+      },${config.storage && !config.admin ? `\n${STORAGE_AFTER_DELETE}` : ""}
     },`;
+}
 
 const DELETE_PASSWORD_HOOK = `  hooks: {
     before: createAuthMiddleware(async (ctx) => {
@@ -64,19 +70,21 @@ const ADMIN_SESSION_CREATE = `      create: {
           await ctx?.context.internalAdapter.updateUser(session.userId, { lastSignInAt: new Date() });
         },
       },`;
-// After any user is deleted (self-delete or the admin plugin's remove-user): sweep the files once more (an upload that raced the delete), then clear the user's email from the audit log.
-const adminUserDelete = (storage: boolean) => `      delete: {
-        after: async (user) => {${storage ? `
+// After any user is deleted (self-delete or the admin plugin's remove-user). --admin: sweep the files once more (an upload that raced the delete), then clear
+// the user's email from the audit log. --payments: delete the Stripe plugin's subscription rows, which have no foreign key to cascade (it logs its own failure).
+const userDelete = (config: Config) => `      delete: {
+        after: async (user) => {${config.admin && config.storage ? `
           try {
             await purgeUserFiles(user.id);
           } catch (e) {
             console.error(\`storage resweep failed for \${user.id}\`, e);
-          }` : ""}
+          }` : ""}${config.admin ? `
           try {
             await redactAudit(user.email);
           } catch (e) {
             console.error(\`audit redaction failed for \${user.id}\`, e);
-          }
+          }` : ""}${config.payments ? `
+          await deleteSubscriptionRows(user.id);` : ""}
         },
       },`;
 
@@ -161,7 +169,8 @@ export const INVITE_ONLY_PLUGIN = invitePlugin(false);
 
 // --payments (src/plans.ts, src/stripe.ts, src/billing.ts). Better Auth's Stripe plugin owns checkout, the portal, the webhook and the subscription table;
 // a Stripe customer is made at first checkout, not at sign-up. billingPlugins (src/billing.ts) builds the plugin, its onEvent sync and the billing guard.
-const PAYMENTS_IMPORTS = 'import { billingPlugins } from "./src/billing";\n';
+// Where a user can be deleted (#84): cancelSubscriptions runs first on both paths, and deleteSubscriptionRows after the delete.
+const paymentsImports = (deletes: boolean) => `import { billingPlugins${deletes ? ", cancelSubscriptions, deleteSubscriptionRows" : ""} } from "./src/billing";\n`;
 
 // With --admin and --invite-only, a link requested on the server (the admin's send-link route has no browser request behind it) for an unverified user is mailed
 // as "Set your password", matching the admin page's copy; a user's own "Forgot password" keeps the reset subject.
@@ -169,9 +178,9 @@ const PAYMENTS_IMPORTS = 'import { billingPlugins } from "./src/billing";\n';
 // react, vue and solid get only the shared rate limit (#58 D3); every add-on is svelte only.
 // The one top-level user option: deleteUser (--account-deletion) and additionalFields (--admin) are parts of it, never two keys.
 function userOption(config: Config): string[] {
-  const deleteUser = config.accountDeletion ? (config.storage ? storageDeleteUser(!config.admin) : "    deleteUser: { enabled: true },") : "";
-  if (!config.admin) return deleteUser === "    deleteUser: { enabled: true }," ? ["  user: { deleteUser: { enabled: true } },"] : deleteUser ? [`  user: {\n${deleteUser}\n  },`] : [];
-  return [`  user: {\n${[lastSignIn, deleteUser].filter(Boolean).join("\n")}\n  },`];
+  const del = config.accountDeletion ? deleteUser(config) : "";
+  if (!config.admin) return del === "    deleteUser: { enabled: true }," ? ["  user: { deleteUser: { enabled: true } },"] : del ? [`  user: {\n${del}\n  },`] : [];
+  return [`  user: {\n${[lastSignIn, del].filter(Boolean).join("\n")}\n  },`];
 }
 
 export function composeAuthTs(config: Config): string {
@@ -202,7 +211,7 @@ export function composeAuthTs(config: Config): string {
             config.turnstile && 'captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })',
             config.inviteOnly && invitePlugin(!!config.admin),
             config.admin && `admin({ bannedUserMessage: "${BANNED_MESSAGE}" })`,
-            config.admin && `adminGuard({ isAdmin: (user) => isAdmin(env.ADMIN_EMAILS, user), audit: recordAudit${config.storage ? ", purge: purgeUserFiles" : ""} })`,
+            config.admin && `adminGuard({ isAdmin: (user) => isAdmin(env.ADMIN_EMAILS, user), audit: recordAudit${config.storage ? ", purge: purgeUserFiles" : ""}${config.payments ? ", cancelBilling: (id) => cancelSubscriptions(env, id)" : ""} })`,
             config.payments && "...billingPlugins(env)",
           ]
             .filter(Boolean)
@@ -210,7 +219,7 @@ export function composeAuthTs(config: Config): string {
         ]
       : []),
     ...databaseHooks({
-      user: [...(config.inviteOnly ? [inviteOnlyUserCreate(!!config.admin)] : []), ...(config.admin ? [adminUserDelete(!!config.storage)] : [])],
+      user: [...(config.inviteOnly ? [inviteOnlyUserCreate(!!config.admin)] : []), ...(config.admin || (config.payments && config.accountDeletion) ? [userDelete(config)] : [])],
       session: config.admin ? [ADMIN_SESSION_CREATE] : [],
     }),
     ...userOption(config),
@@ -220,7 +229,7 @@ export function composeAuthTs(config: Config): string {
   const del = (config.accountDeletion || config.admin) && config.storage;
   const ba = config.accountDeletion || config.inviteOnly ? `import { APIError, createAuthMiddleware${config.inviteOnly ? ", isAPIError" : ""} } from "better-auth/api";\n` : "";
   return `import { defineAuth } from "void/auth";
-${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.payments ? PAYMENTS_IMPORTS : ""}
+${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.payments ? paymentsImports(!!(config.accountDeletion || config.admin)) : ""}
 export default defineAuth(({ defaults${config.turnstile || config.inviteOnly || config.admin || config.payments ? ", env" : ""} }) => ({
   ...defaults,
 ${options.map((o) => o + "\n").join("")}}));

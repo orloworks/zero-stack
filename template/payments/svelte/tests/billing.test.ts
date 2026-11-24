@@ -42,7 +42,7 @@ vi.mock("../src/plans", async (original) => {
   };
 });
 
-const { currentPlan, requirePlan, syncStripeEvent } = await import("../src/billing");
+const { cancelSubscriptions, currentPlan, deleteSubscriptionRows, requirePlan, syncStripeEvent } = await import("../src/billing");
 const sqlite = ((await import("void/db")) as unknown as { sqlite: { exec: (s: string) => void } }).sqlite;
 const setRows = (...rows: string[]) => sqlite.exec(`delete from subscription; ${rows.map((r) => `insert into subscription (id, plan, referenceId, stripeCustomerId, stripeSubscriptionId, status) values ${r};`).join(" ")}`);
 const c = () => ({ req: { raw: new Request("http://localhost/") } }) as never;
@@ -191,6 +191,53 @@ it("syncStripeEvent: no user with the customer, undeclared prices and other even
   await sync(event("customer.subscription.deleted"));
   await sync(event("invoice.paid"));
   expect(retrieved).toEqual([]);
+});
+
+it("cancelSubscriptions: cancels in Stripe every subscription that hasn't ended, skips a user with no customer, and fails closed", async () => {
+  const subs = [{ id: "sub_a", status: "active" }, { id: "sub_p", status: "past_due" }, { id: "sub_c", status: "canceled" }, { id: "sub_x", status: "incomplete_expired" }, { id: "sub_i", status: "incomplete" }];
+  const calls: string[] = [];
+  const state = { listFails: false, cancelFails: false };
+  const client = {
+    subscriptions: {
+      list: (p: { customer: string; status: string }) => {
+        calls.push(`list ${p.customer} ${p.status}`);
+        return (async function* () {
+          if (state.listFails) throw new Error("stripe down");
+          yield* subs;
+        })();
+      },
+      cancel: async (id: string) => {
+        if (state.cancelFails) throw new Error("stripe refused");
+        calls.push(`cancel ${id}`);
+      },
+    },
+  };
+  const code = (p: Promise<unknown>) => p.then(() => "ok", (e) => (e as { body?: { code?: string } }).body?.code);
+  await cancelSubscriptions({}, "u1", client);
+  expect(calls).toEqual(["list cus_1 all", "cancel sub_a", "cancel sub_p", "cancel sub_i"]);
+  calls.length = 0;
+  sqlite.exec("insert into user values ('u2', 'U2', 'u2@example.com', 1, 0, 0, null)");
+  await cancelSubscriptions({}, "u2", client); // never checked out: no Stripe customer, no Stripe call
+  expect(calls).toEqual([]);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  for (const k of ["listFails", "cancelFails"] as const) {
+    state[k] = true;
+    expect([k, await code(cancelSubscriptions({}, "u1", client))]).toEqual([k, "BILLING_CANCEL_FAILED"]);
+    state[k] = false;
+  }
+  session.down = true; // the customer can't be read: the deletion must not go ahead unchecked
+  expect(await code(cancelSubscriptions({}, "u1", client))).toBe("BILLING_CANCEL_FAILED");
+  session.down = false;
+});
+
+it("deleteSubscriptionRows removes that user's rows only, and never throws", async () => {
+  setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'canceled')`, `('s2', 'pro', 'u1', 'cus_1', 'sub_2', 'active')`, `('s3', 'pro', 'other', 'cus_2', 'sub_3', 'active')`);
+  await deleteSubscriptionRows("u1");
+  const left = (sqlite as unknown as { prepare: (s: string) => { all: () => { id: string }[] } }).prepare("select id from subscription").all();
+  expect(left).toEqual([{ id: "s3" }]);
+  session.down = true;
+  await expect(deleteSubscriptionRows("other")).resolves.toBeUndefined();
+  session.down = false;
 });
 
 it("stripeClient refuses STRIPE_API_URL off this machine; the placeholder key is not configured", () => {

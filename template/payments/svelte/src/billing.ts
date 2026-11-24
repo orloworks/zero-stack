@@ -92,13 +92,42 @@ export function billingGuard(opts: { configured: boolean; webhookConfigured: boo
 }
 
 // Everything auth.ts needs for billing: the Stripe plugin (with the one client) and the guard.
-export function billingPlugins(env: { STRIPE_SECRET_KEY?: unknown; STRIPE_WEBHOOK_SECRET?: unknown; STRIPE_API_URL?: unknown }) {
+export function billingPlugins(env: BillingEnv) {
   const client = stripeClient(env.STRIPE_SECRET_KEY, env.STRIPE_API_URL);
   const secret = typeof env.STRIPE_WEBHOOK_SECRET === "string" ? env.STRIPE_WEBHOOK_SECRET : "";
   return [
     stripe({ stripeClient: client, stripeWebhookSecret: secret, subscription: { enabled: true, plans: stripePlans() }, onEvent: syncStripeEvent(client) }),
     billingGuard({ configured: stripeConfigured(env.STRIPE_SECRET_KEY), webhookConfigured: !!secret && secret !== PLACEHOLDER_WEBHOOK_SECRET }),
   ];
+}
+
+type BillingEnv = { STRIPE_SECRET_KEY?: unknown; STRIPE_WEBHOOK_SECRET?: unknown; STRIPE_API_URL?: unknown };
+type CancelSource = { subscriptions: { list: (p: { customer: string; status: "all"; limit: number }) => AsyncIterable<{ id: string; status: string }>; cancel: (id: string) => Promise<unknown> } };
+
+// Runs before a user is deleted, on both paths and ahead of the storage purge: auth.ts's deleteUser.beforeDelete and the admin guard's remove-user hook.
+// It asks Stripe, not the table, for the customer's subscriptions (a past_due one, or one whose webhook hasn't arrived, must end too) and cancels
+// each that hasn't ended. Fails closed: a deleted user who keeps being billed is worse than a failed deletion. No Stripe customer: nothing to do.
+export async function cancelSubscriptions(env: BillingEnv, userId: string, client: CancelSource = stripeClient(env.STRIPE_SECRET_KEY, env.STRIPE_API_URL)): Promise<void> {
+  try {
+    const { db, eq, userTable } = await store();
+    const [user] = await db.select({ customer: userTable.stripeCustomerId }).from(userTable).where(eq(userTable.id, userId)).limit(1);
+    if (!user?.customer) return;
+    for await (const sub of client.subscriptions.list({ customer: user.customer, status: "all", limit: 100 }))
+      if (sub.status !== "canceled" && sub.status !== "incomplete_expired") await client.subscriptions.cancel(sub.id);
+  } catch (e) {
+    console.error(`subscription cancel failed for ${userId}`, e);
+    throw new APIError("INTERNAL_SERVER_ERROR", { code: "BILLING_CANCEL_FAILED", message: "Couldn't cancel the subscription in Stripe, so the account was not deleted. Try again." });
+  }
+}
+
+// After the user is deleted (databaseHooks.user.delete.after): the plugin's rows have no foreign key, so they don't cascade. Never throws: the user is already gone.
+export async function deleteSubscriptionRows(userId: string): Promise<void> {
+  try {
+    const { db, eq, subscriptionTable } = await store();
+    await db.delete(subscriptionTable).where(eq(subscriptionTable.referenceId, userId));
+  } catch (e) {
+    console.error(`subscription rows not deleted for ${userId}`, e);
+  }
 }
 
 type LiveSource = { subscriptions: { retrieve: (id: string) => Promise<Stripe.Subscription> } };
