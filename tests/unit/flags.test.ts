@@ -147,3 +147,9 @@ test("upgrade is reserved: refused as an app name, with the reason", () => {
   expect(() => validateFlags({ name: "upgrade" })).toThrow(/reserved.*command that upgrades the app/);
   expect(validateFlags({ name: "upgrade-me" }).config.name).toBe("upgrade-me");
 });
+
+test("names may not start with a dash; flags must be real booleans", () => {
+  expect(() => validateFlags({ name: "-rf" })).toThrow(/must not start with "-"/);
+  expect(validateFlags({ name: "a-b" }).config.name).toBe("a-b");
+  expect(() => validateFlags({ name: "x", auth: "x" as never })).toThrow(/auth must be true or false/);
+});

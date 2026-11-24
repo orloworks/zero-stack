@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { validateFlags } from "../../src/flags";
@@ -101,7 +101,9 @@ test("a new file is written only when the path is free; a taken path is merged, 
   expect(read(dir, "fresh.ts")).toBe("new\n");
   expect(r.lines).toContain("added fresh.ts");
   expect(read(dir, "taken.ts")).toContain("app's own");
-  expect(r.lines.some((l) => l.endsWith("taken.ts") && !l.startsWith("added"))).toBe(true);
+  expect(r.code).toBe(1);
+  expect(read(dir, "taken.ts")).toMatch(/^<<<<<<< your app\napp.s own\n=======\ntheirs\n>>>>>>> /m); // both versions, never overwritten
+  expect(r.lines).toContain("CONFLICT taken.ts");
 });
 
 test("a file the new version removed is deleted only when untouched", async () => {
@@ -125,7 +127,7 @@ test("binary files changed on both sides keep the app's copy and are listed; an 
   const r = await run(dir, { "a.bin": bin(2), "b.bin": bin(2) });
   expect(readFileSync(join(dir, "a.bin")).equals(bin(9))).toBe(true);
   expect(readFileSync(join(dir, "b.bin")).equals(bin(2))).toBe(true);
-  expect(r.lines).toEqual(["kept a.bin (binary, changed on both sides)", "replaced b.bin"]);
+  expect(r).toEqual({ code: 1, lines: ["kept a.bin (binary, changed on both sides)", "replaced b.bin"] });
 });
 
 test("a merge tool error is an error, not a conflict, and the app stays untouched", async () => {
@@ -160,6 +162,7 @@ test("a file where the new version needs a folder (or the reverse) keeps the app
   const dir = makeApp({ "x.ts": "1\n" }, { "x.ts": null, "x.ts/inner": "folder\n", "y": "file\n" });
   const r = await run(dir, { "x.ts": "2\n", "y/z.ts": "z\n" });
   expect(read(dir, "x.ts/inner")).toBe("folder\n");
+  expect(r.code).toBe(1); // a change the app could not take is an unresolved conflict
   expect(r.lines.sort()).toEqual(["kept x.ts (not a file in your app)", "kept y/z.ts (its path is taken by a folder or file)"]);
   expect(read(dir, "y")).toBe("file\n");
 });
@@ -212,7 +215,7 @@ test("the folder is cleaned after a successful upgrade, and a path that leaves t
   writeFileSync(join(dir, ".zero-stack/base.json"), JSON.stringify(base, null, 2) + "\n");
   git(dir, "add", "-A");
   git(dir, "commit", "-q", "-m", "tampered");
-  await expect(run(dir, { "a.ts": "3\n" })).rejects.toThrow(/leaves the app's folder/);
+  await expect(run(dir, { "a.ts": "3\n" })).rejects.toThrow(/not a file of the app/);
   expect(existsSync(join(dir, "../escape.ts"))).toBe(false);
 });
 
@@ -225,4 +228,93 @@ test("the CLI runs upgrade in the current folder, takes no options, and exits 1 
   const flagged = cli("upgrade", "--auth");
   expect(flagged.exitCode).toBe(1);
   expect(flagged.stderr.toString()).toContain("upgrade takes no arguments");
+});
+
+const commitAll = (dir: string, msg = "more") => {
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", msg);
+};
+const outsideDir = (files: Record<string, string>) => {
+  const out = mkdtempSync(join(tmpdir(), "zs-out-"));
+  for (const [p, t] of Object.entries(files)) writeFileSync(join(out, p), t);
+  return out;
+};
+
+test("a symlinked folder leads nowhere: nothing outside the app is written, chmodded or removed, and the run exits 1", async () => {
+  const dir = makeApp({ "scripts/run.sh": "v1\n", "scripts/gone.sh": "g\n", "a.ts": "1\n" });
+  const out = outsideDir({ "run.sh": "v1\n", "gone.sh": "g\n" });
+  chmodSync(join(out, "run.sh"), 0o600);
+  rmSync(join(dir, "scripts"), { recursive: true });
+  symlinkSync(out, join(dir, "scripts"));
+  commitAll(dir);
+  const r = await run(dir, { "scripts/run.sh": "v2\n", "scripts/new.sh": "n\n", "a.ts": "1\n" });
+  expect(r.code).toBe(1);
+  expect(r.lines).toEqual(["kept scripts/gone.sh (outside your app)", "kept scripts/new.sh (outside your app)", "kept scripts/run.sh (outside your app)"]);
+  expect(readdirSync(out).sort()).toEqual(["gone.sh", "run.sh"]);
+  expect(read(out, "run.sh")).toBe("v1\n");
+  expect(statSync(join(out, "run.sh")).mode & 0o777).toBe(0o600);
+});
+
+test("a symlinked .zero-stack folder is refused and nothing changes", async () => {
+  const dir = makeApp({ "a.ts": "1\n" });
+  const out = join(mkdtempSync(join(tmpdir(), "zs-out-")), "rec");
+  renameSync(join(dir, ".zero-stack"), out);
+  symlinkSync(out, join(dir, ".zero-stack"));
+  commitAll(dir);
+  const before = readdirSync(out).sort();
+  await expect(run(dir, { "a.ts": "2\n" })).rejects.toThrow(/\.zero-stack is a symbolic link/);
+  expect(readdirSync(out).sort()).toEqual(before);
+  expect(read(dir, "a.ts")).toBe("1\n");
+});
+
+test("a recorded path the skip list holds back (.env, a repository file) is refused as a bad path, with nothing changed", async () => {
+  const dir = makeApp({ "a.ts": "1\n" });
+  const base = JSON.parse(read(dir, ".zero-stack/base.json"));
+  base[".env"] = { mode: 0o644, encoding: "utf8", content: "SECRET=1\n" };
+  writeFileSync(join(dir, ".zero-stack/base.json"), JSON.stringify(base, null, 2) + "\n");
+  writeFileSync(join(dir, ".env"), "SECRET=1\n"); // ignored by the app's own ignore file
+  commitAll(dir);
+  await expect(run(dir, { "a.ts": "2\n" })).rejects.toThrow(/refusing the path ".env"/);
+  expect(read(dir, ".env")).toBe("SECRET=1\n");
+  expect(read(dir, "a.ts")).toBe("1\n");
+});
+
+test("only a replaced or added file takes the new mode; a merged file keeps the app's", async () => {
+  const dir = makeApp({ "m.sh": lines(5), "r.sh": "1\n" }, { "m.sh": lines(5).replace("line 1", "mine") });
+  chmodSync(join(dir, "m.sh"), 0o644);
+  const exec = async (c: typeof config, t: string) => {
+    put(t, { ".gitignore": IGNORE, "m.sh": lines(5).replace("line 5", "new"), "r.sh": "2\n", "add.sh": "a\n" });
+    for (const f of ["m.sh", "r.sh", "add.sh"]) chmodSync(join(t, f), 0o755);
+    writeRecord(t, c);
+  };
+  await upgrade(dir, () => {}, exec);
+  const mode = (p: string) => statSync(join(dir, p)).mode & 0o777;
+  expect([mode("m.sh"), mode("r.sh"), mode("add.sh")]).toEqual([0o644, 0o755, 0o755]);
+});
+
+test("core.autocrlf true is refused with the reason, and nothing changes", async () => {
+  const dir = makeApp({ "a.ts": "1\n" });
+  git(dir, "config", "core.autocrlf", "true");
+  await expect(run(dir, { "a.ts": "2\n" })).rejects.toThrow(/core\.autocrlf is true/);
+  expect(read(dir, "a.ts")).toBe("1\n");
+});
+
+test("a write error partway says the upgrade stopped and how to undo it", async () => {
+  const dir = makeApp({ "a.ts": "1\n", "locked/b.ts": "1\n" });
+  chmodSync(join(dir, "locked/b.ts"), 0o444); // a read-only file: the write fails with EACCES
+  try {
+    await expect(run(dir, { "a.ts": "2\n", "locked/b.ts": "2\n" })).rejects.toThrow(/stopped partway.*git checkout \. && git clean -fd/);
+  } finally {
+    chmodSync(join(dir, "locked/b.ts"), 0o644);
+  }
+});
+
+test("a hand-edited manifest with a non-boolean flag is refused", async () => {
+  const dir = makeApp({ "a.ts": "1\n" });
+  const m = JSON.parse(read(dir, ".zero-stack/manifest.json"));
+  m.config.auth = "yes";
+  writeFileSync(join(dir, ".zero-stack/manifest.json"), JSON.stringify(m, null, 2) + "\n");
+  commitAll(dir);
+  await expect(run(dir, { "a.ts": "2\n" })).rejects.toThrow(/auth must be true or false/);
+  expect(read(dir, "a.ts")).toBe("1\n");
 });

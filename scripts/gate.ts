@@ -78,6 +78,7 @@ async function upgradeGate(config: Config): Promise<void> {
   writeFileSync(record, JSON.stringify(base, null, 2) + "\n");
   commit("edit and age");
 
+  const localConfig = sh(["git", "config", "--list", "--local"]).stdout.toString();
   // 3. Upgrade: exit 0, one line per changed file, nothing committed.
   const r = sh([process.execPath, join(import.meta.dir, "../src/index.ts"), "upgrade"]);
   const out = r.stdout.toString();
@@ -87,6 +88,8 @@ async function upgradeGate(config: Config): Promise<void> {
   if (out.includes("CONFLICT")) throw new Error(`upgrade reported a conflict:\n${out}`);
   if (sh(["git", "log", "--oneline"]).stdout.toString().trim().split("\n").length !== 2) throw new Error("upgrade committed");
   if (existsSync(join(app, UPGRADE_TMP))) throw new Error("upgrade left its temporary folder");
+  if (sh(["git", "diff", "--cached", "--name-only"]).stdout.toString().trim()) throw new Error("upgrade staged files");
+  if (sh(["git", "config", "--list", "--local"]).stdout.toString() !== localConfig) throw new Error("upgrade changed the app's local git config");
 
   // 4. The scaffold-owned files equal a fresh scaffold's, the owner's edit is intact, and the record is what a fresh scaffold writes.
   const freshApp = join(root, "fresh", name);

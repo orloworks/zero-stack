@@ -1,7 +1,7 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, sep } from "node:path";
 import { type Config, validateFlags } from "./flags";
-import { type BaseCopy, bytesOf, FORMAT_VERSION, type Manifest, RECORD_DIR, UPGRADE_TMP } from "./manifest";
+import { type BaseCopy, bytesOf, FORMAT_VERSION, type Manifest, RECORD_DIR, skipped, UPGRADE_TMP } from "./manifest";
 import { type Run, run, scaffold } from "./pipeline";
 import { onTerminate } from "./children";
 
@@ -21,7 +21,20 @@ const nestedRun: Run = async (cmd, cwd) => {
   }
 };
 
-type Plan = { path: string; line: string; write?: { bytes: Buffer; mode: number }; remove?: true; conflict?: true };
+type Plan = { path: string; line: string; write?: { bytes: Buffer; mode?: number }; remove?: true; conflict?: true };
+
+const isLink = (p: string) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
+// A path may be acted on only when its nearest existing parent folder really is inside the app (a symlinked folder would lead out of it).
+function inside(root: string, abs: string): boolean {
+  let p = dirname(abs);
+  while (!existsSync(p) && !isLink(p)) p = dirname(p);
+  try {
+    const real = realpathSync(p);
+    return real === root || real.startsWith(root + sep);
+  } catch {
+    return false; // a dangling link
+  }
+}
 
 // Three-way merge of one text file with git's own file merge. Exit code: conflict count (capped at 127); anything above is an error.
 function merge(scratch: string, path: string, mine: Buffer, base: Buffer, theirs: Buffer, labels: string[]): { bytes: Buffer; conflict: boolean } {
@@ -36,20 +49,22 @@ function merge(scratch: string, path: string, mine: Buffer, base: Buffer, theirs
 }
 
 // What to do with one path, from the app's file (null: none), its base entry (null: none) and the new version's entry (null: none).
-function decide(dir: string, scratch: string, path: string, base: BaseCopy[string] | undefined, next: BaseCopy[string] | undefined, labels: string[]): Plan | null {
+function decide(dir: string, root: string, scratch: string, path: string, base: BaseCopy[string] | undefined, next: BaseCopy[string] | undefined, labels: string[]): Plan | null {
   const abs = join(dir, path);
+  if (!inside(root, abs)) return { path, line: `kept ${path} (outside your app)`, conflict: true };
   const stat = existsSync(abs) ? lstatSync(abs) : null;
-  if (stat && !stat.isFile()) return next ? { path, line: `kept ${path} (not a file in your app)` } : null;
+  if (stat && !stat.isFile()) return next ? { path, line: `kept ${path} (not a file in your app)`, conflict: true } : null;
   const mine = stat ? readFileSync(abs) : null;
   const was = base && bytesOf(base);
   const now = next && bytesOf(next);
   if (!now) return !mine || !was ? null : mine.equals(was) ? { path, line: `removed ${path}`, remove: true } : { path, line: `kept ${path} (removed in the new version, but you edited it)` };
-  const put = (bytes: Buffer, line: string, conflict?: true): Plan => ({ path, line, write: { bytes, mode: next!.mode }, conflict });
-  if (!mine) return base && was!.equals(now) ? null : base ? { path, line: `skipped ${path} (you deleted it; the new version changed it)` } : put(now, `added ${path}`);
+  // Only a replaced or added file takes the new version's mode; a merged one keeps the app's.
+  const put = (bytes: Buffer, line: string, conflict?: true, chmod = false): Plan => ({ path, line, write: { bytes, mode: chmod ? next!.mode : undefined }, conflict });
+  if (!mine) return base && was!.equals(now) ? null : base ? { path, line: `skipped ${path} (you deleted it; the new version changed it)` } : put(now, `added ${path}`, undefined, true);
   if (was?.equals(now) || mine.equals(now)) return null;
-  if (was?.equals(mine)) return put(now, `replaced ${path}`);
+  if (was?.equals(mine)) return put(now, `replaced ${path}`, undefined, true);
   if (base?.encoding === "base64" || next.encoding === "base64" || !Buffer.from(mine.toString("utf8"), "utf8").equals(mine))
-    return { path, line: `kept ${path} (binary, changed on both sides)` };
+    return { path, line: `kept ${path} (binary, changed on both sides)`, conflict: true };
   const m = merge(scratch, path, mine, was ?? Buffer.alloc(0), now, labels);
   return put(m.bytes, `${m.conflict ? "CONFLICT" : "merged"} ${path}`, m.conflict ? true : undefined);
 }
@@ -61,12 +76,16 @@ const readRecord = (dir: string): { manifest: Manifest; base: BaseCopy } | null 
 
 // Upgrades the app in `dir` to the running version; returns the exit code (1 when a conflict is left). Refusals throw before anything changes.
 export async function upgrade(dir: string, log: (line: string) => void = console.log, scaffoldNext: (config: Config, target: string) => Promise<void> = (c, t) => scaffold(c, t, nestedRun)): Promise<number> {
+  const root = realpathSync(dir);
+  // A linked record folder would send the record, and the folder's removal, somewhere else.
+  for (const p of [RECORD_DIR, UPGRADE_TMP]) if (isLink(join(dir, p))) throw new Error(`${p} is a symbolic link: replace it with a real folder first.`);
   const old = readRecord(dir);
   if (!old) throw new Error(`no ${RECORD_DIR}/manifest.json here: this app was made before apps recorded one, or with react, vue or solid. Port it once, or upgrade by hand: ${GUIDE}`);
   if (old.manifest.formatVersion !== FORMAT_VERSION) throw new Error(`the manifest has format ${old.manifest.formatVersion}; this zero-stack reads format ${FORMAT_VERSION}. Run the zero-stack version that made it.`);
   if (git(dir, ["rev-parse", "--is-inside-work-tree"]).stdout.toString().trim() !== "true") throw new Error("not a git work tree: run `git init` and commit your app first, so the upgrade can be undone.");
   if (git(dir, ["status", "--porcelain", "--untracked-files=all"]).stdout.toString().trim()) throw new Error("uncommitted or untracked changes: commit or stash them first, so the upgrade can be undone.");
 
+  if (git(dir, ["config", "core.autocrlf"]).stdout.toString().trim() === "true") throw new Error("core.autocrlf is true, so every file differs from its recorded LF copy: run `git config core.autocrlf false` for this app first.");
   const tmp = join(dir, UPGRADE_TMP);
   const { config } = validateFlags(old.manifest.config); // a hand-edited manifest still gets the name and flag rules
   const fresh = join(tmp, config.name);
@@ -84,26 +103,30 @@ export async function upgrade(dir: string, log: (line: string) => void = console
     const labels = ["your app", `zero-stack ${old.manifest.zeroStack} (your last upgrade)`, `zero-stack ${next.manifest.zeroStack} (new)`];
     const paths = [...new Set([...Object.keys(old.base), ...Object.keys(next.base)])].sort();
     // Paths come from files the app can edit: never act outside the app's folder.
-    const bad = paths.find((p) => isAbsolute(p) || p.split("/").includes(".."));
-    if (bad) throw new Error(`refusing the path ${JSON.stringify(bad)}: it leaves the app's folder`);
-    plans = paths.flatMap((p) => decide(dir, join(tmp, "merge"), p, old.base[p], next.base[p], labels) ?? []);
+    const bad = paths.find((p) => isAbsolute(p) || p.split("/").includes("..") || skipped(p));
+    if (bad) throw new Error(`refusing the path ${JSON.stringify(bad)}: it is not a file of the app's own tree`);
+    plans = paths.flatMap((p) => decide(dir, root, join(tmp, "merge"), p, old.base[p], next.base[p], labels) ?? []);
     // Everything is decided before the first write, so a merge error leaves the app untouched.
-    for (const p of plans) {
-      const abs = join(dir, p.path);
-      if (p.remove) rmSync(abs);
-      else if (p.write) {
-        try {
-          mkdirSync(dirname(abs), { recursive: true });
-          writeFileSync(abs, p.write.bytes);
-          chmodSync(abs, p.write.mode);
-        } catch (e) {
-          if (!["ENOTDIR", "EISDIR", "EEXIST"].includes((e as NodeJS.ErrnoException).code ?? "")) throw e;
-          p.line = `kept ${p.path} (its path is taken by a folder or file)`;
-          p.conflict = undefined;
+    try {
+      for (const p of plans) {
+        const abs = join(dir, p.path);
+        if (p.remove) rmSync(abs);
+        else if (p.write) {
+          try {
+            mkdirSync(dirname(abs), { recursive: true });
+            writeFileSync(abs, p.write.bytes);
+            if (p.write.mode !== undefined) chmodSync(abs, p.write.mode);
+          } catch (e) {
+            if (!["ENOTDIR", "EISDIR", "EEXIST"].includes((e as NodeJS.ErrnoException).code ?? "")) throw e;
+            p.line = `kept ${p.path} (its path is taken by a folder or file)`;
+            p.conflict = true;
+          }
         }
       }
+      for (const f of ["manifest.json", "base.json"]) copyFileSync(join(fresh, RECORD_DIR, f), join(dir, RECORD_DIR, f));
+    } catch (e) {
+      throw new Error(`the upgrade stopped partway (${(e as Error).message}); undo with \`git checkout . && git clean -fd\``);
     }
-    for (const f of ["manifest.json", "base.json"]) copyFileSync(join(fresh, RECORD_DIR, f), join(dir, RECORD_DIR, f));
   } finally {
     clean();
     dispose();

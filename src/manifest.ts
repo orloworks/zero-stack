@@ -42,7 +42,7 @@ export function entryOf(buf: Buffer, mode: number): Entry {
 export const bytesOf = (e: Entry): Buffer => Buffer.from(e.content, e.encoding);
 
 export const readTree = (dir: string): BaseCopy =>
-  Object.fromEntries(listFiles(dir).map((p) => [p, entryOf(readFileSync(join(dir, p)), statSync(join(dir, p)).mode & 0o777)]));
+  Object.fromEntries(listFiles(dir).map((p) => [p, entryOf(readFileSync(join(dir, p)), statSync(join(dir, p)).mode & 0o111 ? 0o755 : 0o644)]));
 
 // SQL only: migration file names and the journal carry a timestamp, so they stay out. Stable between two scaffolds (docs/facts.md).
 export function migrationsHash(dir: string): string | null {

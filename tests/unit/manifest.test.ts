@@ -67,3 +67,13 @@ test("no migrations means no hash, and the record is formatter-clean JSON", () =
     expect(text).toBe(JSON.stringify(JSON.parse(text), null, 2) + "\n");
   }
 });
+
+test("modes are only the executable bit, so the base copy does not depend on umask", () => {
+  const dir = tmp();
+  put(dir, { "a.sh": "x\n", "b.txt": "x\n", "c.txt": "x\n" });
+  chmodSync(join(dir, "a.sh"), 0o700);
+  chmodSync(join(dir, "b.txt"), 0o600);
+  chmodSync(join(dir, "c.txt"), 0o664);
+  const t = readTree(dir);
+  expect([t["a.sh"]!.mode, t["b.txt"]!.mode, t["c.txt"]!.mode]).toEqual([0o755, 0o644, 0o644]);
+});

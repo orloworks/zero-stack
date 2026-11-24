@@ -17,6 +17,8 @@ It scaffolds the new version with the flags the manifest recorded into `.zero-st
 - a file the new version added is **added** when nothing is at that path; one it removed is **removed** when you never edited it;
 - a file you deleted stays deleted.
 
+It refuses when `core.autocrlf` is `true` (every file would differ from its recorded copy; run `git config core.autocrlf false` for the app). A change it cannot apply (a binary file you also changed, a path that is a folder, a symlinked folder) is kept as it is, listed, and makes the command exit 1. If a write fails partway it says so and how to undo it.
+
 It never commits, never touches `.env` or your migrations, and never runs a migration. When the database schema changed it says so: run `void db generate` and read the migration before you deploy. After it runs, read `git diff`, run `bun install` if `package.json` changed, run `bun run verify`, and commit.
 
 **To undo it**, in the app's folder: `git checkout .` and `git clean -fd` (the tree was clean before, so that removes only what the upgrade added).
