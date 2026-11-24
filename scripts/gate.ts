@@ -128,20 +128,8 @@ try {
     const log = join(root, "doctor-calls.log");
     writeFileSync(log, "");
     const put = (dir: string, n: string, body: string) => writeFileSync(join(dir, n), `#!/bin/sh\necho "$(basename "$0") $*" >> "${log}"\n${body}\n`, { mode: 0o755 });
-    put(fakes, "infisical", "exit 0");
-    put(fakes, "curl", "exit 1");
-    // The app ships its own node_modules/.bin/cf, which the doctor puts ahead of PATH: move it aside and put the fake there.
-    const hadCf = existsSync(join(bin, "cf"));
-    if (hadCf) renameSync(join(bin, "cf"), join(bin, "cf.real"));
-    put(bin, "cf", `[ "$1 $2" = "auth whoami" ] && echo '"authenticated": true'\nexit 0`);
-    renameSync(join(bin, "void"), join(bin, "void.real"));
-    put(bin, "void", [
-      'case "$1 $2" in "cloudflare status") exit 0;; "secret list"|"email status") exit 1;; esac',
-      '[ "$1 $2 $3" = "env check --remote" ] && exit 1',
-      'exec "$(dirname "$0")/void.real" "$@"',
-    ].join("\n"));
-    const doctor = () => {
-      const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, ".config"), PATH: `${fakes}:${process.env.PATH}` } as Record<string, string | undefined>;
+    const doctor = (extra: Record<string, string> = {}) => {
+      const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, ".config"), PATH: `${fakes}:${process.env.PATH}`, ...extra } as Record<string, string | undefined>;
       for (const k of Object.keys(env)) if (/^(CLOUDFLARE_|CF_|INFISICAL_|APP_HOST$|APP_NAME$)/.test(k)) delete env[k];
       const r = Bun.spawnSync([process.execPath, "run", "doctor"], { cwd: app, stdin: null, env });
       const out = r.stdout.toString() + r.stderr.toString();
@@ -149,16 +137,40 @@ try {
       return { code: r.exitCode, out, rows };
     };
     const restore: (() => void)[] = [];
+    // The app ships its own node_modules/.bin/cf, which the doctor puts ahead of PATH: move it aside and put the fake there.
+    const hadCf = existsSync(join(bin, "cf"));
+    let voidMoved = false;
     try {
+      put(fakes, "infisical", "exit 0");
+      put(fakes, "curl", "exit 1");
+      if (hadCf) renameSync(join(bin, "cf"), join(bin, "cf.real"));
+      put(bin, "cf", `[ "$1 $2" = "auth whoami" ] && echo '"authenticated": true'\nexit 0`);
+      renameSync(join(bin, "void"), join(bin, "void.real"));
+      voidMoved = true;
+      put(bin, "void", [
+        'case "$1 $2" in "cloudflare status") exit "${FAKE_CF_STATUS:-0}";; "secret list"|"email status") exit 1;; esac',
+        '[ "$1 $2 $3" = "env check --remote" ] && exit 1',
+        'exec "$(dirname "$0")/void.real" "$@"',
+      ].join("\n"));
       const base = doctor();
       const steps = stepsFor(config);
       const want = ["Local env (void env check)", "Local migrations (void db status)", ...steps.map((s, i) => `${i + 1}. ${s.title}`), "Remote env names (void env check --remote)"];
       if (JSON.stringify([...base.rows.keys()]) !== JSON.stringify(want)) throw new Error(`doctor rows ${JSON.stringify([...base.rows.keys()])}, wanted ${JSON.stringify(want)}`);
       const connect = want[2 + steps.findIndex((s) => s.id === "cloudflare-connect")]!;
-      const deploy = want[2 + steps.findIndex((s) => s.id === "deploy")]!;
-      for (const [row, res] of [[want[0]!, "PASS"], [want[1]!, "PASS"], [want[2]!, "PASS"], [connect, "FAIL"], [deploy, "FAIL"], [want.at(-1)!, "FAIL"]] as const)
+      // Every row, from the fakes: the three sign-ins pass (fake status, infisical, cf); every other step and the remote names fail (nothing is stored,
+      // the app is not connected, APP_HOST is unset, the fake void refuses the account reads, and the new app is not linked).
+      const PASSING = new Set(["cloudflare-login", "infisical-login", "cf-login"]);
+      const expected = new Map(want.map((r, i) => [r, i < 2 || (i < want.length - 1 && PASSING.has(steps[i - 2]!.id)) ? "PASS" : "FAIL"]));
+      for (const [row, res] of expected)
         if (base.rows.get(row) !== res) throw new Error(`doctor row "${row}" is ${base.rows.get(row)}, wanted ${res}:\n${base.out}`);
       if (base.code !== 1 || !base.out.includes("Start with the first FAIL.")) throw new Error(`doctor exited ${base.code}:\n${base.out}`);
+      // Signed out of Cloudflare: step 1 fails, every later row is NOT CHECKED (never FAIL), the exit is non-zero.
+      const out = doctor({ FAKE_CF_STATUS: "1" });
+      for (const [i, row] of want.entries()) {
+        const res = i < 2 ? "PASS" : i === 2 ? "FAIL" : "NOT CHECKED";
+        if (out.rows.get(row) !== res) throw new Error(`signed-out doctor row "${row}" is ${out.rows.get(row)}, wanted ${res}:\n${out.out}`);
+      }
+      if (out.code === 0) throw new Error("signed-out doctor exited 0");
       if (!base.out.includes("fix: APP_HOST=<your host> bun run doctor")) throw new Error(`doctor Deploy row has no APP_HOST fix:\n${base.out}`);
       const calls = readFileSync(log, "utf8");
       // Only fakes and the offline local checks ran; no write, deploy, connect or network call.
@@ -189,8 +201,8 @@ try {
       console.log("gate: doctor env row follows a missing required key; migrations row follows a pending migration");
     } finally {
       for (const r of restore.reverse()) r();
-      renameSync(join(bin, "void.real"), join(bin, "void"));
-      if (hadCf) renameSync(join(bin, "cf.real"), join(bin, "cf"));
+      if (voidMoved) renameSync(join(bin, "void.real"), join(bin, "void"));
+      if (hadCf) { if (existsSync(join(bin, "cf.real"))) renameSync(join(bin, "cf.real"), join(bin, "cf")); }
       else rmSync(join(bin, "cf"), { force: true });
     }
   }

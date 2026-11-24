@@ -58,7 +58,7 @@ export const STEPS: Step[] = [
   {
     id: "email-from", on: (c) => !!c.email, title: "Set the sending address", who: "agent",
     why: "`email.from` ships as `noreply@example.com`, which Void cannot send from. It must be an address on a zone in your Cloudflare account (a subdomain such as `mail.acme.com` keeps existing mail working).",
-    action: "Set `email.from` in `void.config.ts` to an address on your mail domain", verify: "! grep -q noreply@example.com void.config.ts",
+    action: "Set `email.from` in `void.config.ts` to an address on your mail domain", verify: "test -f void.config.ts && ! grep -q noreply@example.com void.config.ts",
   },
   {
     id: "turnstile-widget", on: (c) => !!c.turnstile, title: "Create the Turnstile widget and store its secret", who: "agent",
@@ -270,28 +270,34 @@ ${ROOT}export APP_NAME="\${APP_NAME:-${c.name}}"
 LIMIT="\${DOCTOR_LIMIT:-30}"
 PASSED=0; FAILED=0; UNCHECKED=0; BLOCK=""
 
-# probe CMD: exit 0 when CMD passes. No stdin, no output, killed after LIMIT seconds.
+# probe CMD: exit 0 when CMD passes. No stdin, no output. After LIMIT seconds the shell is stopped with SIGALRM (status 142, so a timeout is
+# told from a failure) and its child processes (the CLIs of a pipeline) are killed with it.
 probe() {
+  TIMEDOUT=0
   bash -c "$1" </dev/null >/dev/null 2>&1 &
   local p=$!
-  ( i=0; while kill -0 "$p" 2>/dev/null && (( i < LIMIT )); do sleep 1; i=$((i + 1)); done; kill "$p" 2>/dev/null ) >/dev/null 2>&1 &
+  ( i=0; while kill -0 "$p" 2>/dev/null && (( i < LIMIT )); do sleep 1; i=$((i + 1)); done
+    if kill -0 "$p" 2>/dev/null; then kids=$(pgrep -P "$p"); kill -ALRM "$p"; [[ -z "$kids" ]] || kill $kids; fi ) >/dev/null 2>&1 &
   local w=$!
   wait "$p"; local rc=$?
   kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
+  if (( rc == 142 )); then TIMEDOUT=1; fi
   return $rc
 }
 # row LABEL FIX CMD [SIGNIN [NEEDS_ENV]]: SIGNIN=1 blocks every later row when it fails; NEEDS_ENV is an env var CMD cannot run without.
 row() {
   if [[ -n "$BLOCK" ]]; then printf 'NOT CHECKED  %s\\n               sign in first: %s\\n' "$1" "$BLOCK"; UNCHECKED=$((UNCHECKED + 1)); return; fi
   local fix=$2
+  TIMEDOUT=0
   if [[ "\${5:--}" != "-" && -z "\${!5:-}" ]]; then fix="$5=<your host> bun run doctor"
   elif probe "$3"; then printf 'PASS         %s\\n' "$1"; PASSED=$((PASSED + 1)); return; fi
+  if (( TIMEDOUT )); then fix="timed out after \${LIMIT}s"; fi
   printf 'FAIL         %s\\n               fix: %s\\n' "$1" "$fix"; FAILED=$((FAILED + 1))
   if [[ "\${4:-0}" == 1 ]]; then BLOCK="step \${1%%.*} \${1#*. }"; fi
 }
 
 ${row("Local env (void env check)", "void env check", "void env check")}
-${row("Local migrations (void db status)", "void db migrate", `out=$(void db status) && ! grep -q 'pending locally' <<<"$out" && grep -Eq '^ *[0-9]+ migrations?$' <<<"$out"`)}
+${row("Local migrations (void db status)", "void db migrate", `out=$(void db status) && ! grep -q 'pending locally' <<<"$out" && ! grep -qi drift <<<"$out" && grep -Eq '^ *[0-9]+ migrations?$' <<<"$out"`)}
 ${steps.join("\n")}
 ${row("Remote env names (void env check --remote)", "void env check --remote", "void env check --remote")}
 

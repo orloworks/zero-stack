@@ -224,11 +224,12 @@ function doctorRun(c: ReturnType<typeof cfg>, env: Record<string, string> = {}, 
     "#!/bin/sh",
     'echo "$(basename "$0") $*" >> "$FAKE_LOG"',
     `echo ${SENTINEL}; echo ${SENTINEL} >&2`,
+    '[ "$1 $2" = "secret list" ] && [ -n "$SLOW" ] && { echo $$ > "$FAKE_LOG.pid"; exec sleep 30; }',
     '[ "$1 $2" = "secret list" ] && { echo "$LISTED"; exit 0; }',
     '[ "$1 $2" = "cloudflare status" ] && exit "${CF_STATUS:-0}"',
     '[ "$1 $2" = "auth whoami" ] && echo \'"authenticated": true\'',
     '[ "$1 $2" = "r2 buckets" ] && echo storage',
-    '[ "$1 $2" = "db status" ] && { echo "1 migration"; exit 0; }',
+    '[ "$1 $2" = "db status" ] && { echo "${DB_OUT:-1 migration}"; exit 0; }',
     "exit 0",
   ].join("\n");
   for (const [d, n] of [[join(dir, "node_modules/.bin"), "void"], [bin, "infisical"], [bin, "cf"], [bin, "curl"]] as const) { writeFileSync(join(d, n), fake); chmodSync(join(d, n), 0o755); }
@@ -239,7 +240,7 @@ function doctorRun(c: ReturnType<typeof cfg>, env: Record<string, string> = {}, 
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_LOG: log, LISTED: listed, APP_HOST: "app.example.com", ...env },
   });
   const out = r.stdout.toString() + r.stderr.toString();
-  return { code: r.exitCode, out, rows: out.split("\n").filter((l) => /^(PASS|FAIL|NOT CHECKED) /.test(l)), calls: readFileSync(log, "utf8") };
+  return { code: r.exitCode, out, rows: out.split("\n").filter((l) => /^(PASS|FAIL|NOT CHECKED) /.test(l)), calls: readFileSync(log, "utf8"), dir };
 }
 
 test("doctor: every row passes against passing CLIs, from a subdirectory, and exits 0", () => {
@@ -277,6 +278,28 @@ test("doctor: a failed sign-in marks every later row NOT CHECKED, with no fix li
   expect(r.out.match(/sign in first: step 1 Sign in to Cloudflare/g)).toHaveLength(later.length);
   expect(r.out.match(/fix:/g)).toHaveLength(1);
   expect(r.code).toBe(1);
+});
+
+test("doctor: migration drift fails the migrations row, even when the summary line looks fine", () => {
+  const r = doctorRun(cfg(), { DB_OUT: "1 migration\nMigration drift detected between db/migrations/ and the journal" });
+  expect(r.rows[0]).toStartWith("PASS");
+  expect(r.rows[1]).toStartWith("FAIL         Local migrations");
+  expect(r.code).toBe(1);
+});
+
+test("doctor: a row that outlives the limit is FAIL with a timed-out line, and its child CLI is killed", async () => {
+  const r = doctorRun(cfg({ admin: true }), { SLOW: "1", DOCTOR_LIMIT: "1" });
+  const n = stepsFor(cfg({ admin: true })).findIndex((s) => s.id === "admin-emails") + 1;
+  expect(r.out).toContain(`FAIL         ${n}. Set the admin emails\n               fix: timed out after 1s`);
+  expect(r.code).toBe(1);
+  const pid = Number(readFileSync(join(r.dir, "calls.log.pid"), "utf8"));
+  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (let i = 0; i < 20 && alive(); i++) await Bun.sleep(100);
+  expect(alive()).toBe(false);
+}, 30_000);
+
+test("the Set the sending address step fails when void.config.ts is missing", () => {
+  expect(STEPS.find((s) => s.id === "email-from")!.verify).toStartWith("test -f void.config.ts &&");
 });
 
 test("doctor: APP_HOST unset fails the Deploy row with the command to run, and curl is not called", () => {
