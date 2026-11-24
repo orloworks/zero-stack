@@ -1,3 +1,4 @@
+import { ADMIN_TEST_DEV_DEPS } from "../../src/versions";
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, chmodSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -480,7 +481,7 @@ test("svelte --storage --account-deletion purges before and after deletion and m
   expect(existsSync(join(off.dir, "src/storage.ts"))).toBe(false);
 });
 
-// create-void's tsconfig.json (svelte, 1.8.0): `include` lists directories, not scripts/.
+// create-void's tsconfig.json (svelte): `include` lists directories, not scripts/.
 const REAL_TSCONFIG = JSON.stringify({ extends: "./.void/tsconfig.json", compilerOptions: { strict: true }, include: ["src", "pages", "routes", "middleware", "crons", "queues", "db"] }, null, 2);
 const withTsconfig = (s: ReturnType<typeof seeded>, body = REAL_TSCONFIG) => async (cmd: string[]) => {
   await s.exec(cmd);
@@ -541,7 +542,7 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
   expect(read("pages/admin/layout.svelte")).toContain('const APP_NAME = "app";');
   expect(read("src/admin.ts")).toContain("export const INVITE_ONLY = false;");
   // tests/onboarding.test.ts imports these directly, so the app declares them (#74).
-  expect(JSON.parse(read("package.json")).devDependencies).toMatchObject({ "better-sqlite3": "^13.0.3", "drizzle-orm": "^0.45.4" });
+  expect(JSON.parse(read("package.json")).devDependencies).toMatchObject(ADMIN_TEST_DEV_DEPS);
   expect(read("env.ts")).toContain('ADMIN_EMAILS: string().default(""),');
   expect(read(".env")).toContain("\nADMIN_EMAILS=@example.com\n");
   const account = read("pages/settings.svelte");

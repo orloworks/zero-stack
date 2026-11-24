@@ -1,8 +1,8 @@
 # create-zero-stack
 
 Scaffold a [Void](https://void.cloud) app for Cloudflare Workers with opinionated extras
-(Tailwind, shadcn, zod RPC, auth and auth add-ons, storage). It wraps `create-void@1.8.0` (the pin in
-`src/versions.ts`) and layers installers on top by anchored string replace. Personal-first
+(Tailwind, shadcn, zod RPC, auth and auth add-ons, storage). It wraps `create-void` (pinned in
+`src/versions.ts`, kept current by `bun scripts/bump-void.ts`) and layers installers on top by anchored string replace. Personal-first
 tool, published without support promises.
 
 ## Requirements

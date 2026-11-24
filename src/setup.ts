@@ -27,7 +27,7 @@ const WHO: Record<Who, string> = { agent: "Agent", "agent-browser": "Agent with 
 const SECRET_LIST = "void secret list | grep -q";
 const EMAIL_STATUS = "void email status --platform cloudflare";
 
-// Dependency order: sign-ins, values a deploy needs, the deploy, then what it provisions. Every step is checked against the Void 1.8.0 docs
+// Dependency order: sign-ins, values a deploy needs, the deploy, then what it provisions. Every step is checked against the pinned Void's docs (last: 1.11.0)
 // (reference/cli/{auth,secrets,email,deploy}.md, guide/{env-vars,auth,email/domains}.md) or `--help` of cf and infisical.
 export const STEPS: Step[] = [
   {

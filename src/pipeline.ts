@@ -100,7 +100,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     if (config.auth) await exec([join(targetDir, "node_modules/.bin/void"), "db", "generate"], targetDir);
     writeAgentFiles(targetDir, config); // before vp check so the block gets formatted too
     writeSetupFiles(targetDir, config);
-    // create-void 1.8.0 output fails its own `vp check` on formatting (docs/facts.md).
+    // create-void output fails its own `vp check` on formatting (docs/facts.md).
     await exec([join(targetDir, "node_modules/.bin/vp"), "check", "--fix"], targetDir);
   } catch (e) {
     cleanup();

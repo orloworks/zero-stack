@@ -10,7 +10,7 @@ const OPEN = "<!-- zero-stack:routing -->";
 
 // Fake create-void: makes the dir with Void's AGENTS.md and a package.json.
 const fake = (dir: string) => async (cmd: string[]) => {
-  if (cmd.includes("create-void@1.8.0")) {
+  if (cmd.some((c) => c.startsWith("create-void@"))) {
     mkdirSync(dir);
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { postinstall: "void prepare" } }));
     writeFileSync(join(dir, "AGENTS.md"), "# Void\nvoid section\n<!--/injected-by-void-->\n");

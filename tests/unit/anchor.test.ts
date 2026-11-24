@@ -6,9 +6,9 @@ test("replaces a single anchor, keeping `$` in the replacement literal", () => {
 });
 
 test("a missing anchor fails naming the anchor and the pinned version", () => {
-  expect(() => replaceAnchor("abc", "X", "y", "f.ts")).toThrow(/"X" not found in f\.ts \(create-void@1\.8\.0\)/);
+  expect(() => replaceAnchor("abc", "X", "y", "f.ts")).toThrow(/"X" not found in f\.ts \(create-void@\d/);
 });
 
 test("a duplicated anchor fails naming the anchor and the pinned version", () => {
-  expect(() => replaceAnchor("X X", "X", "y", "f.ts")).toThrow(/"X" found 2 times in f\.ts \(create-void@1\.8\.0\)/);
+  expect(() => replaceAnchor("X X", "X", "y", "f.ts")).toThrow(/"X" found 2 times in f\.ts \(create-void@\d/);
 });

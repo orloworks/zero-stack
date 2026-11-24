@@ -42,7 +42,7 @@ It writes `.cloudflare/output/v1/` while void's `@cloudflare/build-output-utils@
 `v0/config.json`, so every fresh scaffold fails `vp build` with "no root config found". Reproduced on a
 plain react scaffold; `overrides: {"@cloudflare/vite-plugin": "2.0.0-beta.v.17"}` plus `bun install`
 builds again. The generated package.json carries that override (`OVERRIDES` in `src/versions.ts`);
-drop it when the void pin moves to a release that matches rc.0.
+drop it when the void pin moves to a release that matches rc.0. **Dropped with create-void 1.11.0** (2026-11-23): void now pins rc.0 and `build-output-utils@1.0.0-rc.0`, and ci:full builds every framework without it.
 
 ## `vite-plus@1.7.0` breaks `vp build` (2026-11-17)
 
@@ -50,7 +50,7 @@ create-void@1.8.0 writes `"vite-plus": "^1.6.0"` and `"vite": "npm:@voidzero-dev
 (also as an override). `vite-plus@1.7.0` requires core `8.3.8000` (new version scheme), which `^1.6.0`
 can't resolve, so `vp build` fails with "Expected @voidzero-dev/vite-plus-core@8.3.8000, but found 1.6.0".
 Reproduced on a plain react scaffold; adding `"vite-plus": "1.6.0"` to `overrides` and reinstalling builds
-again. Carried in `OVERRIDES` (`src/versions.ts`); drop it with the next void pin (see #16).
+again. Carried in `OVERRIDES` (`src/versions.ts`); drop it with the next void pin (see #16). **Dropped with create-void 1.11.0** (2026-11-23).
 
 ## Local D1 enforces foreign keys and `onDelete: "cascade"` (2026-11-18)
 
