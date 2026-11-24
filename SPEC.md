@@ -334,7 +334,7 @@ dependency-free `scripts/secrets.ts` (`node:` APIs only) and adds `secrets:pull`
 ## Generated app
 
 Scripts: `verify` (`void prepare && vp check && tsc --noEmit && vp build && vp test`), `test`,
-`db:reset` (`void db reset --yes`). Ships one `vi.mock`-based route test (Void tests run
+`db:reset` (`void db reset --yes`), `doctor` (`bash scripts/doctor.sh`, see Setup guide). Ships one `vi.mock`-based route test (Void tests run
 in Node; bindings are unavailable). `AGENTS.md` tells agents to run `verify` before
 finishing. No wrangler files, ever (Void migrates a root `wrangler.jsonc` itself).
 
@@ -345,7 +345,11 @@ command (exit 0 = done) and the env names the step covers. A step has a flag pre
 shown. Three composers read it: the `## Setup` table in `AGENTS.md`, `docs/setup.md`, and `scripts/setup-wizard.sh` (one stage per
 `human` step; a done step is detected by its verify command and skipped; typed values are read hidden, never printed, and go to
 `void secret put` by stdin, plus Infisical `prod` by stdin (`--file /dev/stdin` fed `NAME=value`, never a file on disk) with `--secrets`; `void` is found through `node_modules/.bin`; a failed put is reported, not fatal). The wizard never opens a browser: it prints links. A unit test fails when a flag adds an env name in `authEnv`
-or `env.ts` that no step covers. The gate checks the steps against the flags and runs `bash -n` on the wizard. Commands are the pinned Void's, `cf` and `infisical` only, never wrangler; Void-side browser driving stays in the agent's harness, not in the app.
+or `env.ts` that no step covers. A fourth composer writes `scripts/doctor.sh` (`bun run doctor`, every framework): rows are `void env check`, local
+migrations (`void db status`, fail closed on unrecognised output), each step's verify with the guide's number and title (`<app-host>` and `<app-name>`
+become `APP_HOST`, which must be set or the Deploy row FAILs, and `APP_NAME`, default the scaffolded name), then `void env check --remote`. Each prints PASS, FAIL
+(one fix line) or NOT CHECKED (every row after a failed sign-in step, the steps with an interactive `exec`); output is discarded, stdin closed,
+a time limit applies; exit 0 only when every row passed. The gate runs it under an isolated HOME and asserts each row. The gate checks the steps against the flags and runs `bash -n` on the wizard. Commands are the pinned Void's, `cf` and `infisical` only, never wrangler; Void-side browser driving stays in the agent's harness, not in the app.
 
 ## Routing docs
 

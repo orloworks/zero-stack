@@ -47,6 +47,7 @@ function addAppScripts(targetDir: string, config: Config): void {
       verify: "void prepare && vp check && tsc --noEmit && vp build && vp test",
       test: "vp test",
       "db:reset": "void db reset --yes",
+      doctor: "bash scripts/doctor.sh",
       ...(config.secrets && { "secrets:pull": "bun --no-env-file scripts/secrets.ts pull", "secrets:push": "bun --no-env-file scripts/secrets.ts push" }),
     });
     // Void does not handle bun script approvals.

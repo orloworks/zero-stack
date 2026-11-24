@@ -1,12 +1,13 @@
 // Scaffold into a temp dir, then vp check/build/test, verify, db:reset, GET / against vp dev.
 // Optional args choose the permutation: bun scripts/gate.ts [--framework vue] [--<feature flag from src/flags.ts>...] [--name x]
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { argv as featureArgv, FEATURE_LIST, validateFlags } from "../src/flags";
 import { killChildren, onTerminate, spawnTracked } from "../src/children";
 import { preflight, run, scaffold } from "../src/pipeline";
+import { stepsFor } from "../src/setup";
 import { CREATE_VOID, TRUSTED_DEPENDENCIES } from "../src/versions";
 
 const root = mkdtempSync(join(tmpdir(), "zs-gate-"));
@@ -116,6 +117,82 @@ try {
     if (!existsSync(wiz)) throw new Error("no scripts/setup-wizard.sh");
     await run(["bash", "-n", wiz], app);
     console.log("gate: setup guide matches the flags; setup-wizard.sh parses");
+  }
+
+  // Doctor: `bun run doctor` under an isolated HOME with fake void (only for the account calls), infisical, cf and curl first on PATH. The real
+  // void answers `env check` and `db status`; every row's result is asserted, not just the exit code.
+  {
+    const bin = join(app, "node_modules/.bin");
+    const home = mkdtempSync(join(root, "doctor-home-"));
+    const fakes = mkdtempSync(join(root, "doctor-bin-"));
+    const log = join(root, "doctor-calls.log");
+    writeFileSync(log, "");
+    const put = (dir: string, n: string, body: string) => writeFileSync(join(dir, n), `#!/bin/sh\necho "$(basename "$0") $*" >> "${log}"\n${body}\n`, { mode: 0o755 });
+    put(fakes, "infisical", "exit 0");
+    put(fakes, "curl", "exit 1");
+    // The app ships its own node_modules/.bin/cf, which the doctor puts ahead of PATH: move it aside and put the fake there.
+    const hadCf = existsSync(join(bin, "cf"));
+    if (hadCf) renameSync(join(bin, "cf"), join(bin, "cf.real"));
+    put(bin, "cf", `[ "$1 $2" = "auth whoami" ] && echo '"authenticated": true'\nexit 0`);
+    renameSync(join(bin, "void"), join(bin, "void.real"));
+    put(bin, "void", [
+      'case "$1 $2" in "cloudflare status") exit 0;; "secret list"|"email status") exit 1;; esac',
+      '[ "$1 $2 $3" = "env check --remote" ] && exit 1',
+      'exec "$(dirname "$0")/void.real" "$@"',
+    ].join("\n"));
+    const doctor = () => {
+      const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, ".config"), PATH: `${fakes}:${process.env.PATH}` } as Record<string, string | undefined>;
+      for (const k of Object.keys(env)) if (/^(CLOUDFLARE_|CF_|INFISICAL_|APP_HOST$|APP_NAME$)/.test(k)) delete env[k];
+      const r = Bun.spawnSync([process.execPath, "run", "doctor"], { cwd: app, stdin: null, env });
+      const out = r.stdout.toString() + r.stderr.toString();
+      const rows = new Map(out.split("\n").flatMap((l) => { const m = l.match(/^(PASS|FAIL|NOT CHECKED) +(.*)$/); return m ? [[m[2]!, m[1]!] as const] : []; }));
+      return { code: r.exitCode, out, rows };
+    };
+    const restore: (() => void)[] = [];
+    try {
+      const base = doctor();
+      const steps = stepsFor(config);
+      const want = ["Local env (void env check)", "Local migrations (void db status)", ...steps.map((s, i) => `${i + 1}. ${s.title}`), "Remote env names (void env check --remote)"];
+      if (JSON.stringify([...base.rows.keys()]) !== JSON.stringify(want)) throw new Error(`doctor rows ${JSON.stringify([...base.rows.keys()])}, wanted ${JSON.stringify(want)}`);
+      const connect = want[2 + steps.findIndex((s) => s.id === "cloudflare-connect")]!;
+      const deploy = want[2 + steps.findIndex((s) => s.id === "deploy")]!;
+      for (const [row, res] of [[want[0]!, "PASS"], [want[1]!, "PASS"], [want[2]!, "PASS"], [connect, "FAIL"], [deploy, "FAIL"], [want.at(-1)!, "FAIL"]] as const)
+        if (base.rows.get(row) !== res) throw new Error(`doctor row "${row}" is ${base.rows.get(row)}, wanted ${res}:\n${base.out}`);
+      if (base.code !== 1 || !base.out.includes("Start with the first FAIL.")) throw new Error(`doctor exited ${base.code}:\n${base.out}`);
+      if (!base.out.includes("fix: APP_HOST=<your host> bun run doctor")) throw new Error(`doctor Deploy row has no APP_HOST fix:\n${base.out}`);
+      const calls = readFileSync(log, "utf8");
+      // Only fakes and the offline local checks ran; no write, deploy, connect or network call.
+      if (/^(curl|void (connect|deploy|secret put|cloudflare login))/m.test(calls)) throw new Error(`doctor made an account call:\n${calls}`);
+      console.log(`gate: doctor, ${want.length} rows: local PASS, "${connect}" FAIL, exit 1, no account call`);
+
+      // A required env key missing flips the env row; adding it flips it back.
+      const envTs = join(app, "env.ts"), dotEnv = join(app, ".env");
+      const [tsOld, envOld] = [existsSync(envTs) ? readFileSync(envTs, "utf8") : null, existsSync(dotEnv) ? readFileSync(dotEnv, "utf8") : null];
+      restore.push(() => { tsOld === null ? rmSync(envTs, { force: true }) : writeFileSync(envTs, tsOld); envOld === null ? rmSync(dotEnv, { force: true }) : writeFileSync(dotEnv, envOld); });
+      writeFileSync(envTs, 'import { defineEnv, string } from "void/env";\nexport default defineEnv({ GATE_NEEDED: string() });\n');
+      writeFileSync(dotEnv, envOld ?? "");
+      if (doctor().rows.get(want[0]!) !== "FAIL") throw new Error("doctor env row did not fail with a required key missing");
+      writeFileSync(dotEnv, `${envOld ?? ""}${envOld && !envOld.endsWith("\n") ? "\n" : ""}GATE_NEEDED=x\n`);
+      if (doctor().rows.get(want[0]!) !== "PASS") throw new Error("doctor env row did not pass with the key set");
+      restore.pop()!();
+
+      // An unapplied local migration flips the migrations row.
+      const schema = join(app, "db/schema.ts"), migs = join(app, "db/migrations"), keep = mkdtempSync(join(root, "doctor-migs-"));
+      const schemaOld = readFileSync(schema, "utf8");
+      cpSync(migs, join(keep, "migrations"), { recursive: true });
+      restore.push(() => { writeFileSync(schema, schemaOld); rmSync(migs, { recursive: true }); cpSync(join(keep, "migrations"), migs, { recursive: true }); });
+      writeFileSync(schema, `${schemaOld}\nexport const gatePending = sqliteTable("gate_pending", { id: integer("id").primaryKey() });\n`);
+      await run([join(bin, "void"), "db", "generate"], app);
+      if (doctor().rows.get(want[1]!) !== "FAIL") throw new Error("doctor migrations row did not fail with a pending migration");
+      restore.pop()!();
+      if (doctor().rows.get(want[1]!) !== "PASS") throw new Error("doctor migrations row did not pass after the pending migration was removed");
+      console.log("gate: doctor env row follows a missing required key; migrations row follows a pending migration");
+    } finally {
+      for (const r of restore.reverse()) r();
+      renameSync(join(bin, "void.real"), join(bin, "void"));
+      if (hadCf) renameSync(join(bin, "cf.real"), join(bin, "cf"));
+      else rmSync(join(bin, "cf"), { force: true });
+    }
   }
 
   if (config.zodRpc) {
