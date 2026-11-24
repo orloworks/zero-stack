@@ -229,7 +229,7 @@ function doctorRun(c: ReturnType<typeof cfg>, env: Record<string, string> = {}, 
     '[ "$1 $2" = "secret list" ] && { echo "$LISTED"; exit 0; }',
     '[ "$1 $2" = "cloudflare status" ] && exit "${CF_STATUS:-0}"',
     '[ "$1 $2" = "auth whoami" ] && echo \'"authenticated": true\'',
-    '[ "$1 $2" = "r2 buckets" ] && { printf "%s\n" $BUCKETS; exit 0; }',
+    '[ "$1 $2" = "r2 buckets" ] && { if [ -n "$BUCKETS_RAW" ]; then printf "%s\n" "$BUCKETS_RAW"; else printf "%s\n" $BUCKETS; fi; exit 0; }',
     '[ "$1 $2" = "db status" ] && { echo "${DB_OUT:-1 migration}"; exit 0; }',
     "exit 0",
   ].join("\n");
@@ -346,6 +346,9 @@ test("doctor: the R2 row passes only on the app's exact bucket name, never a loo
   expect(res({ BUCKETS: "app-storage" })).toMatch(/^PASS/);
   expect(res({ BUCKETS: "other-storage app-storage" })).toMatch(/^PASS/);
   for (const b of ["myapp-storage", "app2-storage", "my-app-storage", "app-storage-old", "app"]) expect(res({ BUCKETS: b })).toMatch(/^FAIL/);
+  // The real CLI's output format is unconfirmed: a JSON line and a table cell must match too, and their look-alikes must not.
+  for (const line of ['  "name": "app-storage",', "│ app-storage │ 2026-11-24 │"]) expect(res({ BUCKETS_RAW: line })).toMatch(/^PASS/);
+  for (const line of ['  "name": "myapp-storage",', "│ app-storage-old │ 2026-11-24 │"]) expect(res({ BUCKETS_RAW: line })).toMatch(/^FAIL/);
 });
 
 test("doctor: the R2 row fails until the app is connected", () => {
