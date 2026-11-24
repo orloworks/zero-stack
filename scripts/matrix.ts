@@ -15,6 +15,7 @@ export const MATRIX: { name: string; args: string[] }[] = [
   { name: "svelte-admin", args: ["--framework", "svelte", "--admin"] },
   { name: "svelte-admin-storage", args: ["--framework", "svelte", "--admin", "--storage"] },
   { name: "svelte-admin-invite-only", args: ["--framework", "svelte", "--admin", "--invite-only"] },
+  { name: "svelte-payments", args: ["--framework", "svelte", "--auth", "--payments"] },
   { name: "storage", args: ["--storage"] },
   { name: "svelte-secrets", args: ["--framework", "svelte", ...argv(FEATURE_LIST.find((f) => f.flag === "secrets")!)] },
   { name: "svelte-storage-deletion", args: ["--framework", "svelte", "--storage", "--account-deletion"] },

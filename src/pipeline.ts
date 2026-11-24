@@ -5,6 +5,7 @@ import { writeAgentFiles } from "./agent-files";
 import type { Config } from "./flags";
 import { installAdmin } from "./installers/admin";
 import { installAuth } from "./installers/auth";
+import { installPayments } from "./installers/payments";
 import { ignoreLine } from "./installers/shared";
 import { writeSetupFiles } from "./setup";
 import { installStorage } from "./installers/storage";
@@ -62,7 +63,7 @@ function addAppScripts(targetDir: string, config: Config): void {
     // create-void's tsconfig `include` lists directories, so `tsc --noEmit` (verify) skips scripts/ unless it is added.
     editJson(targetDir, "tsconfig.json", (ts) => {
       if (!Array.isArray(ts.include)) throw anchorError("include", "tsconfig.json");
-      ts.include.push("scripts");
+      if (!ts.include.includes("scripts")) ts.include.push("scripts"); // --payments may have added it
     });
     // The pull's temp file sits beside .env; .env itself is ignored by installAuth (secrets implies auth).
     ignoreLine(targetDir, ".env.pull-tmp");
@@ -94,6 +95,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     if (config.auth) installAuth(targetDir, config);
     if (config.storage) installStorage(targetDir);
     if (config.admin) installAdmin(targetDir, config); // after storage: it edits the upload route
+    if (config.payments) installPayments(targetDir);
     addAppScripts(targetDir, config);
     await exec([process.execPath, "install"], targetDir);
     // Leaves the auth migration generated, not applied to any database.
