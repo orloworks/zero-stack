@@ -1284,9 +1284,9 @@ try {
       fetch(b + path, { method: body ? "POST" : "GET", redirect: "manual", headers: { origin, ...(cookie && { cookie }), ...(body && { "content-type": "application/json" }) }, body: body && JSON.stringify(body) });
     const page = (b: string, cookie = "") => call(b, "/billing", cookie).then((r) => r.text());
     const UPGRADE = { plan: "pro", successUrl: "/billing", cancelUrl: "/billing" };
-    const webhook = async (b: string, ev: Obj, sig?: string) => {
+    const webhook = async (b: string, ev: Obj, sig?: string, secret = SECRET) => {
       const payload = JSON.stringify({ id: id("evt"), object: "event", api_version: "2025-01-01", created: Math.floor(Date.now() / 1000), livemode: false, ...ev });
-      return fetch(`${b}/api/auth/stripe/webhook`, { method: "POST", headers: { "content-type": "application/json", ...(sig !== "" && { "stripe-signature": sig ?? (await sign(payload)) }) }, body: payload });
+      return fetch(`${b}/api/auth/stripe/webhook`, { method: "POST", headers: { "content-type": "application/json", ...(sig !== "" && { "stripe-signature": sig ?? (await sign(payload, secret)) }) }, body: payload });
     };
     const now = Math.floor(Date.now() / 1000);
     const subObj = (s: Obj) => ({ object: s });
@@ -1307,7 +1307,10 @@ try {
       check((await page(b, early)).includes("Stripe isn't set up yet."), "/billing with placeholder keys lacks \"Stripe isn't set up yet.\"");
       const unset = await call(b, "/api/auth/subscription/upgrade", early, UPGRADE);
       check(unset.status === 503 && ((await unset.json()) as Obj).code === "STRIPE_NOT_CONFIGURED", `upgrade with placeholder keys -> ${unset.status}, expected 503 STRIPE_NOT_CONFIGURED`);
-      console.log("gate: payments with placeholder keys: the app serves, /billing and the upgrade route say Stripe isn't set up yet (503)");
+      // The placeholder webhook secret is public: an event signed with it is refused.
+      const forged = await webhook(b, { type: "customer.subscription.updated", data: { object: { id: "sub_forged", customer: "cus_forged", status: "active", items: { data: [] } } } }, undefined, "whsec_placeholder");
+      check(forged.status === 400 && ((await forged.json()) as Obj).code === "STRIPE_WEBHOOK_NOT_CONFIGURED", `a webhook signed with whsec_placeholder -> ${forged.status}, expected 400`);
+      console.log("gate: payments with placeholder keys: the app serves, /billing and the upgrade route say Stripe isn't set up yet (503), a webhook signed with whsec_placeholder is 400");
 
       const STRIPE = { STRIPE_SECRET_KEY: "sk_test_gate", STRIPE_WEBHOOK_SECRET: SECRET, STRIPE_API_URL: `http://127.0.0.1:${server.port}` };
       // The seed script: refuses live keys before calling Stripe, creates the declared price once, and a rerun creates nothing.
@@ -1387,22 +1390,29 @@ try {
       check(portal.ok && ((await portal.json()) as Obj).url === "https://billing.stripe.test/session", `portal -> ${portal.status}`);
       console.log("gate: payments: the success redirect shows the plan before any webhook; created and checkout.session.completed answer 200 and keep one row; requirePlan 200; another user can't read or manage it; the portal opens");
 
+      // Stripe's state changes (the fake's subscription is the live one the app reads back), then the event for it arrives.
+      const emit = (type: string, change: Obj) => webhook(b, { type, data: subObj({ ...Object.assign(subA, change) }) });
       // past_due: shown with the fix-your-card copy, still counts for requirePlan, and blocks a second Checkout.
-      check((await webhook(b, { type: "customer.subscription.updated", data: subObj({ ...subA, status: "past_due" }) })).status === 200, "updated past_due -> not 200");
+      check((await emit("customer.subscription.updated", { status: "past_due" })).status === 200, "updated past_due -> not 200");
       const due = await page(b, a);
       check(due.includes("Your last payment failed") && due.includes("Manage billing") && !due.includes("Subscribe to Pro"), "/billing for past_due lacks the failure copy or still offers Subscribe");
       check((await call(b, "/api/example-plan", a)).status === 200, "requirePlan refused a past_due plan");
       const sessions = fake.sessions.size;
       const second = await call(b, "/api/auth/subscription/upgrade", a, UPGRADE);
       check(second.status === 400 && ((await second.json()) as Obj).code === "SUBSCRIPTION_NEEDS_CARD" && fake.sessions.size === sessions, `a past_due user's second upgrade -> ${second.status}`);
-      // A lost write: the database refuses the update, the plugin swallows it, and onEvent's re-read answers an error so Stripe retries; the retry lands.
+      // unpaid: inactive for requirePlan, and still no second Checkout.
+      check((await emit("customer.subscription.updated", { status: "unpaid" })).status === 200, "updated unpaid -> not 200");
+      check((await page(b, a)).includes("is paused because payments failed") && (await call(b, "/api/example-plan", a)).status === 403, "unpaid lacks the paused copy or passed requirePlan");
+      const third = await call(b, "/api/auth/subscription/upgrade", a, UPGRADE);
+      check(third.status === 400 && ((await third.json()) as Obj).code === "SUBSCRIPTION_NEEDS_CARD" && fake.sessions.size === sessions, `an unpaid user's second upgrade -> ${third.status}`);
+      // A lost write: the database refuses the update (the plugin's and the sync's), so the event answers an error and Stripe retries; the retry lands.
       db((d) => d.run("CREATE TRIGGER gate_fail BEFORE UPDATE ON subscription WHEN NEW.status = 'active' BEGIN SELECT RAISE(ABORT, 'gate'); END"));
-      const lost = await webhook(b, { type: "customer.subscription.updated", data: subObj({ ...subA, status: "active", cancel_at_period_end: true }) });
+      const lost = await emit("customer.subscription.updated", { status: "active", cancel_at_period_end: true });
       db((d) => d.run("DROP TRIGGER gate_fail"));
-      check(lost.status >= 400 && subRows(aId)[0].status === "past_due", `an update whose write failed -> ${lost.status}, row ${subRows(aId)[0].status}`);
-      check((await webhook(b, { type: "customer.subscription.updated", data: subObj({ ...subA, status: "active", cancel_at_period_end: true }) })).status === 200, "the retried update -> not 200");
+      check(lost.status >= 400 && subRows(aId)[0].status === "unpaid", `an update whose write failed -> ${lost.status}, row ${subRows(aId)[0].status}`);
+      check((await emit("customer.subscription.updated", {})).status === 200, "the retried update -> not 200");
       check((await page(b, a)).includes("Pro. Cancelling, ends on"), "/billing for a cancelling plan lacks the end date");
-      console.log("gate: payments: past_due shows the fix-your-card copy, still passes requirePlan and refuses a second Checkout; a failed write answers an error and the retry lands; cancelling shows its end date");
+      console.log("gate: payments: past_due shows the fix-your-card copy, still passes requirePlan and refuses a second Checkout; unpaid fails requirePlan and refuses one too; a failed write answers an error and the retry lands; cancelling shows its end date");
 
       // No user holds the customer (a dashboard subscription, or a deleted user whose rows are gone): 200 and nothing changes.
       const ghostMail = `payer-ghost-${Date.now()}@example.com`;
@@ -1419,11 +1429,15 @@ try {
       check(allSubs() === quiet, "an event for a customer no user holds changed the subscription table");
       console.log("gate: payments: subscription events for an unknown customer and for a deleted user's customer answer 200 and change nothing");
 
-      check((await webhook(b, { type: "customer.subscription.deleted", data: subObj({ ...subA, status: "canceled" }) })).status === 200, "deleted -> not 200");
+      const older = { ...subA, status: "active", cancel_at_period_end: false }; // an update Stripe sent before the deletion
+      check((await emit("customer.subscription.deleted", { status: "canceled" })).status === 200, "deleted -> not 200");
       const ended = await page(b, a);
       check(subRows(aId)[0].status === "canceled" && ended.includes("Your Pro plan has ended.") && ended.includes("Subscribe to Pro"), "/billing after deletion lacks the ended copy or the Subscribe button");
       check((await call(b, "/api/example-plan", a)).status === 403, "requirePlan let a canceled plan through");
-      console.log("gate: payments: a deleted subscription shows as ended with Subscribe back, and requirePlan refuses it");
+      // Out of order: that older update, retried after the deletion, must not bring the plan back.
+      check((await webhook(b, { type: "customer.subscription.updated", data: subObj(older) })).status === 200, "a late older update -> not 200");
+      check(subRows(aId)[0].status === "canceled" && (await call(b, "/api/example-plan", a)).status === 403, `a late older update revived the plan: row ${subRows(aId)[0].status}`);
+      console.log("gate: payments: a deleted subscription shows as ended with Subscribe back, requirePlan refuses it, and an older update retried afterwards leaves it canceled");
 
       // Static checks: one better-auth, the webhook's rate-limit exemption, the plugin's tables in the migration.
       const copies: string[] = [];

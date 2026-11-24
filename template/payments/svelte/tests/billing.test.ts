@@ -31,7 +31,7 @@ vi.mock("void/db", async () => {
   };
 });
 
-const { confirmStripeEvent, currentPlan, requirePlan } = await import("../src/billing");
+const { currentPlan, requirePlan, syncStripeEvent } = await import("../src/billing");
 const sqlite = ((await import("void/db")) as unknown as { sqlite: { exec: (s: string) => void } }).sqlite;
 const setRows = (...rows: string[]) => sqlite.exec(`delete from subscription; ${rows.map((r) => `insert into subscription (id, plan, referenceId, stripeCustomerId, stripeSubscriptionId, status) values ${r};`).join(" ")}`);
 const c = () => ({ req: { raw: new Request("http://localhost/") } }) as never;
@@ -85,37 +85,55 @@ it("requirePlan: 401 signed out, 403 without an active plan, the user with one (
 });
 
 const key = PLANS[0].monthly.lookupKey;
-const event = (type: string, o: { id?: string; status?: string; customer?: string; lookup?: string; metadata?: Record<string, string> } = {}) => ({
-  type,
-  data: { object: { id: o.id ?? "sub_1", status: o.status ?? "active", customer: o.customer ?? "cus_1", metadata: o.metadata ?? {}, items: { data: [{ price: { lookup_key: o.lookup ?? key } }] } } },
-}) as never; // the fields the check reads, not a whole Stripe.Event
+const event = (type: string, o: { id?: string; status?: string; customer?: string; lookup?: string; metadata?: Record<string, string> } = {}) =>
+  ({
+    type,
+    data: { object: { id: o.id ?? "sub_1", status: o.status ?? "active", customer: o.customer ?? "cus_1", metadata: o.metadata ?? {}, items: { data: [{ price: { lookup_key: o.lookup ?? key } }] } } },
+  }) as never; // the fields the sync reads, not a whole Stripe.Event
+// Stripe's live state, as subscriptions.retrieve answers it.
+const live = { status: "active", cancel_at_period_end: false, cancel_at: null as number | null, items: { data: [{ current_period_start: 1_790_000_000, current_period_end: 1_792_592_000 }] } };
+const retrieved: string[] = [];
+const sync = syncStripeEvent({ subscriptions: { retrieve: async (id: string) => (retrieved.push(id), structuredClone(live)) as never } });
+const stored = () => (sqlite as unknown as { prepare: (s: string) => { get: () => { status: string; cancelAtPeriodEnd: number | null } } }).prepare("select status, cancelAtPeriodEnd from subscription where id = 's1'").get();
 
-it("confirmStripeEvent: a stored row that matches the event passes; a missed write throws so Stripe retries", async () => {
+it("syncStripeEvent: updated and deleted write Stripe's live state, so a retried older event can't overwrite a newer one", async () => {
   setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
-  await confirmStripeEvent(event("customer.subscription.updated", { status: "active" }));
-  await expect(confirmStripeEvent(event("customer.subscription.updated", { status: "past_due" }))).rejects.toThrow(/stored status active/);
-  await expect(confirmStripeEvent(event("customer.subscription.deleted"))).rejects.toThrow(/event says canceled/);
-  setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'canceled')`);
-  await confirmStripeEvent(event("customer.subscription.deleted"));
-  // created: the checkout's own row (found through metadata) is enough; its status comes later.
+  Object.assign(live, { status: "canceled" });
+  await sync(event("customer.subscription.updated", { status: "active" })); // an old snapshot after the deletion
+  expect(stored().status).toBe("canceled");
+  Object.assign(live, { status: "past_due", cancel_at_period_end: true });
+  await sync(event("customer.subscription.deleted"));
+  expect(stored()).toEqual({ status: "past_due", cancelAtPeriodEnd: 1 });
+  expect(retrieved).toEqual(["sub_1", "sub_1"]);
+  // created never reads Stripe: the checkout's own row (found through metadata) is enough.
   setRows(`('s9', 'pro', 'u1', 'cus_1', null, 'incomplete')`);
-  await confirmStripeEvent(event("customer.subscription.created", { id: "sub_new", metadata: { subscriptionId: "s9" } }));
-  // No row for a known customer: the write was lost.
-  setRows();
-  await expect(confirmStripeEvent(event("customer.subscription.created"))).rejects.toThrow(/was not stored/);
-  await expect(confirmStripeEvent(event("customer.subscription.updated"))).rejects.toThrow(/was not stored/);
+  await sync(event("customer.subscription.created", { id: "sub_new", metadata: { subscriptionId: "s9" } }));
+  expect(retrieved).toHaveLength(2);
 });
 
-it("confirmStripeEvent: no user with the customer, undeclared prices and other events answer 200 (no throw)", async () => {
+it("syncStripeEvent: a lost write for a known customer throws so Stripe retries", async () => {
   setRows();
+  await expect(sync(event("customer.subscription.created"))).rejects.toThrow(/was not stored/);
+  await expect(sync(event("customer.subscription.updated"))).rejects.toThrow(/was not stored/);
+  setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
+  Object.assign(live, { status: "unpaid" });
+  session.down = true;
+  await expect(sync(event("customer.subscription.updated"))).rejects.toThrow(/database down/);
+  session.down = false;
+});
+
+it("syncStripeEvent: no user with the customer, undeclared prices and other events answer 200 (no throw, no Stripe call)", async () => {
+  setRows();
+  retrieved.length = 0;
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  for (const type of ["created", "updated", "deleted"]) await confirmStripeEvent(event(`customer.subscription.${type}`, { customer: "cus_unknown", status: "past_due" }));
+  for (const type of ["created", "updated", "deleted"]) await sync(event(`customer.subscription.${type}`, { customer: "cus_unknown", status: "past_due" }));
   setRows(`('s1', 'pro', 'u-gone', 'cus_unknown', 'sub_1', 'active')`); // a stale row whose user is gone still never throws
-  await confirmStripeEvent(event("customer.subscription.updated", { customer: "cus_unknown", status: "past_due" }));
+  await sync(event("customer.subscription.updated", { customer: "cus_unknown", status: "past_due" }));
   setRows();
-  await confirmStripeEvent(event("customer.subscription.created", { lookup: "not_declared" }));
-  await confirmStripeEvent(event("customer.subscription.deleted"));
-  await confirmStripeEvent(event("invoice.paid"));
+  await sync(event("customer.subscription.created", { lookup: "not_declared" }));
+  await sync(event("customer.subscription.deleted"));
+  await sync(event("invoice.paid"));
+  expect(retrieved).toEqual([]);
 });
 
 it("stripeClient refuses STRIPE_API_URL off this machine; the placeholder key is not configured", () => {

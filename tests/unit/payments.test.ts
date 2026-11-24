@@ -19,14 +19,12 @@ test("--payments composes the Stripe plugin, the billing guard and the webhook r
   for (const o of [{ payments: true }, { payments: true, admin: true, turnstile: true, inviteOnly: true }]) {
     const src = composeAuthTs(cfg(o));
     expect(src).toContain('rateLimit: { storage: "database", customRules: { "/stripe/webhook": false } },');
-    expect(src).toContain("stripeClient: stripeClient(env.STRIPE_SECRET_KEY, env.STRIPE_API_URL)");
-    expect(src).toContain("onEvent: confirmStripeEvent");
-    expect(src).toContain("billingGuard({ configured: stripeConfigured(env.STRIPE_SECRET_KEY) })");
-    expect(src).toContain('import { stripe } from "@better-auth/stripe";');
+    expect(src).toContain("...billingPlugins(env)");
+    expect(src).toContain('import { billingPlugins } from "./src/billing";');
     expect(src).toContain("defineAuth(({ defaults, env })");
     expect(src.match(/^ {2}plugins:/gm)).toHaveLength(1);
   }
-  expect(composeAuthTs(cfg({ admin: true }))).not.toMatch(/stripe|billingGuard|customRules/i);
+  expect(composeAuthTs(cfg({ admin: true }))).not.toMatch(/stripe|billing|customRules/i);
 });
 
 test("--payments declares the Stripe keys in env.ts and ships placeholders in .env", () => {

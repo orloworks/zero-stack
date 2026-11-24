@@ -15,24 +15,11 @@ if (!/^(sk|rk)_test_/.test(key) || key === PLACEHOLDER_KEY) {
 
 const stripe = stripeClient(key, process.env.STRIPE_API_URL);
 for (const plan of PLANS as readonly Plan[]) {
-  // The annual price joins the monthly price's product, so one plan is one product.
-  let product: string | undefined;
-  for (const [interval, price] of [["month", plan.monthly], ["year", plan.annual]] as const) {
-    if (!price) continue;
-    const found = (await stripe.prices.list({ lookup_keys: [price.lookupKey], active: true, limit: 1 })).data[0];
-    if (found) {
-      product = typeof found.product === "string" ? found.product : found.product.id;
-      console.log(`exists: ${price.lookupKey}`);
-      continue;
-    }
-    const made = await stripe.prices.create({
-      currency: plan.currency,
-      unit_amount: price.amount,
-      recurring: { interval },
-      lookup_key: price.lookupKey,
-      ...(product ? { product } : { product_data: { name: plan.label } }),
-    });
-    product = typeof made.product === "string" ? made.product : made.product.id;
-    console.log(`created: ${price.lookupKey}`);
+  const { lookupKey, amount } = plan.monthly;
+  if ((await stripe.prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 })).data.length) {
+    console.log(`exists: ${lookupKey}`);
+    continue;
   }
+  await stripe.prices.create({ currency: plan.currency, unit_amount: amount, recurring: { interval: "month" }, lookup_key: lookupKey, product_data: { name: plan.label } });
+  console.log(`created: ${lookupKey}`);
 }

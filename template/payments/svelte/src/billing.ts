@@ -3,10 +3,12 @@ import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/a
 import { HTTPException } from "hono/http-exception";
 import type Stripe from "stripe";
 import { requireAuth } from "void/auth";
-import { lookupKeys, type PlanName } from "./plans";
+import { stripe } from "@better-auth/stripe";
+import { lookupKeys, type PlanName, stripePlans } from "./plans";
+import { PLACEHOLDER_WEBHOOK_SECRET, stripeClient, stripeConfigured } from "./stripe";
 
-// Billing on the server. The subscription table is written only by Better Auth's Stripe plugin, from Stripe's webhook and the checkout success
-// redirect; this module reads it and never calls Stripe. Pages and routes call this module, never the table.
+// Billing on the server. The subscription table is written by Better Auth's Stripe plugin, from Stripe's webhook and the checkout success redirect,
+// and corrected here to Stripe's live state after each subscription event. Pages and routes read through this module, never the table, and never call Stripe.
 
 type Ctx = Parameters<typeof requireAuth>[0];
 
@@ -49,15 +51,25 @@ export async function requirePlan(c: Ctx, plan?: PlanName) {
   return user;
 }
 
+// The subscription actions that call Stripe for the signed-in user.
+const ACTIONS = ["/subscription/upgrade", "/subscription/billing-portal", "/subscription/cancel", "/subscription/restore"];
+
 // Runs before the Stripe plugin's endpoints. Until real keys are set (.env ships placeholders) every subscription action answers "Stripe isn't set up yet."
-// instead of a 500 from Stripe. A user with a past_due or unpaid subscription can't start another Checkout (the plugin's own check ignores past_due).
-export function billingGuard(opts: { configured: boolean }) {
+// instead of a 500 from Stripe, and the webhook refuses every event (400): the placeholder secret is public, so anyone could sign with it.
+// A user with a past_due or unpaid subscription can't start another Checkout (the plugin's own check ignores past_due).
+export function billingGuard(opts: { configured: boolean; webhookConfigured: boolean }) {
   return {
     id: "billing-guard",
     hooks: {
       before: [
         {
-          matcher: (ctx) => !!ctx.path?.startsWith("/subscription/") && ctx.path !== "/subscription/list",
+          matcher: (ctx) => ctx.path === "/stripe/webhook" && !opts.webhookConfigured,
+          handler: createAuthMiddleware(async () => {
+            throw new APIError("BAD_REQUEST", { code: "STRIPE_WEBHOOK_NOT_CONFIGURED", message: "The Stripe webhook secret isn't set up yet." });
+          }),
+        },
+        {
+          matcher: (ctx) => ACTIONS.includes(ctx.path ?? ""),
           handler: createAuthMiddleware(async (ctx) => {
             if (!opts.configured) throw new APIError("SERVICE_UNAVAILABLE", { code: "STRIPE_NOT_CONFIGURED", message: "Stripe isn't set up yet." });
             if (ctx.path !== "/subscription/upgrade") return;
@@ -79,11 +91,25 @@ export function billingGuard(opts: { configured: boolean }) {
   } satisfies BetterAuthPlugin;
 }
 
+// Everything auth.ts needs for billing: the Stripe plugin (with the one client) and the guard.
+export function billingPlugins(env: { STRIPE_SECRET_KEY?: unknown; STRIPE_WEBHOOK_SECRET?: unknown; STRIPE_API_URL?: unknown }) {
+  const client = stripeClient(env.STRIPE_SECRET_KEY, env.STRIPE_API_URL);
+  const secret = typeof env.STRIPE_WEBHOOK_SECRET === "string" ? env.STRIPE_WEBHOOK_SECRET : "";
+  return [
+    stripe({ stripeClient: client, stripeWebhookSecret: secret, subscription: { enabled: true, plans: stripePlans() }, onEvent: syncStripeEvent(client) }),
+    billingGuard({ configured: stripeConfigured(env.STRIPE_SECRET_KEY), webhookConfigured: !!secret && secret !== PLACEHOLDER_WEBHOOK_SECRET }),
+  ];
+}
 
-// The plugin's onEvent, called after it handled the event. The plugin catches its own database errors and still answers 200, so a failed write would
-// never be retried: re-read the row and throw when it doesn't match the event, which answers an error and makes Stripe send it again.
-// It throws only when a user holds the event's customer and their row is missing or disagrees; a subscription on an undeclared price is left to the plugin's log.
-export async function confirmStripeEvent(event: Stripe.Event): Promise<void> {
+type LiveSource = { subscriptions: { retrieve: (id: string) => Promise<Stripe.Subscription> } };
+
+// The plugin's onEvent, called after it handled the event. Two gaps it leaves: it catches its own database errors and still answers 200 (a lost
+// write is never retried), and it writes each event's snapshot as it arrives, so a retried older event can overwrite a newer state.
+//   created: the row must exist (the checkout's own row counts); else throw so Stripe retries.
+//   updated, deleted: read the live subscription from Stripe and, if the row differs, write the live state; a failed write or read throws (retried).
+// Nothing throws when no user holds the event's customer (made in the dashboard, or the user was deleted with their rows): a retry could never
+// store it, and Stripe would retry for days and then disable the endpoint. A subscription on an undeclared price is left to the plugin's log.
+export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Event): Promise<void> => {
   if (event.type !== "customer.subscription.created" && event.type !== "customer.subscription.updated" && event.type !== "customer.subscription.deleted") return;
   const sub = event.data.object;
   const keys = lookupKeys();
@@ -106,6 +132,20 @@ export async function confirmStripeEvent(event: Stripe.Event): Promise<void> {
   }
   // created: the plugin skips a row the checkout already made; its status comes from checkout.session.completed or the next update.
   if (event.type === "customer.subscription.created") return;
-  const want = event.type === "customer.subscription.deleted" ? "canceled" : sub.status;
-  if (row.status !== want) throw new Error(`subscription ${sub.id}: stored status ${row.status}, event says ${want}`);
-}
+  const live = await client.subscriptions.retrieve(sub.id);
+  const item = live.items.data[0];
+  const state = {
+    status: live.status,
+    cancelAtPeriodEnd: live.cancel_at_period_end,
+    cancelAt: live.cancel_at ? new Date(live.cancel_at * 1000) : null,
+    ...(item && { periodStart: new Date(item.current_period_start * 1000), periodEnd: new Date(item.current_period_end * 1000) }),
+  };
+  const time = (d: Date | null | undefined) => (d ? new Date(d).getTime() : null);
+  const same =
+    row.status === state.status &&
+    !!row.cancelAtPeriodEnd === state.cancelAtPeriodEnd &&
+    time(row.cancelAt) === time(state.cancelAt) &&
+    (!item || time(row.periodEnd) === time(state.periodEnd));
+  if (same) return;
+  await db.update(subscriptionTable).set(state).where(eq(subscriptionTable.id, row.id));
+};

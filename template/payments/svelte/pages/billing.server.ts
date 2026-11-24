@@ -12,7 +12,7 @@ export type Props = InferProps<typeof loader>;
 export const loader = defineHandler(async () => {
   const user = getUser();
   const configured = stripeConfigured(env.STRIPE_SECRET_KEY);
-  const plans = (PLANS as readonly Plan[]).map((p) => ({ name: p.name, label: p.label, currency: p.currency, monthly: p.monthly.amount, annual: p.annual?.amount ?? null }));
+  const plans = (PLANS as readonly Plan[]).map((p) => ({ name: p.name, label: p.label, currency: p.currency, monthly: p.monthly.amount }));
   if (!user) return { user: null, configured, plans, view: null };
   const view = billingView(await subscriptionsFor(user.id), (name) => planNamed(name)?.label ?? name);
   return { user: { email: user.email }, configured, plans, view };

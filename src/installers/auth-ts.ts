@@ -160,14 +160,8 @@ const invitePlugin = (db: boolean) => `{
 export const INVITE_ONLY_PLUGIN = invitePlugin(false);
 
 // --payments (src/plans.ts, src/stripe.ts, src/billing.ts). Better Auth's Stripe plugin owns checkout, the portal, the webhook and the subscription table;
-// a Stripe customer is made at first checkout, not at sign-up. onEvent re-reads what the plugin wrote and throws on a lost write, so Stripe retries.
-const STRIPE_PLUGIN = `stripe({
-      stripeClient: stripeClient(env.STRIPE_SECRET_KEY, env.STRIPE_API_URL),
-      stripeWebhookSecret: String(env.STRIPE_WEBHOOK_SECRET ?? ""),
-      subscription: { enabled: true, plans: stripePlans() },
-      onEvent: confirmStripeEvent,
-    })`;
-const PAYMENTS_IMPORTS = 'import { stripe } from "@better-auth/stripe";\nimport { billingGuard, confirmStripeEvent } from "./src/billing";\nimport { stripePlans } from "./src/plans";\nimport { stripeClient, stripeConfigured } from "./src/stripe";\n';
+// a Stripe customer is made at first checkout, not at sign-up. billingPlugins (src/billing.ts) builds the plugin, its onEvent sync and the billing guard.
+const PAYMENTS_IMPORTS = 'import { billingPlugins } from "./src/billing";\n';
 
 // With --admin and --invite-only, a link requested on the server (the admin's send-link route has no browser request behind it) for an unverified user is mailed
 // as "Set your password", matching the admin page's copy; a user's own "Forgot password" keeps the reset subject.
@@ -209,8 +203,7 @@ export function composeAuthTs(config: Config): string {
             config.inviteOnly && invitePlugin(!!config.admin),
             config.admin && `admin({ bannedUserMessage: "${BANNED_MESSAGE}" })`,
             config.admin && `adminGuard({ isAdmin: (user) => isAdmin(env.ADMIN_EMAILS, user), audit: recordAudit${config.storage ? ", purge: purgeUserFiles" : ""} })`,
-            config.payments && STRIPE_PLUGIN,
-            config.payments && "billingGuard({ configured: stripeConfigured(env.STRIPE_SECRET_KEY) })",
+            config.payments && "...billingPlugins(env)",
           ]
             .filter(Boolean)
             .join(", ")}],`,

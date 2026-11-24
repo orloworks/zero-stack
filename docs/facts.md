@@ -82,7 +82,7 @@ expire the session and archive the price and product. A restricted key without C
 - `new Stripe("")` throws ("Neither apiKey nor config.authenticator provided"); Void evaluates `auth.ts` at build time with no
   server env, so `src/stripe.ts` falls back to the placeholder key.
 - The plugin's `onEvent` gets only the event (no context), and a throw from it becomes 400 `STRIPE_WEBHOOK_ERROR`, which Stripe
-  retries. Its subscription handlers catch their own errors, so `confirmStripeEvent` re-reads through `void/db`.
+  retries. Its subscription handlers catch their own errors, so `syncStripeEvent` reads and writes through `void/db` (and reads the live subscription from Stripe).
 - Void turns Better Auth rate limiting on only for deployed Cloudflare requests (a `cf` object and a non-loopback
   `cf-connecting-ip`), so the webhook exemption (`customRules: { "/stripe/webhook": false }`) can't be exercised under `vp dev`;
   the gate checks `auth.ts` for it.

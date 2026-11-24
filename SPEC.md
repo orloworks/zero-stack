@@ -238,11 +238,14 @@ in `AGENTS.md`.
 
 - `--payments` (svelte, spec #81; #82 is subscriptions, one-off purchases, deletion and the admin view are #83 to #85): `@better-auth/stripe`,
   `stripe` and `better-auth` pinned in `PAYMENTS_DEPS` (one better-auth copy, gate-asserted). `src/plans.ts` declares plans by Stripe price lookup
-  key (monthly, optional annual, optional trial days and limits); `src/stripe.ts` builds the client and refuses `STRIPE_API_URL` off localhost;
-  `src/billing.ts` holds `requirePlan` / `currentPlan` (active, trialing or past_due; read from the app's copy, never Stripe), `billingGuard`
-  (503 `STRIPE_NOT_CONFIGURED` while `.env` has the placeholder key; 400 `SUBSCRIPTION_NEEDS_CARD` on upgrade while a past_due or unpaid row
-  exists) and `confirmStripeEvent`, the plugin's `onEvent`: for a subscription event on a declared price it throws (a retried 400) only when a
-  user holds the event's customer and their row is missing or its status disagrees; no such user answers 200. `auth.ts` exempts
+  key (monthly price, optional trial days); `src/stripe.ts` builds the client and refuses `STRIPE_API_URL` off localhost;
+  `src/billing.ts` holds `requirePlan` / `currentPlan` (active, trialing or past_due; read from the app's copy, never Stripe), `billingPlugins(env)`
+  (the plugin plus the guard, spread into `auth.ts`), `billingGuard` (on upgrade, billing-portal, cancel and restore: 503 `STRIPE_NOT_CONFIGURED`
+  while `.env` has the placeholder key, 400 `SUBSCRIPTION_NEEDS_CARD` on upgrade while a past_due or unpaid row exists; the webhook answers 400
+  `STRIPE_WEBHOOK_NOT_CONFIGURED` while the secret is the placeholder) and `syncStripeEvent`, the plugin's `onEvent`: for a subscription event on
+  a declared price whose customer a user holds, `created` throws (a retried 400) when the row is missing, and `updated` / `deleted` read the live
+  subscription from Stripe and write its status, cancel-at-period-end, cancel-at and period when the row differs (so an older event retried late
+  can't win); a failed read or write throws. No such user answers 200. `auth.ts` exempts
   `/stripe/webhook` from rate limiting. The Billing page `/billing` (linked from the Account page) reads the subscription table directly and
   shows none, active, trialing, cancelling with its end date, past_due and unpaid (portal button, no Subscribe), canceled. `scripts/stripe-seed.ts`
   (`bun run stripe:seed`) creates the declared prices by lookup key, skips existing ones and refuses live keys. `env.ts` declares

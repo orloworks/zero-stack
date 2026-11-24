@@ -25,8 +25,7 @@
     }
     pending = "";
   }
-  const subscribe = (plan: string, annual: boolean) =>
-    go("/subscription/upgrade", { plan, annual, successUrl: "/billing", cancelUrl: "/billing" }, `${plan}-${annual}`);
+  const subscribe = (plan: string) => go("/subscription/upgrade", { plan, successUrl: "/billing", cancelUrl: "/billing" }, plan);
   const manage = () => go("/subscription/billing-portal", { returnUrl: "/billing" }, "manage");
 </script>
 
@@ -65,14 +64,9 @@
         <ul>
           {#each plans as plan (plan.name)}
             <li>
-              <button type="button" onclick={() => subscribe(plan.name, false)} disabled={!!pending}>
-                {pending === `${plan.name}-false` ? "Opening checkout…" : `Subscribe to ${plan.label}, ${price(plan.monthly, plan.currency)} a month`}
+              <button type="button" onclick={() => subscribe(plan.name)} disabled={!!pending}>
+                {pending === plan.name ? "Opening checkout…" : `Subscribe to ${plan.label}, ${price(plan.monthly, plan.currency)} a month`}
               </button>
-              {#if plan.annual !== null}
-                <button type="button" onclick={() => subscribe(plan.name, true)} disabled={!!pending}>
-                  {pending === `${plan.name}-true` ? "Opening checkout…" : `Subscribe to ${plan.label}, ${price(plan.annual, plan.currency)} a year`}
-                </button>
-              {/if}
             </li>
           {/each}
         </ul>
