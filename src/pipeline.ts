@@ -96,7 +96,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     if (config.auth) installAuth(targetDir, config);
     if (config.storage) installStorage(targetDir);
     if (config.admin) installAdmin(targetDir, config); // after storage: it edits the upload route
-    if (config.payments) installPayments(targetDir);
+    if (config.payments) installPayments(targetDir, config);
     addAppScripts(targetDir, config);
     await exec([process.execPath, "install"], targetDir);
     // Leaves the auth migration generated, not applied to any database.

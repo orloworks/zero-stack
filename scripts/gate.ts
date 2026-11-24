@@ -966,6 +966,12 @@ try {
       if (!(await html(b, `/admin/audit?user=nobody-here`, bossU.cookie)).text.includes("No changes for nobody-here.")) throw new Error("the empty filtered audit copy is missing");
       if (!(await html(b, `/admin/users/${victimU.id}`, bossU.cookie)).text.includes(`/admin/audit?user=${encodeURIComponent(victim)}`)) throw new Error("user detail lacks the View audit log link");
       console.log("gate: admin audit log newest first, ?user= filters to the affected user, user detail links to it");
+      // Without --payments, nothing billing-related appears in the admin pages (#85).
+      if (!config.payments) {
+        const detail = (await html(b, `/admin/users/${victimU.id}`, bossU.cookie)).text, features = (await html(b, "/admin/features", bossU.cookie)).text;
+        if (/billing|Stripe/i.test(detail) || features.includes("Also on for")) throw new Error("an app without --payments shows billing on the admin user or Features page");
+        console.log("gate: admin without --payments: no billing section on user detail, no plan text on Features");
+      }
 
       // The Account page: an Admin link for an admin; a verify hint for a listed, unverified user (never a different 404); nothing for anyone else.
       const acct = (cookie: string) => html(b, "/settings", cookie).then((r) => r.text);
@@ -1425,6 +1431,7 @@ try {
       console.log("gate: stripe:seed refuses sk_live_ and rk_live_ keys before any call, creates the declared price by lookup key, and a rerun creates nothing");
 
       const bossMail = `payer-boss-${Date.now()}@example.com`; // with --admin: the admin who removes a subscribed user below
+      let boss = ""; // the admin's session cookie, set once in the --admin block below
       b = await restart({ ...STRIPE, ...(config.admin && { ADMIN_EMAILS: bossMail }) });
       const [aMail, bMail] = [`payer-a-${Date.now()}@example.com`, `payer-b-${Date.now()}@example.com`];
       const a = await user(b, aMail), other = await user(b, bMail);
@@ -1484,6 +1491,33 @@ try {
       check(portal.ok && ((await portal.json()) as Obj).url === "https://billing.stripe.test/session", `portal -> ${portal.status}`);
       console.log("gate: payments: the success redirect shows the plan before any webhook; created and checkout.session.completed answer 200 and keep one row; requirePlan 200; another user can't read or manage it; the portal opens");
 
+      // #85, with --admin: plan-gated feature switches and the admin Billing section. `a` is active on pro here; `other` has no plan and no Stripe customer.
+      if (config.admin) {
+        boss = await user(b, bossMail);
+        onUser(bossMail, "UPDATE user SET emailVerified = 1 WHERE id = ?");
+        const F = "example-feature";
+        const gated = (cookie: string) => call(b, `/api/${F}`, cookie).then((r) => r.status);
+        const setGlobal = (state: string) => call(b, `/api/admin/features/${F}`, boss, { state }).then((r) => r.status);
+        const setUser = (uid: string, state: string) => call(b, `/api/admin/users/${uid}/features/${F}`, boss, { state }).then((r) => r.status);
+        check((await setGlobal("off")) === 200, "could not turn the feature off for everyone");
+        check((await gated(other)) === 403, "a plan-only feature is on for a user with no plan");
+        check((await gated(a)) === 200, "a plan-only feature is off for a user on the plan");
+        check((await setGlobal("kill")) === 200 && (await gated(a)) === 403, "the kill switch did not beat the plan");
+        check((await setGlobal("off")) === 200 && (await gated(a)) === 200, "the plan feature did not come back after the kill switch");
+        check((await setUser(bId, "on")) === 200 && (await gated(other)) === 200, "a comped user (override on) with no plan was refused");
+        check((await setUser(aId, "off")) === 200 && (await gated(a)) === 403, "an override off did not beat the plan");
+        check((await setUser(bId, "default")) === 200 && (await setUser(aId, "default")) === 200 && (await gated(other)) === 403 && (await gated(a)) === 200, "resetting the overrides did not restore the plan result");
+        const text = (path: string) => call(b, path, boss).then((r) => r.text());
+        check((await text("/admin/features")).includes("Also on for users on the pro plan"), "/admin/features does not say the feature is on for the pro plan");
+        check((await text(`/admin/users/${aId}`)).includes("Effective: On: included in the user"), "user detail does not say On: included in the user's plan");
+        const billing = await text(`/admin/users/${aId}`);
+        check(billing.includes("Billing") && billing.includes("Active, renews on") && billing.includes(`https://dashboard.stripe.com/test/customers/${cus.id}`), "the admin Billing section lacks the plan, status or the test-mode dashboard link");
+        check(!billing.includes("sk_test_gate"), "the admin page contains the Stripe key");
+        const empty = await text(`/admin/users/${bId}`);
+        check(empty.includes("No subscription.") && empty.includes("No Stripe customer yet") && !empty.includes("dashboard.stripe.com"), "the admin Billing section has no empty state for a user with no subscription");
+        console.log("gate: payments + admin: a plan-only feature is off without the plan, on with it, off under the kill switch, on for a comped user with no plan, off for an override off; Features says it is on for users on the pro plan; the user page shows Billing (plan, status, test-mode Stripe link) and a clear empty state");
+      }
+
       // Stripe's state changes (the fake's subscription is the live one the app reads back), then the event for it arrives.
       const emit = (type: string, change: Obj) => webhook(b, { type, data: subObj({ ...Object.assign(subA, change) }) });
       // past_due: shown with the fix-your-card copy, still counts for requirePlan, and blocks a second Checkout.
@@ -1497,6 +1531,7 @@ try {
       // unpaid: inactive for requirePlan, and still no second Checkout.
       check((await emit("customer.subscription.updated", { status: "unpaid" })).status === 200, "updated unpaid -> not 200");
       check((await page(b, a)).includes("is paused because payments failed") && (await call(b, "/api/example-plan", a)).status === 403, "unpaid lacks the paused copy or passed requirePlan");
+      if (config.admin) check((await call(b, "/api/example-feature", a)).status === 403, "an unpaid subscription still grants a plan feature");
       const third = await call(b, "/api/auth/subscription/upgrade", a, UPGRADE);
       check(third.status === 400 && ((await third.json()) as Obj).code === "SUBSCRIPTION_NEEDS_CARD" && fake.sessions.size === sessions, `an unpaid user's second upgrade -> ${third.status}`);
       // A lost write: the database refuses the update (the plugin's and the sync's), so the event answers an error and Stripe retries; the retry lands.
@@ -1528,6 +1563,7 @@ try {
       const ended = await page(b, a);
       check(subRows(aId)[0].status === "canceled" && ended.includes("Your Pro plan has ended.") && ended.includes("Subscribe to Pro"), "/billing after deletion lacks the ended copy or the Subscribe button");
       check((await call(b, "/api/example-plan", a)).status === 403, "requirePlan let a canceled plan through");
+      if (config.admin) check((await call(b, "/api/example-feature", a)).status === 403, "a canceled subscription still grants a plan feature");
       // Out of order: that older update, retried after the deletion, must not bring the plan back.
       check((await webhook(b, { type: "customer.subscription.updated", data: subObj(older) })).status === 200, "a late older update -> not 200");
       check(subRows(aId)[0].status === "canceled" && (await call(b, "/api/example-plan", a)).status === 403, `a late older update revived the plan: row ${subRows(aId)[0].status}`);
@@ -1538,8 +1574,6 @@ try {
       const removals: [string, "all" | "cancel", (d: { cookie: string; uid: string }) => Promise<Response>][] = [];
       if (config.accountDeletion) removals.push(["self-service deletion", "all", (d) => call(b, "/api/auth/delete-user", d.cookie, { password: gatePw })]);
       if (config.admin) {
-        const boss = await user(b, bossMail);
-        onUser(bossMail, "UPDATE user SET emailVerified = 1 WHERE id = ?");
         removals.push(["admin removal", "cancel", (d) => call(b, "/api/auth/admin/remove-user", boss, { userId: d.uid })]);
       }
       for (const [how, outage, remove] of removals) {

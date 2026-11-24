@@ -25,7 +25,9 @@ export async function subscriptionsFor(userId: string) {
   return db.select().from(subscriptionTable).where(eq(subscriptionTable.referenceId, userId));
 }
 
-// The user's current plan name (lowercase) or null. Reads the app's copy, never Stripe.
+// The user's current plan name (lowercase) or null. Reads the app's copy, never Stripe. The billing guard blocks a second Checkout, so a second
+// live row can only come from a subscription made in the Stripe dashboard for the same customer; then the first row wins, here and in billingView.
+// shortcut: no ordering between two live rows, upgrade when an app sells two plans and makes subscriptions in the dashboard.
 export async function currentPlan(userId: string): Promise<string | null> {
   const { db, and, eq, inArray, subscriptionTable } = await store();
   const [row] = await db
