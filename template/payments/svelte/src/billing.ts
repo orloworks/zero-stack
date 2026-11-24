@@ -25,7 +25,8 @@ export async function subscriptionsFor(userId: string) {
   return db.select().from(subscriptionTable).where(eq(subscriptionTable.referenceId, userId));
 }
 
-// The user's current plan name (lowercase) or null. Reads the app's copy, never Stripe.
+// The user's current plan name (lowercase) or null. Reads the app's copy, never Stripe. One live subscription per user is assumed: the billing guard
+// blocks a second Checkout, so no orderBy is needed to agree with billingView.
 export async function currentPlan(userId: string): Promise<string | null> {
   const { db, and, eq, inArray, subscriptionTable } = await store();
   const [row] = await db
