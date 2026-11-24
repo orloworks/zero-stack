@@ -132,7 +132,7 @@ it("syncStripeEvent: updated and deleted write Stripe's live state, so a retried
   expect(retrieved).toHaveLength(2);
 });
 
-it("syncStripeEvent: the plan comes from the live price, so a stale update can't bring the old plan back; an undeclared live price is skipped", async () => {
+it("syncStripeEvent: the plan comes from the live price, so a stale update can't bring the old plan back; an undeclared live price keeps the plan but still syncs the rest", async () => {
   setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
   Object.assign(live, { status: "active", cancel_at_period_end: false });
   live.items.data[0]!.price.lookup_key = "business_monthly"; // the user switched pro -> business in Stripe
@@ -142,8 +142,24 @@ it("syncStripeEvent: the plan comes from the live price, so a stale update can't
   Object.assign(live, { status: "past_due" });
   vi.spyOn(console, "warn").mockImplementation(() => {});
   await sync(event("customer.subscription.updated"));
-  expect(rowOf("s1")).toMatchObject({ plan: "business", status: "active" });
+  expect(rowOf("s1")).toMatchObject({ plan: "business", status: "past_due" });
+  // The worst case: moved to an undeclared price, then canceled. The row must not stay active.
+  Object.assign(live, { status: "canceled" });
+  await sync(event("customer.subscription.deleted"));
+  expect(rowOf("s1")).toMatchObject({ plan: "business", status: "canceled" });
   live.items.data[0]!.price.lookup_key = key;
+});
+
+it("syncStripeEvent: the live item is picked by declared plan, not position, so an undeclared add-on listed first doesn't block the sync", async () => {
+  setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
+  const plan = live.items.data[0]!;
+  const addOn = { current_period_start: 1, current_period_end: 2, price: { lookup_key: "seat_addon" } };
+  live.items.data = [addOn, { ...plan, price: { lookup_key: "business_monthly" } }];
+  Object.assign(live, { status: "past_due", cancel_at_period_end: false });
+  await sync(event("customer.subscription.updated"));
+  const periodEnd = (sqlite as unknown as { prepare: (s: string) => { get: () => { periodEnd: number } } }).prepare("select periodEnd from subscription where id = 's1'").get().periodEnd;
+  expect([rowOf("s1").plan, rowOf("s1").status, new Date(periodEnd).getTime()]).toEqual(["business", "past_due", plan.current_period_end * 1000]); // the plan item's period, not the add-on's
+  live.items.data = [plan];
 });
 
 it("syncStripeEvent: only the row of the user who holds the event's customer is written", async () => {
@@ -172,6 +188,12 @@ it("syncStripeEvent: a lost write for a known customer throws so Stripe retries"
   setRows();
   await expect(sync(event("customer.subscription.created"))).rejects.toThrow(/was not stored/);
   await expect(sync(event("customer.subscription.updated"))).rejects.toThrow(/was not stored/);
+  // Only while the write could still be in flight: an event older than an hour is logged and answered 200, so Stripe can't retry it for days.
+  const at = (secondsAgo: number) => ({ ...(event("customer.subscription.updated") as object), created: Math.floor(Date.now() / 1000) - secondsAgo }) as never;
+  await expect(sync(at(3000))).rejects.toThrow(/was not stored/);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  await expect(sync(at(3700))).resolves.toBeUndefined();
+  expect(warn.mock.calls.at(-1)?.[0]).toMatch(/sub_1.*cus_1/);
   setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'active')`);
   Object.assign(live, { status: "unpaid" });
   session.down = true;

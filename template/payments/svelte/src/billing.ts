@@ -140,6 +140,7 @@ type LiveSource = { subscriptions: { retrieve: (id: string) => Promise<Stripe.Su
 // Only the row of the user who holds the event's customer is read or written, whatever row the event's metadata names.
 // Nothing throws when no user holds the event's customer (made in the dashboard, or the user was deleted with their rows): a retry could never
 // store it, and Stripe would retry for days and then disable the endpoint. A subscription on an undeclared price is left to the plugin's log.
+// For the same reason a missing row throws only for an event under an hour old.
 export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Event): Promise<void> => {
   if (event.type !== "customer.subscription.created" && event.type !== "customer.subscription.updated" && event.type !== "customer.subscription.deleted") return;
   const sub = event.data.object;
@@ -160,6 +161,11 @@ export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Even
   if (!row) {
     // A deletion for a row we never had leaves nothing to fix; a retry could not change that.
     if (event.type === "customer.subscription.deleted") return;
+    // Throw (Stripe retries) only while the row's write could still be in flight. After an hour it never will be, and Stripe would retry for days.
+    if (event.created < Date.now() / 1000 - 3600) {
+      console.warn(`stripe ${event.type} ${event.id} for ${sub.id}: customer ${String(sub.customer)} (user ${owner.id}) has no row for it after an hour; ignored`);
+      return;
+    }
     throw new Error(`subscription ${sub.id} for a known customer was not stored`);
   }
   // created: the plugin skips a row the checkout already made; its status comes from checkout.session.completed or the next update.
@@ -172,15 +178,14 @@ export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Even
     console.warn(`stripe ${event.type} for ${sub.id}: Stripe no longer has it; nothing to sync`);
     return;
   }
-  const item = live.items.data[0];
+  // The plan's item, wherever it sits: an undeclared add-on can be listed first.
+  const item = live.items.data.find((i) => planForLookupKey(i.price.lookup_key)) ?? live.items.data[0];
   // The plan comes from the live price, not the event's: a retried older event must not bring an old plan back.
+  // No declared plan on the live subscription: the row keeps its plan, but its status still follows Stripe, so a canceled one can't stay active.
   const plan = planForLookupKey(item?.price.lookup_key);
-  if (!plan) {
-    console.warn(`stripe ${event.type} for ${sub.id}: its live price is not a declared plan; ignored`);
-    return;
-  }
+  if (!plan) console.warn(`stripe ${event.type} for ${sub.id}: its live price is not a declared plan; the plan stays ${row.plan}`);
   const state = {
-    plan: plan.name.toLowerCase(),
+    ...(plan && { plan: plan.name.toLowerCase() }),
     status: live.status,
     cancelAtPeriodEnd: live.cancel_at_period_end,
     cancelAt: live.cancel_at ? new Date(live.cancel_at * 1000) : null,
@@ -188,7 +193,7 @@ export const syncStripeEvent = (client: LiveSource) => async (event: Stripe.Even
   };
   const time = (d: Date | null | undefined) => (d ? new Date(d).getTime() : null);
   const same =
-    row.plan === state.plan &&
+    (!state.plan || row.plan === state.plan) &&
     row.status === state.status &&
     !!row.cancelAtPeriodEnd === state.cancelAtPeriodEnd &&
     time(row.cancelAt) === time(state.cancelAt) &&
