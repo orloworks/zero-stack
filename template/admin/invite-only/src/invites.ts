@@ -127,7 +127,8 @@ export async function sendInvite(actor: Actor, id: string, signUpUrl: string): P
     return still ? { ok: false, status: 429, message: RESEND_TOO_SOON } : { ok: false, status: 404, message: GONE };
   }
   try {
-    await send(row.entry, "Your invitation", signUpUrl);
+    const host = new URL(signUpUrl).host;
+    await send(row.entry, `Your invitation to ${host}`, signUpUrl, `You have been invited to ${host}. To join, open this link and sign up with this email address (${row.entry}):`);
   } catch (e) {
     await db.update(invite).set({ lastSentAt: row.lastSentAt }).where(eq(invite.id, id)); // a mail that never went out frees the slot
     throw e;

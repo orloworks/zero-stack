@@ -58,8 +58,8 @@
   <form onsubmit={submit} novalidate>
     <fieldset>
       <legend>Invite</legend>
-      <label class="choice"><input id="kind-email" type="radio" name="kind" value="email" bind:group={kind} /> Exact email</label>
-      <label class="choice"><input id="kind-domain" type="radio" name="kind" value="domain" bind:group={kind} /> Whole domain</label>
+      <label class="choice"><input id="kind-email" type="radio" name="kind" value="email" bind:group={kind} onchange={() => (add = { status: "idle" })} /> Exact email</label>
+      <label class="choice"><input id="kind-domain" type="radio" name="kind" value="domain" bind:group={kind} onchange={() => (add = { status: "idle" })} /> Whole domain</label>
     </fieldset>
     <label for="invite-value">{kind === "domain" ? "Domain" : "Email address"}</label>
     <input

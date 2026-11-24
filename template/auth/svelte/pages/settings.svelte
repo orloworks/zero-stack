@@ -11,6 +11,11 @@
   let wrongCurrent = $state(false);
   let done = $state(false);
 
+  async function signOut() {
+    await auth.signOut();
+    window.location.href = "/sign-in";
+  }
+
   async function changePassword(e: SubmitEvent) {
     e.preventDefault();
     pending = true;
@@ -39,6 +44,7 @@
   {#if user}
     <h1 tabindex="-1">Account</h1>
     <p>Signed in as {user.email}</p>
+    <p><button type="button" onclick={signOut}>Sign out</button></p>
     <section aria-labelledby="change-password-title">
       <h2 id="change-password-title">Change password</h2>
       <form onsubmit={changePassword}>

@@ -62,6 +62,7 @@ export function adminSettings(c: Ctx) {
       const { db, eq, setting: table, auditEntry } = await store();
       const now = new Date();
       const old = (await db.select().from(table).where(eq(table.key, key)).limit(1))[0]?.value ?? storedForm(d.default);
+      if (old === value) return { ok: true }; // unchanged: no write, no audit entry
       await db.batch([
         db.insert(table).values({ key, value, updatedAt: now }).onConflictDoUpdate({ target: table.key, set: { value, updatedAt: now } }),
         db.insert(auditEntry).values(auditRow({ actor, verb: "set-setting", detail: key, oldValue: old, newValue: value }, now)),

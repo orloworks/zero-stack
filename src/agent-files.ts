@@ -53,6 +53,15 @@ export function writeAgentFiles(targetDir: string, config?: Config): void {
   );
   writeFileSync(
     join(targetDir, ".mcp.json"),
-    JSON.stringify({ mcpServers: { "cloudflare-docs": { type: "http", url: "https://docs.mcp.cloudflare.com/mcp" } } }, null, 2) + "\n",
+    JSON.stringify(
+      {
+        mcpServers: {
+          "cloudflare-docs": { type: "http", url: "https://docs.mcp.cloudflare.com/mcp" },
+          ...(config?.framework === "svelte" && { svelte: { type: "http", url: "https://mcp.svelte.dev/mcp" } }),
+        },
+      },
+      null,
+      2,
+    ) + "\n",
   );
 }

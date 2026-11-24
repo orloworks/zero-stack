@@ -26,7 +26,7 @@
   async function save(e: SubmitEvent, name: string) {
     e.preventDefault();
     const out = await runAction(
-      (s) => (results[name] = s),
+      (s) => { results[name] = s; },
       () => fetch(`/api/admin/features/${encodeURIComponent(name)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ state: choice[name] }) }),
       "Couldn't save the feature.",
     );

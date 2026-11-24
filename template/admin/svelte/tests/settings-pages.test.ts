@@ -30,7 +30,7 @@ it("the editor fits the type: a checkbox plus Save, a number with min and max, a
 });
 
 it("labels, a status on success and an inline alert tied to the field on failure", () => {
-  expect(page).toContain("<label for={s.key}>Value</label>");
+  expect(page).toContain("<label for={s.key}>{s.key} value</label>");
   expect(page).toContain('role="status"');
   expect(page).toContain('role="alert"');
   expect(page).toContain('aria-invalid={failure(s.key) ? "true" : undefined}');
