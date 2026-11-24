@@ -34,6 +34,13 @@ export function depChanges(before: Record<string, string>, after: Record<string,
   return names.filter((n) => before[n] !== after[n]).map((n) => `${n}: ${before[n] ?? "(none)"} -> ${after[n] ?? "(removed)"}`);
 }
 
+// Plain releases only, and only forward: a prerelease or a `latest` tag that moved backwards never rewrites the pin.
+export const isNewer = (latest: string, pinned: string): boolean => {
+  if (!/^\d+\.\d+\.\d+$/.test(latest)) return false;
+  const [a, b] = [latest, pinned].map((v) => v.split(".").map(Number));
+  return (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) > 0;
+};
+
 const get = async (path: string): Promise<any> => {
   const r = await fetch(`https://registry.npmjs.org/${path}`, { signal: AbortSignal.timeout(4000) });
   if (!r.ok) throw new Error(`npm registry ${path}: ${r.status}`);
@@ -44,8 +51,8 @@ if (import.meta.main) {
   const check = process.argv.includes("--check");
   try {
     const latest: string = (await get("create-void/latest")).version;
-    if (latest === CREATE_VOID) {
-      if (!check) console.log(`create-void ${CREATE_VOID} is already the latest.`);
+    if (!isNewer(latest, CREATE_VOID)) {
+      if (!check) console.log(`create-void ${CREATE_VOID} is current (npm latest: ${latest}).`);
     } else if (check) {
       console.log(`note: create-void ${latest} is out; the pin is ${CREATE_VOID}. Run: bun scripts/bump-void.ts`);
     } else {
@@ -55,7 +62,7 @@ if (import.meta.main) {
       const changes = depChanges(before.dependencies ?? {}, after.dependencies ?? {});
       console.log(changes.length ? `void dependencies that moved:\n  ${changes.join("\n  ")}` : "No void dependency ranges moved.");
       if (changes.some((c) => c.startsWith("better-auth:"))) console.log("better-auth moved: run /cso on the bump PR.");
-      const stale = Bun.spawnSync(["git", "grep", "-l", "-E", `void@[0-9]`, "--", "docs/"], { cwd: join(import.meta.dir, "..") }).stdout.toString().trim();
+      const stale = Bun.spawnSync(["git", "grep", "-l", "-E", `([vV]oid@|Void )[0-9]+\\.[0-9]+\\.[0-9]+`, "--", "docs/"], { cwd: join(import.meta.dir, "..") }).stdout.toString().trim();
       if (stale) console.log(`Docs that record facts checked against an older void (re-check what the bump touches):\n  ${stale.split("\n").join("\n  ")}`);
       console.log("Next: bun run ci:full, then a PR with a review.");
     }

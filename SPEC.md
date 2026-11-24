@@ -41,7 +41,7 @@ tests/
    `vp check` on formatting in 11 files (see `docs/facts.md`). Re-test on every pin bump.
 7. Add `trustedDependencies: ["esbuild","workerd","sharp"]` to package.json (Void does
    not handle bun script approvals). Verified by the scaffold gate. Also write the `overrides`
-   in `src/versions.ts` (today: pin `@cloudflare/vite-plugin`; see `docs/facts.md`).
+   in `src/versions.ts` (empty since create-void 1.11.0; see `docs/facts.md`).
 8. Write the routing block into `AGENTS.md` and a `.mcp.json` with the Cloudflare Docs
    MCP (`https://docs.mcp.cloudflare.com/mcp`). Re-run `bun install` if deps changed.
 
@@ -72,7 +72,7 @@ sign-in/sign-up pages, `void.config.ts` entry, alias, migration and `.env` below
 Add `auth` to `void.config.ts`, a minimal sign-in/sign-up page for the chosen framework,
 the `@auth-schema` tsconfig alias, run `void db generate` so the migration is in the generated tree, ready for the user's first commit (create-void `--git` only runs `git init`),
 and write a gitignored root `.env` with a random `BETTER_AUTH_SECRET` and
-`BETTER_AUTH_URL=http://localhost:5173` (mode 0600; plus the Turnstile test secret with `--turnstile` and `SIGNUP_ALLOWLIST=@example.com` with `--invite-only`). No `.env.example`: Void 1.8.0 refuses
+`BETTER_AUTH_URL=http://localhost:5173` (mode 0600; plus the Turnstile test secret with `--turnstile` and `SIGNUP_ALLOWLIST=@example.com` with `--invite-only`). No `.env.example`: Void refuses
 to start when one exists (`env.ts` is the key list). Void reads one
 root `.env`; `.dev.vars` is unsupported. Social providers are out of scope.
 

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { bumpVersions, depChanges } from "../../scripts/bump-void";
+import { bumpVersions, depChanges, isNewer } from "../../scripts/bump-void";
 import { CREATE_VOID } from "../../src/versions";
 
 const src = readFileSync(join(import.meta.dir, "../../src/versions.ts"), "utf8");
@@ -27,4 +27,13 @@ test("depChanges lists moved ranges, better-auth first", () => {
     "a: 1 -> 2",
     "n: (none) -> 1",
   ]);
+});
+
+test("isNewer accepts only a plain release ahead of the pin", () => {
+  expect(isNewer("1.12.0", "1.11.0")).toBe(true);
+  expect(isNewer("2.0.0", "1.11.9")).toBe(true);
+  expect(isNewer("1.11.0", "1.11.0")).toBe(false);
+  expect(isNewer("1.10.9", "1.11.0")).toBe(false); // latest moved backwards: never downgrade
+  expect(isNewer("1.12.0-rc.1", "1.11.0")).toBe(false);
+  expect(isNewer('1.12.0"; evil()', "1.11.0")).toBe(false);
 });
