@@ -1,7 +1,8 @@
 import { cpSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { editFile, replaceAnchor } from "../anchor";
+import { editFile, editJson, needKey, replaceAnchor } from "../anchor";
+import { ADMIN_TEST_DEV_DEPS } from "../versions";
 import type { Config } from "../flags";
 
 const template = join(dirname(fileURLToPath(import.meta.url)), "../../template");
@@ -24,6 +25,8 @@ function installInvites(dir: string): void {
 // The auth.ts and env.ts parts come from the composers; ADMIN_EMAILS in .env from authEnv. Runs after installAuth and installStorage (their pages and routes exist).
 export function installAdmin(dir: string, config: Config): void {
   cpSync(join(here, "svelte"), dir, { recursive: true, force: false, errorOnExist: true });
+  // tests/onboarding.test.ts and tests/invites-db.test.ts import these; declared so another install layout can't drop them.
+  editJson(dir, "package.json", (pkg) => { Object.assign(needKey(pkg, "devDependencies", "package.json"), ADMIN_TEST_DEV_DEPS); });
   // The matcher behind ADMIN_EMAILS is the invite-only one (E5): one copy, one test.
   if (!config.inviteOnly) cpSync(join(template, "auth/invite-only/src/signup-allowlist.ts"), join(dir, "src/signup-allowlist.ts"));
   if (!config.inviteOnly) cpSync(join(template, "auth/invite-only/tests/signup-allowlist.test.ts"), join(dir, "tests/signup-allowlist.test.ts"));

@@ -44,7 +44,7 @@ function seeded(agents: string, scripts: object = { postinstall: "void prepare" 
     exec: async (cmd: string[]) => {
       if (cmd[1] !== "x") return;
       mkdirSync(join(dir, "routes/api"), { recursive: true });
-      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts, dependencies: {} }));
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts, dependencies: {}, devDependencies: {} }));
       writeFileSync(join(dir, "AGENTS.md"), agents);
     },
   };
@@ -540,6 +540,8 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
   expect(read("db/schema.ts")).toContain('export * from "./schema/admin";');
   expect(read("pages/admin/layout.svelte")).toContain('const APP_NAME = "app";');
   expect(read("src/admin.ts")).toContain("export const INVITE_ONLY = false;");
+  // tests/onboarding.test.ts imports these directly, so the app declares them (#74).
+  expect(JSON.parse(read("package.json")).devDependencies).toMatchObject({ "better-sqlite3": "^13.0.3", "drizzle-orm": "^0.45.4" });
   expect(read("env.ts")).toContain('ADMIN_EMAILS: string().default(""),');
   expect(read(".env")).toContain("\nADMIN_EMAILS=@example.com\n");
   const account = read("pages/settings.svelte");
