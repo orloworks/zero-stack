@@ -25,6 +25,18 @@ onTerminate(() => rmSync(root, { recursive: true, force: true }), 10_000);
 // Request cookie header from a response's Set-Cookie headers.
 const cookieOf = (r: Response) => r.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
 const step = (args: string[]) => run([vp, ...args], app);
+// The dev server recreates its local D1 file on a restart; opening it in that window fails with "unable to open database file".
+// Retry only that error, for up to 3s (seen in ci:full under load); anything else throws at once.
+const openDb = (file: string, opts?: { readonly?: boolean }): Database => {
+  for (let i = 0; ; i++) {
+    try {
+      return new Database(file, opts);
+    } catch (e) {
+      if (i >= 15 || !String((e as Error).message).includes("unable to open database file")) throw e;
+      Bun.sleepSync(200);
+    }
+  }
+};
 const sqliteFiles = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
     e.isDirectory() ? sqliteFiles(join(dir, e.name)) : e.name.endsWith(".sqlite") ? [join(dir, e.name)] : []);
@@ -64,7 +76,7 @@ try {
   if (!dbFile || extra.length) throw new Error(`expected one local sqlite database under .void, found ${(dbFile ? [dbFile, ...extra] : []).length}`);
   // The app table is derived, not named: any table that is not sqlite, void, drizzle or better-auth internals.
   const INTERNAL = /^(sqlite_|_void|__drizzle|user$|session$|account$|verification$)/;
-  const plant = new Database(dbFile);
+  const plant = openDb(dbFile);
   const appTables = (plant.query("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((t) => t.name).filter((n) => !INTERNAL.test(n));
   if (!appTables.length) throw new Error(`db:reset check expected an app table in ${dbFile} (not sqlite_*, _void*, __drizzle*, user/session/account/verification); found none`);
   const t = appTables[0]!;
@@ -77,7 +89,7 @@ try {
   plant.close();
   if (!planted) throw new Error(`db:reset check could not plant a row in ${t}`);
   await run([process.execPath, "run", "db:reset"], app);
-  const after = new Database(dbFile, { readonly: true });
+  const after = openDb(dbFile, { readonly: true });
   const tables = (after.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_void_migrations'").all() as { name: string }[]).map((x) => x.name);
   if (!tables.includes(t)) throw new Error(`db:reset dropped the ${t} table`);
   const rows = tables.filter((t) => (after.query(`SELECT count(*) AS c FROM "${t}"`).get() as { c: number }).c > 0);
@@ -208,7 +220,7 @@ try {
   const signInStatus = async (b: string, address: string, password: string) => (await authPost(b, "/api/auth/sign-in/email", { email: address, password })).status;
   const userRow = (address: string) =>
     sqliteFiles(join(app, ".void")).some((f) => {
-      const d = new Database(f, { readonly: true });
+      const d = openDb(f, { readonly: true });
       try {
         return !!d.query("SELECT 1 FROM sqlite_master WHERE name = 'user'").get() && !!d.query("SELECT 1 FROM user WHERE lower(email) = ?").get(address.toLowerCase());
       } finally { d.close(); }
@@ -216,7 +228,7 @@ try {
   // Runs `sql` with the user's id against the auth database (the one with a user row for the address).
   const onUser = (address: string, sql: string) => {
     for (const f of sqliteFiles(join(app, ".void"))) {
-      const d = new Database(f);
+      const d = openDb(f);
       try {
         if (!d.query("SELECT 1 FROM sqlite_master WHERE name = 'user'").get()) continue;
         const u = d.query("SELECT id, emailVerified FROM user WHERE lower(email) = ?").get(address.toLowerCase()) as { id: string; emailVerified: number } | null;
@@ -259,7 +271,7 @@ try {
   const r2Keys = () => {
     let found = false;
     const keys = sqliteFiles(join(app, ".void")).flatMap((f) => {
-      const d = new Database(f, { readonly: true });
+      const d = openDb(f, { readonly: true });
       try {
         if (!d.query("SELECT 1 FROM sqlite_master WHERE name = '_mf_objects'").get()) return [];
         found = true;
@@ -614,7 +626,7 @@ try {
     // Rows in the app database (user, audit_entry, ...): the one sqlite file that has `table`.
     const rows = (table: string, sql: string, ...args: (string | number)[]) => {
       for (const f of sqliteFiles(join(app, ".void"))) {
-        const d = new Database(f, { readonly: true });
+        const d = openDb(f, { readonly: true });
         try {
           if (d.query("SELECT 1 FROM sqlite_master WHERE name = ?").get(table)) return d.query(sql).all(...args) as any[];
         } finally { d.close(); }
@@ -705,7 +717,7 @@ try {
       const wild = await html(b, "/admin?q=%25", bossU.cookie);
       if (!wild.text.includes("No account for %.")) throw new Error("a % in the search was treated as a wildcard");
       // Paging: 50 a page, newest first, with the Showing line.
-      const db = sqliteFiles(join(app, ".void")).map((f) => new Database(f)).find((d) => d.query("SELECT 1 FROM sqlite_master WHERE name = 'user'").get())!;
+      const db = sqliteFiles(join(app, ".void")).map((f) => openDb(f)).find((d) => d.query("SELECT 1 FROM sqlite_master WHERE name = 'user'").get())!;
       const now = Date.now();
       for (let i = 0; i < 52; i++) db.run("INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)", [`page-${ts}-${i}`, `Page ${i}`, `page-${i}-${ts}@fixture.test`, now - 86_400_000 - i * 1000, now]);
       const total = (db.query("SELECT count(*) AS n FROM user").get() as { n: number }).n;
