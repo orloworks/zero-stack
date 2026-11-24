@@ -269,7 +269,8 @@ it("cancelSubscriptions: cancels in Stripe every subscription that hasn't ended 
   };
   const code = (p: Promise<unknown>) => p.then(() => "ok", (e) => (e as { body?: { code?: string } }).body?.code);
   await cancelSubscriptions({}, "u1", client);
-  expect(calls).toEqual(["list cus_1 all", "cancel sub_a", "cancel sub_p", "cancel sub_i", "sessions cus_1 open", "expire cs_open"]);
+  // Sessions first: a Checkout completed meanwhile either fails its expire or has its subscription in the list that follows.
+  expect(calls).toEqual(["sessions cus_1 open", "expire cs_open", "list cus_1 all", "cancel sub_a", "cancel sub_p", "cancel sub_i"]);
   calls.length = 0;
   sqlite.exec("insert into user values ('u2', 'U2', 'u2@example.com', 1, 0, 0, null)");
   await cancelSubscriptions({}, "u2", client); // never checked out: no Stripe customer, no Stripe call
@@ -283,6 +284,12 @@ it("cancelSubscriptions: cancels in Stripe every subscription that hasn't ended 
   session.down = true; // the customer can't be read: the deletion must not go ahead unchecked
   expect(await code(cancelSubscriptions({}, "u1", client))).toBe("BILLING_CANCEL_FAILED");
   session.down = false;
+  // Stripe doesn't have the customer (sandbox ids after a move to live keys): nothing to cancel, so the user can still be deleted.
+  // Any other missing object still fails closed.
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const missing = (param: string) => ({ ...client, checkout: { sessions: { ...client.checkout.sessions, list: () => (async function* (): AsyncGenerator<{ id: string }> { throw Object.assign(new Error("No such customer"), { code: "resource_missing", param }); })() } } });
+  expect(await code(cancelSubscriptions({}, "u1", missing("customer")))).toBe("ok");
+  expect(await code(cancelSubscriptions({}, "u1", missing("session")))).toBe("BILLING_CANCEL_FAILED");
 });
 
 it("cancelSubscriptions: when the second cancel fails the deletion stops, and a retry cancels only what is left", async () => {

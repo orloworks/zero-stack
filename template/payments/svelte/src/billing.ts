@@ -108,18 +108,22 @@ type CancelSource = {
 };
 
 // Runs before a user is deleted, on both paths and ahead of the storage purge: auth.ts's deleteUser.beforeDelete and the admin guard's remove-user hook.
-// It asks Stripe, not the table, for the customer's subscriptions (a past_due one, or one whose webhook hasn't arrived, must end too) and cancels
-// each that hasn't ended, then expires the customer's open Checkout sessions: one paid after the deletion would start a subscription nobody owns.
-// Fails closed: a deleted user who keeps being billed is worse than a failed deletion. No Stripe customer: nothing to do.
+// It expires the customer's open Checkout sessions first (one paid after the deletion would start a subscription nobody owns), then asks Stripe,
+// not the table, for the customer's subscriptions (a past_due one, or one whose webhook hasn't arrived, must end too) and cancels each that hasn't
+// ended. Sessions go first so a Checkout completed meanwhile is caught: its expire fails (retry), or its subscription is already in the list.
+// Fails closed: a deleted user who keeps being billed is worse than a failed deletion. No Stripe customer, or one Stripe doesn't have
+// (the app moved from sandbox to live keys, or the customer was deleted in Stripe): nothing to cancel, so the deletion goes ahead.
 export async function cancelSubscriptions(env: BillingEnv, userId: string, client: CancelSource = stripeClient(env.STRIPE_SECRET_KEY, env.STRIPE_API_URL)): Promise<void> {
   try {
     const { db, eq, userTable } = await store();
     const [user] = await db.select({ customer: userTable.stripeCustomerId }).from(userTable).where(eq(userTable.id, userId)).limit(1);
     if (!user?.customer) return;
+    for await (const open of client.checkout.sessions.list({ customer: user.customer, status: "open", limit: 100 })) await client.checkout.sessions.expire(open.id);
     for await (const sub of client.subscriptions.list({ customer: user.customer, status: "all", limit: 100 }))
       if (sub.status !== "canceled" && sub.status !== "incomplete_expired") await client.subscriptions.cancel(sub.id);
-    for await (const open of client.checkout.sessions.list({ customer: user.customer, status: "open", limit: 100 })) await client.checkout.sessions.expire(open.id);
   } catch (e) {
+    const err = e as { code?: string; param?: string } | null;
+    if (err?.code === "resource_missing" && err.param === "customer") return console.warn(`no Stripe customer for ${userId}; nothing to cancel`);
     console.error(`subscription cancel failed for ${userId}`, e);
     throw new APIError("INTERNAL_SERVER_ERROR", { code: "BILLING_CANCEL_FAILED", message: "Couldn't cancel the subscription in Stripe, so the account was not deleted. Try again." });
   }

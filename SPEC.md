@@ -259,9 +259,12 @@ in `AGENTS.md`.
   - **Deleting a user** (#84). `cancelSubscriptions(env, userId)` in `src/billing.ts` runs first on both paths, ahead of the storage purge:
     in `deleteUser.beforeDelete` (`--account-deletion`) and, as the guard's `cancelBilling` option, in the admin guard's remove-user before-hook
     (`--admin`, after the admin and not-self checks). Better Auth's database delete hooks run after the purge, so the cancel is not there. It reads
-    the user's `stripeCustomerId` (none: nothing to do, no Stripe call), lists that customer's subscriptions in Stripe (any status, not the
-    table, so a past_due one or one whose webhook hasn't arrived ends too) and cancels each that is not `canceled` or `incomplete_expired`,
-    then expires the customer's open Checkout sessions (one paid after the deletion would start a subscription nobody owns).
+    the user's `stripeCustomerId` (none: nothing to do, no Stripe call), expires the customer's open Checkout sessions (one paid after the
+    deletion would start a subscription nobody owns), then lists that customer's subscriptions in Stripe (any status, not the table, so a
+    past_due one or one whose webhook hasn't arrived ends too) and cancels each that is not `canceled` or `incomplete_expired`. Sessions go
+    first, so a Checkout completed meanwhile is caught: its expire fails (retry), or its subscription is already in the list. A customer Stripe
+    doesn't have (`resource_missing` on `customer`: sandbox ids after a move to live keys, or deleted in Stripe) leaves nothing to cancel, and
+    the deletion goes ahead.
     Fail closed: any error (the database, Stripe unreachable, a refused cancel or expire) stops the deletion with 500 `BILLING_CANCEL_FAILED` and the
     message "Couldn't cancel the subscription in Stripe, so the account was not deleted. Try again.", which the Account page and the admin
     user page show as it is; the user, their rows and their files are intact (subscriptions cancelled before the failing one stay cancelled,
