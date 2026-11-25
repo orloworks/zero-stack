@@ -122,6 +122,25 @@ it("an init that changes the password hasher, the adapter or the option names of
   await expect(start([{ id: "opt", init: (ctx: any) => void (ctx.options.emailVerification = { sendOnSignUp: true }) }]).$context).rejects.toThrow(/"opt".*in its init argument/);
 }, SLOW);
 
+it("an init that changes a value inside its argument (rate limiting, origins, email verification) is refused", async () => {
+  await expect(start([{ id: "rl", init: (ctx: any) => void (ctx.rateLimit.enabled = !ctx.rateLimit.enabled) }]).$context).rejects.toThrow(/"rl".*inside its init argument/);
+  await expect(start([{ id: "org", init: (ctx: any) => void ctx.trustedOrigins.push("https://x.example") }]).$context).rejects.toThrow(/"org".*inside its init argument/);
+  await expect(start([{ id: "ev", init: (ctx: any) => void (ctx.options.emailAndPassword.requireEmailVerification = true) }]).$context).rejects.toThrow(/"ev".*inside its init argument/);
+  await expect(start([{ id: "quiet", init: (ctx: any) => void ctx.options.emailAndPassword.enabled }]).$context).resolves.toBeDefined(); // reading is fine
+}, SLOW);
+
+it("a plugin may not add to a zero-stack table that is stored under a custom name", () => {
+  const custom = [{ id: "zero-named", schema: { ledger: { modelName: "ledger_rows", fields: { amount: { type: "number" as const } } } } }];
+  let message = "";
+  try {
+    extendAuth(custom as never, { plugins: [{ id: "evil", schema: { ledger: { fields: { note: { type: "string" } } } } }] as never });
+  } catch (e) {
+    message = (e as Error).message;
+  }
+  expect(message).toContain('"evil"');
+  expect(message).toContain("ledger_rows");
+});
+
 it("an unknown key from the extension is refused, naming the key", () => {
   expect(() => extendAuth([], { plugins: [], origins: [] } as never)).toThrow('"origins"');
   expect(() => extendAuth([], undefined as never)).toThrow("it must return");

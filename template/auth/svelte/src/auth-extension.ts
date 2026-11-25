@@ -28,9 +28,18 @@ const note = (taken: Map<string, string>, owner: string, endpoints: Endpoints | 
   }
   for (const [model, m] of Object.entries(schema ?? {})) {
     taken.set(`model ${model}`, owner);
+    if (typeof m?.modelName === "string" && m.modelName !== model) taken.set(`name ${model}`, m.modelName);
     for (const [f, d] of Object.entries(m?.fields ?? {})) for (const n of columns(f, d)) taken.set(`field ${model}.${n}`, owner);
   }
 };
+// A comparable picture of a value, nested: an init gets the live context, so a change inside it (rate limiting off, an origin added, email verification
+// off) would otherwise pass. Functions are told apart by identity. Never printed: it can hold the secret.
+function picture(v: unknown, ids = new Map<unknown, number>(), depth = 0): string {
+  if (typeof v === "function") return `fn${ids.get(v) ?? (ids.set(v, ids.size), ids.size - 1)}`;
+  if (v === null || typeof v !== "object" || depth > 6) return `${typeof v}:${String(v)}`;
+  if (Array.isArray(v)) return `[${v.map((x) => picture(x, ids, depth + 1)).join()}]`;
+  return `{${Object.keys(v).sort().map((k) => `${k}=${picture((v as Record<string, unknown>)[k], ids, depth + 1)}`).join()}}`;
+}
 const columns = (key: string, d: { fieldName?: unknown } | undefined) => (typeof d?.fieldName === "string" && d.fieldName !== key ? [key, d.fieldName] : [key]);
 const CORE = new Map<string, string>();
 note(CORE, "Better Auth", getEndpoints(Promise.resolve({} as never), {} as never).api as Endpoints, getAuthTables({}) as Schema);
@@ -80,6 +89,8 @@ export function extendAuth<Z extends BetterAuthPlugin[], A extends BetterAuthPlu
     for (const [model, m] of Object.entries((p.schema ?? {}) as Schema)) {
       const owner = taken.get(`model ${model}`);
       if (owner && (m?.modelName !== undefined || m?.disableMigration !== undefined)) fail(`${name} sets modelName or disableMigration on "${model}", a table ${owner} already has`);
+      // Better Auth takes the table name from the last plugin that mentions the table, and an entry with no modelName resets it to the key.
+      if (owner && taken.has(`name ${model}`)) fail(`${name} adds to "${model}", which ${owner} stores under the name "${taken.get(`name ${model}`)}"; that would reset the table's name`);
       for (const [f, d] of Object.entries(m?.fields ?? {}))
         for (const n of columns(f, d)) {
           const by = taken.get(`field ${model}.${n}`);
@@ -95,10 +106,17 @@ export function extendAuth<Z extends BetterAuthPlugin[], A extends BetterAuthPlu
     const init = p.init;
     if (init)
       p.init = async (ctx) => {
-        const before = { password: ctx.password, adapter: ctx.adapter, keys: Object.keys(ctx.options ?? {}).sort().join() };
+        const ids = new Map<unknown, number>();
+        const guarded = () => {
+          const c = ctx as unknown as Record<string, unknown>;
+          const o = (ctx.options ?? {}) as Record<string, unknown>;
+          return picture([c.rateLimit, c.trustedOrigins, c.secret, c.sessionConfig, o.rateLimit, o.trustedOrigins, o.emailAndPassword, o.emailVerification, o.advanced, o.session, o.user, o.account], ids);
+        };
+        const before = { password: ctx.password, adapter: ctx.adapter, keys: Object.keys(ctx.options ?? {}).sort().join(), guarded: guarded() };
         const result = await init.call(plugin, ctx);
         if (ctx.password !== before.password || ctx.adapter !== before.adapter || Object.keys(ctx.options ?? {}).sort().join() !== before.keys)
           fail(`${name} changes the password hasher, the adapter or the option names in its init argument`);
+        if (guarded() !== before.guarded) fail(`${name} changes rate limiting, trusted origins, sessions or an auth option inside its init argument; return databaseHooks or trustedOrigins from init instead`);
         if (!result || typeof result !== "object") return;
         const { options, context } = result;
         if (context) fail(`${name} returns a context from init; a context could replace the password hasher or the adapter`);

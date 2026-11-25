@@ -92,7 +92,7 @@ tests/
   Decision: an origin with a custom scheme (`myapp://`, `capacitor://localhost`) is refused for now, because its origin is not a plain web origin; open
   this up with the mobile app (#79), which will need it.
   Known limits, in the extension file's comment and in `AGENTS.md`: the guards stop replacement by declaration, not a plugin whose `hooks`, `onRequest` or `middlewares` deliberately answer or rewrite a request, and not an `init` that
-  changes a nested value of its argument in place or an endpoint list changed after startup. App database hooks run first, so zero-stack's checks (invite-only) see the final data. A plugin that needs a refused `init` waits until an app asks.
+  changes something inside its argument that the guard does not compare (it compares, nested, rate limiting, trusted origins, the secret, the session config and the `emailAndPassword`, `emailVerification`, `advanced`, `session`, `user`, `account` and `rateLimit` options before and after) or an endpoint list changed after startup. A plugin may not add to a zero-stack table stored under a custom name (an entry without `modelName` would reset it). App database hooks run first, so zero-stack's checks (invite-only) see the final data. A plugin that needs a refused `init` waits until an app asks.
   Gate: in every svelte permutation with auth the gate gives the app a plugin with an allowed `init` and one hook, and asserts the hook, the database hook and the trusted origin work over HTTP; the full permutation's existing
   checks (invite-only refusals, cancel-before-delete, the admin guard) run with it present. The `svelte-upgrade` honesty scenario also adds a trusted origin to the extension and expects no conflict.
 
