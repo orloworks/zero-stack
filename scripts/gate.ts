@@ -10,7 +10,7 @@ import { scaffoldOwned } from "../src/ownership";
 import { killChildren, onTerminate, spawnTracked } from "../src/children";
 import { preflight, run, scaffold } from "../src/pipeline";
 import { stepsFor } from "../src/setup";
-import { CREATE_VOID, TRUSTED_DEPENDENCIES } from "../src/versions";
+import { CREATE_VOID, TRUSTED_DEPENDENCIES, UPGRADE_BASELINE } from "../src/versions";
 
 const root = mkdtempSync(join(tmpdir(), "zs-gate-"));
 const argv = process.argv.slice(2);
@@ -117,6 +117,38 @@ async function upgradeGate(config: Config): Promise<void> {
   console.log("gate: upgrade replaced, added and removed what an older app needed, kept the owner's edit, matches a fresh scaffold, and verify passes");
 }
 
+// The cross-version honesty test (#102, entry `svelte-upgrade-baseline`): scaffold the pinned baseline from GitHub, edit only a declaration file it already
+// had, upgrade with this working tree's code, and expect no conflict and a green verify. A failed fetch throws; it is never a pass.
+async function baselineGate(): Promise<void> {
+  const sh = (cmd: string[]) => Bun.spawnSync(cmd, { cwd: app, stdout: "pipe", stderr: "pipe" });
+  const flags = argv.filter((a, i) => !["--baseline", "--name"].includes(a) && argv[i - 1] !== "--name");
+  const made = Bun.spawnSync([process.execPath, "x", `github:orloworks/zero-stack#${UPGRADE_BASELINE}`, name, ...flags], { cwd: root, stdout: "pipe", stderr: "pipe", env: process.env });
+  if (made.exitCode !== 0 || !existsSync(join(app, RECORD_DIR, "manifest.json")))
+    throw new Error(`could not scaffold the baseline github:orloworks/zero-stack#${UPGRADE_BASELINE} (is GitHub reachable?): ${made.stderr.toString().trim().slice(-600)}`);
+  const commit = (msg: string) => {
+    sh(["git", "add", "-A"]);
+    if (sh(["git", "-c", "user.name=gate", "-c", "user.email=gate@example.com", "commit", "-q", "-m", msg]).exitCode !== 0) throw new Error("git commit failed");
+  };
+  commit("baseline");
+  const steps = join(app, "src/app/onboarding.ts"); // the declaration file the baseline had
+  const edited = readFileSync(steps, "utf8").replace('["example-step"]', '["signed-in-once", "invited-a-friend"]');
+  if (!edited.includes("invited-a-friend")) throw new Error("the baseline's src/app/onboarding.ts has no example step to edit");
+  writeFileSync(steps, edited);
+  commit("edit");
+
+  const r = sh([process.execPath, join(import.meta.dir, "../src/index.ts"), "upgrade"]);
+  const out = r.stdout.toString();
+  console.log(out.trimEnd());
+  if (r.exitCode !== 0) throw new Error(`upgrade exited ${r.exitCode}: ${r.stderr.toString()}`);
+  if (!/^(replaced|added|removed|merged) /m.test(out)) throw new Error(`the upgrade changed nothing, so the baseline ${UPGRADE_BASELINE.slice(0, 7)} is too new to prove anything (set UPGRADE_BASELINE to an older commit or tag):\n${out}`);
+  if (out.includes("CONFLICT") || !/^Summary: .* 0 in conflict\.$/m.test(out)) throw new Error(`upgrade reported a conflict or no summary:\n${out}`);
+  if (readFileSync(steps, "utf8") !== edited) throw new Error("the upgrade changed the owner's edit in src/app/onboarding.ts");
+  for (const [p, e] of Object.entries(readTree(app))) if (e.encoding === "utf8" && /^(<{7} |>{7} )/m.test(e.content)) throw new Error(`conflict markers in ${p}`);
+  if (out.includes("package.json changed")) await run([process.execPath, "install"], app);
+  await run([process.execPath, "run", "verify"], app);
+  console.log(`gate: upgrade from baseline ${UPGRADE_BASELINE.slice(0, 7)} kept the owner's edit with no conflict, and verify passes`);
+}
+
 try {
   preflight();
   const input = {
@@ -125,6 +157,12 @@ try {
     ...Object.fromEntries(FEATURE_LIST.map((f) => [f.key, hasSeq(featureArgv(f)) || undefined])),
   };
   const { config } = validateFlags(input);
+  // Not re-indented, to keep this diff small: the labeled block lets the baseline run leave through the shared finally below.
+  gate: {
+  if (hasSeq(["--baseline"])) { // gate-only flag (matrix entry svelte-upgrade-baseline): the baseline is scaffolded by its own code, not this tree's
+    await baselineGate();
+    break gate;
+  }
   // One retry when create-void's own install fails (better-sqlite3 or esbuild install scripts die under load); scaffold deletes the half-made app first.
   await scaffold(config, app).catch((e: Error) => {
     // Only the create-void command itself, never an anchor error or a later step whose path happens to contain "create-void".
@@ -1841,6 +1879,7 @@ try {
     console.log("gate: secrets:push sends the exact argv and prints only the key count; refuses bad names, lines outside the format, no link and an infisical failure without leaking a value");
     console.log("gate: secrets:pull refuses without a link / on a missing key / on a line outside the format / on an infisical failure (.env untouched, nothing leaked); ok pull is verbatim 0600");
   }
+  } // gate:
 } catch (e) {
   console.error(`gate failed: ${(e as Error).message}`);
   process.exitCode = 1;

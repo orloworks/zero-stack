@@ -4,7 +4,7 @@ Two separate things change over time: the packages in your app, and the files ze
 
 ## 0. The upgrade command (svelte apps with a `.zero-stack/` folder)
 
-A svelte app made with a zero-stack that records a manifest has a `.zero-stack/` folder (commit it). Upgrade it in one command, from the app's folder, with a clean git tree (commit or stash first; untracked files count):
+A svelte app made with a zero-stack that records a manifest has a `.zero-stack/` folder (commit it). Upgrade it in one command, from the app's folder, with a clean git tree (commit or stash first; untracked files count) and `bun install` already run (it refuses without `node_modules`: the new version is formatted with your app's own toolchain):
 
 ```bash
 bunx github:orloworks/zero-stack#v<new-version> upgrade
@@ -31,10 +31,20 @@ An app without `.zero-stack/` (made before it existed, or react, vue or solid) i
 
 ### Port an older svelte app
 
-1. Apply the template diff by hand (section 2 below).
-2. Move your `SETTINGS` into `src/app/settings.ts` (the module `src/settings.ts` imports and re-exports them, so no import changes) and your onboarding steps into `src/app/onboarding.ts`.
-3. Scaffold a fresh app of the same version with the same name and flags, and copy its `.zero-stack/` folder into yours. Add `.zero-stack/upgrade-tmp` to your `.gitignore`.
-4. Commit. From then on, `upgrade` works; it lists anything the port missed as a merge or a conflict.
+For a svelte app made with 0.5.x or earlier (no `.zero-stack/` folder). Do it once, with a clean git tree and `bun install` already run in the app (the upgrade refuses without `node_modules`).
+
+1. Apply the template diff by hand (section 2 below), old = the version your app was made with, new = the version you are porting to, both scaffolded with your app's name and flags. The diff also carries `.zero-stack/` (the manifest and base copy of the new version) and the `.zero-stack/upgrade-tmp` line in `.gitignore`: that is how your app gets them, so there is nothing to copy afterwards. If you edited `SETTINGS` or the onboarding `STEPS`, `src/settings.ts` and `src/onboarding.ts` come out as conflicts: step 2 resolves them.
+2. Take the new version's `src/settings.ts` and `src/onboarding.ts` as they are, and put your own `SETTINGS` and `STEPS` into `src/app/settings.ts` and `src/app/onboarding.ts` (the modules import and re-export them, so no import in your code changes). Anything you changed in `auth.ts` stays where it is: the upgrade merges it like any other edit.
+3. Compare your app with the fresh scaffold of the new version you made in step 1, and read every difference. Run this in your app's folder (`old/` and `new/` sit next to it, as in section 2):
+
+   ```bash
+   diff -rq -x node_modules -x .git -x .env -x .void -x bun.lock -x migrations -x .cloudflare -x .void-wrangler.jsonc ../new/<name> .
+   ```
+
+   (Use `diff -u` on a file to see it.) **Each difference must be a change you meant to keep.** `.zero-stack/` now says your app is exactly the new version, so from here on the upgrade treats every difference as your own edit: a hunk of the template diff you missed or resolved wrongly stays that way, and later upstream changes in that region are merged around it or conflict. Fix a missed hunk now by taking the fresh scaffold's file. Your own files (your pages, your dependencies in `package.json`, your lists in `src/app/`) will differ; that is expected.
+4. Commit. From then on `bunx github:orloworks/zero-stack#v<new-version> upgrade` works. Running it right away prints "Nothing to do", which only means the record is current: it does not check the port, step 3 does.
+
+Verified once, on a real v0.5.0 scaffold (`--framework svelte --admin`) with edited `SETTINGS` and `STEPS` and a new scaffold of this branch: steps 1 and 2 applied, step 3's diff listed only the two `src/app/` files that hold the edits, `bun run verify` was green, and the upgrade then printed "Nothing to do" (#102).
 
 Two separate things change over time: the packages in your app, and the files zero-stack generated for you. Upgrade them one at a time.
 
