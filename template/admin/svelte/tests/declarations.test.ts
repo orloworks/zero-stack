@@ -44,7 +44,32 @@ function stepProblems(steps: readonly unknown[]): string[] {
   return out;
 }
 
+function featureProblems(features: readonly unknown[]): string[] {
+  const out = duplicates(features as string[]).map((f) => `the feature "${f}" is declared twice`);
+  for (const f of features) if (typeof f !== "string" || !f.trim()) out.push(`a feature must be a non-empty name, got ${JSON.stringify(f)}`);
+  return out;
+}
+
+// Plan names are what the app stores and checks, always lowercase. Lookup keys must be unique too: two plans on one Stripe price could not be told apart.
+function planProblems(plans: readonly { name: string; monthly: { lookupKey: string } }[]): string[] {
+  const out = duplicates(plans.map((p) => p.name)).map((n) => `the plan "${n}" is declared twice`);
+  for (const p of plans) if (p.name !== p.name.toLowerCase()) out.push(`the plan name "${p.name}" must be lowercase`);
+  out.push(...duplicates(plans.map((p) => p.monthly.lookupKey)).map((k) => `the lookup key "${k}" is used by more than one plan`));
+  return out;
+}
+
+function planFeatureProblems(planFeatures: Record<string, readonly string[] | undefined>, features: readonly string[], plans: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const [feature, on] of Object.entries(planFeatures)) {
+    if (!features.includes(feature)) out.push(`PLAN_FEATURES names the feature "${feature}", which is not declared in FEATURES`);
+    for (const plan of on ?? []) if (!plans.includes(plan)) out.push(`PLAN_FEATURES turns "${feature}" on for the plan "${plan}", which is not declared in PLANS (plan names are lowercase)`);
+  }
+  return out;
+}
+
 const root = join(import.meta.dirname, "..");
+// By path, so the file need not exist (tsc and Vite resolve nothing): plans.ts exists with --payments only.
+const loadList = (list: string): Promise<unknown> => import(/* @vite-ignore */ join(root, "src/app", `${list}.ts`));
 const source = (list: string) => readFileSync(join(root, "src/app", `${list}.ts`), "utf8");
 
 it("every declaration file the app has holds data only: no runtime imports", () => {
@@ -62,7 +87,38 @@ it("the onboarding steps are unique, non-empty names", async () => {
   expect(stepProblems(STEPS)).toEqual([]);
 });
 
+it("the features are unique, non-empty names", async () => {
+  const { FEATURES } = await import("../src/app/features");
+  expect(featureProblems(FEATURES)).toEqual([]);
+});
+
+// The plans file exists with --payments only; PLAN_FEATURES exists with --payments and --admin.
+it("the plans are unique and lowercase", async () => {
+  if (!existsSync(join(root, "src/app/plans.ts"))) return;
+  const { PLANS } = (await loadList("plans")) as { PLANS: readonly { name: string; monthly: { lookupKey: string } }[] };
+  expect(planProblems(PLANS)).toEqual([]);
+});
+
+it("the plan features name declared features and declared plans", async () => {
+  const features = await import("../src/app/features");
+  if (!("PLAN_FEATURES" in features)) return;
+  const { PLANS } = (await loadList("plans")) as { PLANS: readonly { name: string; monthly: { lookupKey: string } }[] };
+  expect(planFeatureProblems(features.PLAN_FEATURES as Record<string, readonly string[]>, features.FEATURES, PLANS.map((p) => p.name))).toEqual([]);
+});
+
 it("the checks fail with the reason", () => {
+  expect(featureProblems(["a", "a", " "])).toEqual(['the feature "a" is declared twice', 'a feature must be a non-empty name, got " "']);
+  const plan = (name: string, lookupKey: string) => ({ name, monthly: { lookupKey } });
+  expect(planProblems([plan("pro", "k1"), plan("pro", "k2"), plan("Business", "k1")])).toEqual([
+    'the plan "pro" is declared twice',
+    'the plan name "Business" must be lowercase',
+    'the lookup key "k1" is used by more than one plan',
+  ]);
+  expect(planFeatureProblems({ a: ["pro"], ghost: ["pro", "Pro", "team"] }, ["a"], ["pro"])).toEqual([
+    'PLAN_FEATURES names the feature "ghost", which is not declared in FEATURES',
+    'PLAN_FEATURES turns "ghost" on for the plan "Pro", which is not declared in PLANS (plan names are lowercase)',
+    'PLAN_FEATURES turns "ghost" on for the plan "team", which is not declared in PLANS (plan names are lowercase)',
+  ]);
   const dup = `export const SETTINGS = {\n  "a": { type: "text", default: "x", description: "d" },\n  "a": { type: "text", default: "y", description: "d" },\n} as const;\n`;
   expect(settingProblems(dup, {})).toEqual(['the setting "a" is declared twice']);
   const bad: Record<string, SettingDecl> = { n: { type: "number", default: 500, min: 1, max: 10, description: "d" }, c: { type: "choice", values: ["a"], default: "b", description: "d" } };

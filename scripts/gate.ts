@@ -68,6 +68,24 @@ async function upgradeGate(config: Config): Promise<void> {
   if (!editedSettings.includes("site-title")) throw new Error("src/app/settings.ts has no example setting to edit");
   writeFileSync(settings, editedSettings);
   rmSync(exampleRoute);
+  // A feature renamed (and the plan features keyed by it, when --payments is on), and the example route that gated on it dropped (#105).
+  const featuresFile = join(app, "src/app/features.ts");
+  const plansFile = join(app, "src/app/plans.ts");
+  const plansExist = existsSync(plansFile);
+  // With --payments the plan "pro" is renamed "basic" too (plans list, plan features), and the example route that gated on it dropped.
+  const editedFeatures = readFileSync(featuresFile, "utf8").replaceAll('"example-feature"', '"early-access"').replace('["pro"]', plansExist ? '["basic"]' : '["pro"]');
+  if (!editedFeatures.includes("early-access")) throw new Error("src/app/features.ts has no example feature to edit");
+  writeFileSync(featuresFile, editedFeatures);
+  const featureRoute = join(app, "routes/api/example-feature.ts");
+  rmSync(featureRoute);
+  // A second plan added to the plans list, and "pro" renamed "basic" (--payments only).
+  const planRoute = join(app, "routes/api/example-plan.ts");
+  const editedPlans = plansExist ? readFileSync(plansFile, "utf8").replace('name: "pro"', 'name: "basic"').replace("pro_monthly", "basic_monthly").replace(/,?\s*\] as const satisfies/, `,\n  {\n    name: "team",\n    label: "Team",\n    currency: "usd",\n    monthly: { lookupKey: "team_monthly", amount: 4000 },\n  },\n] as const satisfies`) : "";
+  if (plansExist) {
+    if (!editedPlans.includes("team_monthly") || !editedPlans.includes('name: "basic"') || !editedPlans.includes("basic_monthly") || !editedFeatures.includes('["basic"]')) throw new Error("src/app/plans.ts or src/app/features.ts has no plan to edit");
+    writeFileSync(plansFile, editedPlans);
+    rmSync(planRoute);
+  }
   // A trusted origin added to the auth extension (#104), the only place an app edits for auth.
   const extension = join(app, "src/app/auth.ts");
   const editedExtension = readFileSync(extension, "utf8").replace("trustedOrigins: []", 'trustedOrigins: ["https://app.example"]');
@@ -113,13 +131,27 @@ async function upgradeGate(config: Config): Promise<void> {
   if (readFileSync(steps, "utf8") !== edited) throw new Error("the upgrade changed the owner's edit in src/app/onboarding.ts");
   if (readFileSync(settings, "utf8") !== editedSettings) throw new Error("the upgrade changed the owner's edit in src/app/settings.ts");
   if (readFileSync(extension, "utf8") !== editedExtension) throw new Error("the upgrade changed the owner's edit in src/app/auth.ts");
-  if (existsSync(exampleRoute)) throw new Error("the upgrade brought back the example route the owner dropped");
+  if (readFileSync(featuresFile, "utf8") !== editedFeatures) throw new Error("the upgrade changed the owner's edit in src/app/features.ts");
+  if (plansExist && readFileSync(plansFile, "utf8") !== editedPlans) throw new Error("the upgrade changed the owner's edit in src/app/plans.ts");
+  if (existsSync(exampleRoute) || existsSync(featureRoute) || existsSync(planRoute)) throw new Error("the upgrade brought back an example route the owner dropped");
   for (const f of ["manifest.json", "base.json"])
     if (readFileSync(join(app, RECORD_DIR, f), "utf8") !== readFileSync(join(freshApp, RECORD_DIR, f), "utf8")) throw new Error(`${RECORD_DIR}/${f} differs from a fresh scaffold's`);
   for (const [p, e] of Object.entries(readTree(app))) if (e.encoding === "utf8" && /^(<{7} |>{7} )/m.test(e.content)) throw new Error(`conflict markers in ${p}`);
 
   // 5. And it still verifies.
   await run([process.execPath, "run", "verify"], app);
+  // 6. With --payments: every list emptied (the example routes are already gone) still verifies. Feature, plan and plan-feature types are `never` then, so scaffold-owned
+  // code must not index or call through them (#105, fix round 1).
+  if (plansExist) {
+    const fs = (f: string, edit: (s: string) => string) => writeFileSync(join(app, f), edit(readFileSync(join(app, f), "utf8")));
+    fs("src/app/features.ts", (s) => s.replace(/export const FEATURES = \[[^\]]*\] as const;/, "export const FEATURES = [] as const;").replace(/(export const PLAN_FEATURES[^=]*= )\{[^]*?\};/, "$1{};"));
+    fs("src/app/plans.ts", (s) => s.replace(/export const PLANS = \[[^]*?\] as const/, "export const PLANS = [] as const"));
+    const emptied = readFileSync(join(app, "src/app/features.ts"), "utf8") + readFileSync(join(app, "src/app/plans.ts"), "utf8");
+    for (const want of ["FEATURES = [] as const", "= {};", "PLANS = [] as const"]) if (!emptied.includes(want)) throw new Error(`the gate could not empty a list: no "${want}" after the edit`);
+    await run([process.execPath, "x", "vp", "check", "--fix"], app); // formatting only; the empty lists are what verify must accept
+    await run([process.execPath, "run", "verify"], app);
+    console.log("gate: with the features, plan features and plans lists emptied, verify passes");
+  }
   console.log("gate: upgrade replaced, added and removed what an older app needed, kept the owner's edits (declarations and auth extension), matches a fresh scaffold, and verify passes");
 }
 

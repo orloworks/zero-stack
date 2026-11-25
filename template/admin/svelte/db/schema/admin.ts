@@ -36,7 +36,7 @@ export const onboardingStep = sqliteTable(
   (t) => [primaryKey({ columns: [t.userId, t.step] })],
 );
 
-// The global state of a declared feature (src/access.ts): "on", "off" or "kill". No row means off. Rows for features no longer declared are ignored, so deleting a
+// The global state of a declared feature (declared in src/app/features.ts): "on", "off" or "kill". No row means off. Rows for features no longer declared are ignored, so deleting a
 // feature is a code change only. Pages and routes call src/access.ts, never this table.
 export const featureSwitch = sqliteTable("feature_switch", {
   feature: text("feature").primaryKey(),

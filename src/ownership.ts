@@ -13,6 +13,8 @@ const EDIT_INSTEAD: Record<string, string> = {
   "auth.ts": "Add Better Auth plugins and trusted origins in src/app/auth.ts.",
   "src/auth-extension.ts": "Add Better Auth plugins and trusted origins in src/app/auth.ts.",
   "src/onboarding.ts": "Declare onboarding steps in src/app/onboarding.ts.",
+  "src/access.ts": "Declare features (and the plans each is on for) in src/app/features.ts.",
+  "src/plans.ts": "Declare plans in src/app/plans.ts.",
   "src/settings.ts": "Declare settings in src/app/settings.ts.",
 };
 export const editInstead = (p: string): string => EDIT_INSTEAD[p] ?? "Move the change to an app-owned file (AGENTS.md lists them).";

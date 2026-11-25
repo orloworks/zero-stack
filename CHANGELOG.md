@@ -7,6 +7,7 @@
   - Every svelte app now commits `.zero-stack/manifest.json` and `.zero-stack/base.json` (what it was made from, and every generated file as written).
   - Scaffold-owned files start with a "Scaffold-owned by zero-stack" notice, and `AGENTS.md` says which files those are.
   - With `--admin`, the onboarding steps list moved to `src/app/onboarding.ts`; `src/onboarding.ts` imports and re-exports it, so no import changes.
+  - With `--admin`, the feature list moved to `src/app/features.ts` and, with `--payments`, the plan list to `src/app/plans.ts`; with both, `PLAN_FEATURES` is declared in `src/app/features.ts`. `src/access.ts` and `src/plans.ts` import and re-export them, so no import changes (#105).
   - Port an older app once: see `docs/upgrading.md`.
 - `upgrade` is no longer a valid app name.
 

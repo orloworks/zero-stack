@@ -27,6 +27,7 @@ export function installPayments(dir: string, config: Pick<Config, "admin">): voi
 }
 
 const ACCESS = "src/access.ts";
+const FEATURES_DECL = "src/app/features.ts";
 const ACCESS_TEST = "tests/access.test.ts";
 const FEATURES_SERVER = "pages/admin/features.server.ts";
 const FEATURES_PAGE = "pages/admin/features.svelte";
@@ -36,21 +37,36 @@ const USER_PAGE = "pages/admin/users/[id].svelte";
 // --payments with --admin (#85): plan-gated feature switches and a read-only Billing section on the admin user page. Runs after installAdmin and installPayments.
 function installPaymentsAdmin(dir: string): void {
   cpSync(join(here, "../admin"), dir, { recursive: true, force: false, errorOnExist: true });
-  // The one plan source, in access.ts's empty `sources` slot. The precedence (kill switch, per-user override, plan, global) is already in decide().
-  editFile(dir, ACCESS, (s) =>
+  // PLAN_FEATURES is declared in the app's features file (#105), after FEATURES.
+  editFile(dir, FEATURES_DECL, (s) =>
     replaceAnchor(
       s,
+      'export const FEATURES = ["example-feature"] as const;\n',
+      `export const FEATURES = ["example-feature"] as const;
+
+// Which plans each feature is on for: feature name to plan names (lowercase, each a plan declared in src/app/plans.ts). A user on a listed plan has the feature
+// on, unless the kill switch or their own setting says otherwise. The scaffold's example turns example-feature on for pro: replace it, or empty the object.
+export const PLAN_FEATURES: Partial<Record<(typeof FEATURES)[number], readonly string[]>> = { "example-feature": ["pro"] };
+`,
+      FEATURES_DECL,
+    ),
+  );
+  // The one plan source, in access.ts's empty `sources` slot. The precedence (kill switch, per-user override, plan, global) is already in decide().
+  editFile(dir, ACCESS, (s) => {
+    s = replaceAnchor(s, 'import { FEATURES } from "./app/features";\n', 'import { FEATURES, PLAN_FEATURES } from "./app/features";\n', ACCESS);
+    return replaceAnchor(
+      s,
       "// Where plans grant features. Empty until --payments adds a source: each returns the features a user's plan includes.\nconst sources: ((userId: string) => Promise<ReadonlySet<Feature>>)[] = [];\n",
-      `// Where plans grant features: PLAN_FEATURES names, per feature, the plans it is on for (lowercase, as in src/plans.ts). The scaffold's example turns
-// example-feature on for pro: replace it with your own. billing is imported on use, like the database: Void loads auth.ts at startup.
-export const PLAN_FEATURES: Partial<Record<Feature, readonly string[]>> = { "example-feature": ["pro"] };
+      `// Where plans grant features: PLAN_FEATURES (declared in src/app/features.ts) names, per feature, the plans it is on for. billing is imported on use, like the
+// database: Void loads auth.ts at startup.
+export { PLAN_FEATURES };
 export const featuresForPlan = (plan: string | null): ReadonlySet<Feature> =>
-  new Set(plan ? FEATURES.filter((f) => PLAN_FEATURES[f]?.some((p) => p.toLowerCase() === plan.toLowerCase())) : []);
+  new Set(plan ? FEATURES.filter((f) => (PLAN_FEATURES as Partial<Record<string, readonly string[]>>)[f]?.some((p) => p.toLowerCase() === plan.toLowerCase())) : []);
 const sources: ((userId: string) => Promise<ReadonlySet<Feature>>)[] = [async (userId) => featuresForPlan(await (await import("./billing")).currentPlan(userId))];
 `,
       ACCESS,
-    ),
-  );
+    );
+  });
   editFile(dir, ACCESS_TEST, (s) =>
     replaceAnchor(s, '["FEATURES", "adminSwitches", "decide", "features", "requireFeature"]', '["FEATURES", "PLAN_FEATURES", "adminSwitches", "decide", "features", "featuresForPlan", "requireFeature"]', ACCESS_TEST),
   );

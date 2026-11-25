@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vite-plus/test";
 import { billingView, type SubscriptionRow } from "../src/lib/billing-view";
-import { lookupKeys, PLANS, stripePlans } from "../src/plans";
+import { lookupKeys, stripePlans } from "../src/plans";
 import { stripeClient, stripeConfigured } from "../src/stripe";
 
 // Tests run in Node without Worker bindings: the session is a stand-in and the database is an in-memory SQLite behind the same drizzle calls.
@@ -31,16 +31,13 @@ vi.mock("void/db", async () => {
   };
 });
 
-// A second declared plan, "business", beside whatever src/plans.ts declares, so a plan change can be tested.
-vi.mock("../src/plans", async (original) => {
-  const real = await original<typeof import("../src/plans")>();
-  const business = { name: "business", label: "Business", currency: "usd", monthly: { lookupKey: "business_monthly", amount: 5000 } };
-  return {
-    ...real,
-    lookupKeys: () => [...real.lookupKeys(), business.monthly.lookupKey],
-    planForLookupKey: (k: string | null | undefined) => (k === business.monthly.lookupKey ? business : real.planForLookupKey(k)),
-  };
-});
+// The test brings its own plans, "pro" and "business", so it passes whatever src/app/plans.ts declares (examples replaced, or the list emptied).
+vi.mock("../src/app/plans", () => ({
+  PLANS: [
+    { name: "pro", label: "Pro", currency: "usd", monthly: { lookupKey: "pro_monthly", amount: 1000 } },
+    { name: "business", label: "Business", currency: "usd", monthly: { lookupKey: "business_monthly", amount: 5000 } },
+  ],
+}));
 
 const { cancelSubscriptions, currentPlan, deleteSubscriptionRows, requirePlan, syncStripeEvent } = await import("../src/billing");
 const sqlite = ((await import("void/db")) as unknown as { sqlite: { exec: (s: string) => void } }).sqlite;
@@ -50,10 +47,9 @@ const status = async (p: Promise<unknown>) => ((await p.then(() => ({ status: 20
 
 const row = (r: Partial<SubscriptionRow>): SubscriptionRow => ({ plan: "pro", status: "active", periodEnd: new Date("2026-12-24T00:00:00Z"), trialEnd: null, cancelAtPeriodEnd: false, cancelAt: null, ...r });
 
-it("the plan declaration: lowercase names, unique lookup keys, and the plugin's shape", () => {
-  for (const p of PLANS) expect(p.name).toBe(p.name.toLowerCase());
+it("the plan helpers: unique lookup keys, and the plugin's shape", () => {
   expect(new Set(lookupKeys()).size).toBe(lookupKeys().length);
-  expect(stripePlans()[0]).toMatchObject({ name: PLANS[0].name, lookupKey: PLANS[0].monthly.lookupKey });
+  expect(stripePlans()[0]).toMatchObject({ name: "pro", lookupKey: "pro_monthly" });
 });
 
 it("billingView: what the Billing page shows for each status", () => {
@@ -95,7 +91,7 @@ it("requirePlan: 401 signed out, 403 without an active plan, the user with one (
   session.down = false;
 });
 
-const key = PLANS[0].monthly.lookupKey;
+const key = "pro_monthly";
 const event = (type: string, o: { id?: string; status?: string; customer?: string; lookup?: string; metadata?: Record<string, string> } = {}) =>
   ({
     type,

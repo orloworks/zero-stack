@@ -1,17 +1,19 @@
 import { HTTPException } from "hono/http-exception";
 import { getUser, requireAuth } from "void/auth";
 import { auditRow, findUser, requireAdmin } from "./admin";
+import { FEATURES } from "./app/features";
 
-// Feature switches. Declare a feature by adding its name to FEATURES; gate a route with `await requireFeature(c, "name")` (it replaces requireAuth(c) and returns the
+// Feature switches. Declare a feature by adding its name to FEATURES in src/app/features.ts (this file never changes for that); gate a route with `await requireFeature(c, "name")` (it replaces requireAuth(c) and returns the
 // user: 401 signed out, 403 when the feature is off for them); read `await features(c)` in a loader to show or hide UI. An admin sets each feature on, off or kill switch on
-// the Features page and overrides it per user on user detail. The scaffold ships one example (and the route routes/api/example-feature.ts that gates on it): replace both.
-export const FEATURES = ["example-feature"] as const;
+// the Features page and overrides it per user on user detail.
+export { FEATURES };
 export type Feature = (typeof FEATURES)[number];
 
 type Ctx = Parameters<typeof requireAuth>[0];
 type State = "on" | "off" | "kill";
 type Override = "on" | "off";
-type Snapshot = { global: Partial<Record<Feature, State>>; overrides: Partial<Record<Feature, Override>>; plan: ReadonlySet<Feature> };
+// Keyed by string, not Feature: with the list emptied Feature is never, and a never key cannot be assigned to.
+type Snapshot = { global: Partial<Record<string, State>>; overrides: Partial<Record<string, Override>>; plan: ReadonlySet<Feature> };
 
 const STATES: readonly State[] = ["on", "off", "kill"];
 const OVERRIDES: readonly Override[] = ["on", "off"];
@@ -104,7 +106,7 @@ export async function adminSwitches(c: Ctx, userId?: string) {
     effective: (f: Feature) => resolve(f, snap),
     async set(change: { feature: string; userId?: string; state: unknown }): Promise<Result> {
       const feature = change.feature;
-      if (!declared(feature)) return refuse(400, "That feature is not declared in src/access.ts.");
+      if (!declared(feature)) return refuse(400, "That feature is not declared in src/app/features.ts.");
       const { db, and, eq, featureSwitch, featureOverride, auditEntry } = await store();
       const now = new Date();
       if (change.userId === undefined) {
