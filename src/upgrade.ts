@@ -102,6 +102,7 @@ export async function upgrade(dir: string, log: (line: string) => void = console
   if (old.manifest.formatVersion !== FORMAT_VERSION) throw new Error(`the manifest has format ${old.manifest.formatVersion}; this zero-stack reads format ${FORMAT_VERSION}. Run the zero-stack version that made it.`);
   if (git(dir, ["rev-parse", "--is-inside-work-tree"]).stdout.toString().trim() !== "true") throw new Error("not a git work tree: run `git init` and commit your app first, so the upgrade can be undone.");
   if (git(dir, ["status", "--porcelain", "--untracked-files=all"]).stdout.toString().trim()) throw new Error("uncommitted or untracked changes: commit or stash them first, so the upgrade can be undone.");
+  if (!existsSync(join(dir, "node_modules"))) throw new Error("no node_modules: run `bun install` first (the new version is formatted with your app's own toolchain).");
 
   if (git(dir, ["config", "core.autocrlf"]).stdout.toString().trim() === "true") throw new Error("core.autocrlf is true, so every file differs from its recorded LF copy: run `git config core.autocrlf false` for this app first.");
   refuseBad(Object.keys(old.base)); // before the temporary scaffold exists

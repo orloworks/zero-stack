@@ -29,7 +29,7 @@ const IGNORE = ".env\n.zero-stack/upgrade-tmp\n";
 // An app that was generated from `old` (so its base copy is `old`), then edited by the owner (`edits`; null deletes), and committed.
 function makeApp(old: Files, edits: Files = {}, { commit = true } = {}) {
   const dir = join(mkdtempSync(join(tmpdir(), "zs-up-")), "app");
-  mkdirSync(dir);
+  mkdirSync(join(dir, "node_modules"), { recursive: true }); // empty, so git ignores it; the upgrade refuses an app without one
   put(dir, { ".gitignore": IGNORE, ...old });
   writeRecord(dir, config);
   put(dir, edits);
@@ -192,6 +192,12 @@ test("refuses, changing nothing, with no manifest, a dirty tree (untracked count
   rmSync(join(plain, ".git"), { recursive: true });
   await expect(upgrade(plain, () => {}, scaffoldOf({ "a.ts": "2\n" }))).rejects.toThrow(/not a git work tree/);
   expect(read(plain, "a.ts")).toBe("1\n");
+
+  const bare = makeApp({ "a.ts": "1\n" });
+  rmSync(join(bare, "node_modules"), { recursive: true });
+  await expect(upgrade(bare, () => {}, scaffoldOf({ "a.ts": "2\n" }))).rejects.toThrow(/no node_modules: run `bun install` first/);
+  expect(read(bare, "a.ts")).toBe("1\n");
+  expect(existsSync(join(bare, ".zero-stack/upgrade-tmp"))).toBe(false);
 });
 
 test("a failed scaffold of the new version leaves the app untouched and no temporary folder; a leftover one is removed first", async () => {

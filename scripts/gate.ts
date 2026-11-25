@@ -140,6 +140,7 @@ async function baselineGate(): Promise<void> {
   const out = r.stdout.toString();
   console.log(out.trimEnd());
   if (r.exitCode !== 0) throw new Error(`upgrade exited ${r.exitCode}: ${r.stderr.toString()}`);
+  if (!/^(replaced|added|merged) /m.test(out)) throw new Error(`the upgrade changed nothing, so the baseline ${UPGRADE_BASELINE.slice(0, 7)} is too new to prove anything (set UPGRADE_BASELINE to an older commit or tag):\n${out}`);
   if (out.includes("CONFLICT") || !/^Summary: .* 0 in conflict\.$/m.test(out)) throw new Error(`upgrade reported a conflict or no summary:\n${out}`);
   if (readFileSync(steps, "utf8") !== edited) throw new Error("the upgrade changed the owner's edit in src/app/onboarding.ts");
   for (const [p, e] of Object.entries(readTree(app))) if (e.encoding === "utf8" && /^(<{7} |>{7} )/m.test(e.content)) throw new Error(`conflict markers in ${p}`);
@@ -156,10 +157,11 @@ try {
     ...Object.fromEntries(FEATURE_LIST.map((f) => [f.key, hasSeq(featureArgv(f)) || undefined])),
   };
   const { config } = validateFlags(input);
+  // Not re-indented, to keep this diff small: the labeled block lets the baseline run leave through the shared finally below.
+  gate: {
   if (hasSeq(["--baseline"])) { // gate-only flag (matrix entry svelte-upgrade-baseline): the baseline is scaffolded by its own code, not this tree's
     await baselineGate();
-    rmSync(root, { recursive: true, force: true }); // process.exit skips the finally below; nothing else is running
-    process.exit(0);
+    break gate;
   }
   // One retry when create-void's own install fails (better-sqlite3 or esbuild install scripts die under load); scaffold deletes the half-made app first.
   await scaffold(config, app).catch((e: Error) => {
@@ -1877,6 +1879,7 @@ try {
     console.log("gate: secrets:push sends the exact argv and prints only the key count; refuses bad names, lines outside the format, no link and an infisical failure without leaking a value");
     console.log("gate: secrets:pull refuses without a link / on a missing key / on a line outside the format / on an infisical failure (.env untouched, nothing leaked); ok pull is verbatim 0600");
   }
+  } // gate:
 } catch (e) {
   console.error(`gate failed: ${(e as Error).message}`);
   process.exitCode = 1;
