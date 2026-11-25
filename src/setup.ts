@@ -127,8 +127,8 @@ export const STEPS: Step[] = [
   },
   {
     id: "storage-bucket", on: (c) => !!c.storage, title: "Confirm the R2 bucket", who: "agent",
-    why: "Void sees `void/storage` in the code and provisions the bucket on deploy; there is no separate step.",
-    action: "Nothing to run; confirm after the deploy", verify: "cf r2 buckets list --name-contains <app-name> | grep -q storage",
+    why: "Void sees `void/storage` in the code and provisions the bucket on deploy, named `<app-name>-storage`; there is no separate step.",
+    action: "Nothing to run; confirm after the deploy", verify: `grep -q cloudflare .void/project.json && cf r2 buckets list --name-contains <app-name>-storage | grep -Eq "(^|[^a-z0-9-])<app-name>-storage([^a-z0-9-]|$)"`,
   },
   {
     id: "email-setup", on: (c) => !!c.email, title: "Turn on Email Sending", who: "agent",

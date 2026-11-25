@@ -8,6 +8,10 @@ vi.mock("void/auth", () => ({
   requireAuth: () => session.user,
 }));
 vi.mock("void/env", () => ({ env: { ADMIN_EMAILS: "boss@example.com" } }));
+// The app declares whatever it likes, including nothing: this test brings its own declarations.
+vi.mock("../src/app/settings", () => ({
+  SETTINGS: { "test-number": { type: "number", default: 10, min: 1, max: 100, description: "A number between 1 and 100." } },
+}));
 vi.mock("void/db", () => {
   throw new Error("database down");
 });
@@ -27,10 +31,6 @@ const value = (d: SettingDecl, raw: unknown) => {
 
 it("exports the typed getter, the declarations and the admin editor", () => {
   expect(Object.keys(settings).sort()).toEqual(["SETTINGS", "adminSettings", "setting"]);
-});
-
-it("every declared default fits its own declaration", () => {
-  for (const [key, d] of Object.entries(SETTINGS)) expect([key, parseSetting(d as SettingDecl, d.default).ok]).toEqual([key, true]);
 });
 
 it("number: plain decimals only, so 0x10, 0b11, 1e3 and Infinity are refused", () => {
@@ -90,11 +90,11 @@ it("an undeclared key and an invalid value are refused before anything is read o
   expect(await admin.set("__proto__", 1)).toMatchObject({ ok: false, status: 400 });
   expect(await admin.set("toString", 1)).toMatchObject({ ok: false, status: 400 });
   expect(await admin.reset("nope")).toMatchObject({ ok: false, status: 400 });
-  expect(await admin.set("example-number", 101)).toMatchObject({ ok: false, status: 400, message: "Enter a number from 1 to 100." });
+  expect(await admin.set("test-number", 101)).toMatchObject({ ok: false, status: 400, message: "Enter a number from 1 to 100." });
 });
 
 it("a number whose stored form would not parse back is refused, not stored as an invalid setting", async () => {
-  (SETTINGS as Record<string, SettingDecl>)["test-open-number"] = open; // the shipped number has bounds that refuse these first
+  (SETTINGS as Record<string, SettingDecl>)["test-open-number"] = open; // test-number has bounds that refuse these first
   const admin = adminSettings({} as never);
   for (const n of [1e21, 1e-7]) expect([n, await admin.set("test-open-number", n)]).toEqual([n, { ok: false, status: 400, message: "Enter a number with fewer digits." }]);
 });

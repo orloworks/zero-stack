@@ -15,7 +15,7 @@ it("each setting is its own form with a label, its description, its default and 
   expect(page).toContain("aria-label={`Reset ${s.key} to default`}");
   expect(page).toContain("Reset to default");
   expect(page).toContain("{#if s.canReset}");
-  expect(page).toContain("Nothing declared yet. Add settings in <code>src/settings.ts</code>.");
+  expect(page).toContain("Nothing declared yet. Add settings in <code>src/app/settings.ts</code>.");
   expect(page).toContain("Stored value is invalid; using the default.");
   expect(page).toContain("{SAVED}");
 });

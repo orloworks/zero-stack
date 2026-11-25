@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **`upgrade` (svelte, #101):** `bunx github:orloworks/zero-stack#v<new> upgrade`, run in an app with a clean git tree, scaffolds the new version with the app's recorded flags and three-way-merges every file against a stored base copy. Untouched files are replaced, edited ones merged, conflicts left as markers with exit 1. It never commits and never touches `.env` or migrations. See `docs/upgrading.md`. React, vue and solid output is unchanged.
+- **Breaking layout change for svelte apps:**
+  - Every svelte app now commits `.zero-stack/manifest.json` and `.zero-stack/base.json` (what it was made from, and every generated file as written).
+  - Scaffold-owned files start with a "Scaffold-owned by zero-stack" notice, and `AGENTS.md` says which files those are.
+  - With `--admin`, the onboarding steps list moved to `src/app/onboarding.ts`; `src/onboarding.ts` imports and re-exports it, so no import changes.
+  - Port an older app once: see `docs/upgrading.md`.
+- `upgrade` is no longer a valid app name.
+
 ## v0.5.0 (2026-11-24)
 
 Run it with `bunx github:orloworks/zero-stack#v0.5.0 <dir>`.

@@ -58,7 +58,7 @@ export const featureOverride = sqliteTable(
   (t) => [primaryKey({ columns: [t.userId, t.feature] })],
 );
 
-// The stored value of a declared setting (src/settings.ts), as text. No row means the declared default. Rows for settings no longer declared, or whose value no longer
+// The stored value of a declared setting (src/app/settings.ts), as text. No row means the declared default. Rows for settings no longer declared, or whose value no longer
 // fits the declaration, are ignored. Pages and routes call src/settings.ts, never this table.
 export const setting = sqliteTable("setting", {
   key: text("key").primaryKey(),

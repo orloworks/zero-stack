@@ -4,7 +4,9 @@ import { Database } from "bun:sqlite";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { argv as featureArgv, FEATURE_LIST, validateFlags } from "../src/flags";
+import { argv as featureArgv, type Config, FEATURE_LIST, validateFlags } from "../src/flags";
+import { type BaseCopy, listFiles, readTree, RECORD_DIR, UPGRADE_TMP } from "../src/manifest";
+import { scaffoldOwned } from "../src/ownership";
 import { killChildren, onTerminate, spawnTracked } from "../src/children";
 import { preflight, run, scaffold } from "../src/pipeline";
 import { stepsFor } from "../src/setup";
@@ -42,6 +44,79 @@ const sqliteFiles = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
     e.isDirectory() ? sqliteFiles(join(dir, e.name)) : e.name.endsWith(".sqlite") ? [join(dir, e.name)] : []);
 
+// The upgrade honesty test (#101, entry `svelte-upgrade`): an app that edits only its declaration file upgrades with no conflict and a green verify.
+// It lives here, not in a script of its own, because the ci:full cache hashes only gate.ts and src/.
+async function upgradeGate(config: Config): Promise<void> {
+  const sh = (cmd: string[]) => Bun.spawnSync(cmd, { cwd: app, stdout: "pipe", stderr: "pipe" });
+  const commit = (msg: string) => {
+    sh(["git", "add", "-A"]);
+    const r = sh(["git", "-c", "user.name=gate", "-c", "user.email=gate@example.com", "commit", "-q", "-m", msg]);
+    if (r.exitCode !== 0) throw new Error(`git commit failed: ${r.stderr.toString()}`);
+  };
+  const record = join(app, ".zero-stack/base.json");
+  const steps = join(app, "src/app/onboarding.ts");
+  const settings = join(app, "src/app/settings.ts");
+  const exampleRoute = join(app, "routes/api/example-settings.ts");
+  commit("scaffold");
+
+  // 1. Edit as an owner would: only the declaration file.
+  const edited = readFileSync(steps, "utf8").replace('["example-step"]', '["signed-in-once", "invited-a-friend"]');
+  if (!edited.includes("invited-a-friend")) throw new Error("src/app/onboarding.ts has no example step to edit");
+  writeFileSync(steps, edited);
+  // A setting renamed, and the example route that read it dropped, as an owner would.
+  const editedSettings = readFileSync(settings, "utf8").replace('"example-text"', '"site-title"');
+  if (!editedSettings.includes("site-title")) throw new Error("src/app/settings.ts has no example setting to edit");
+  writeFileSync(settings, editedSettings);
+  rmSync(exampleRoute);
+
+  // 2. Make the app look older, four ways.
+  const base: BaseCopy = JSON.parse(readFileSync(record, "utf8"));
+  const [aged, dropped, stale, signIn] = ["src/mail.ts", "src/lib/setting-value.ts", "src/stale.ts", "pages/sign-in.svelte"] as const;
+  for (const p of [aged, dropped, signIn]) if (!base[p]) throw new Error(`${p} is not in the base copy`);
+  if (!scaffoldOwned(aged) || !scaffoldOwned(dropped) || scaffoldOwned(signIn)) throw new Error("the ownership rule changed under the gate scenario");
+  const agedText = readFileSync(join(app, aged), "utf8") + "// an older version of this file\n";
+  writeFileSync(join(app, aged), agedText); // a scaffold-owned file and its base entry, rewritten together
+  base[aged] = { ...base[aged]!, content: agedText };
+  rmSync(join(app, dropped)); // dropped with its base entry: new in the new version
+  delete base[dropped];
+  writeFileSync(join(app, stale), "export const stale = 1;\n"); // a file the new version no longer has
+  base[stale] = { mode: 0o644, encoding: "utf8", content: "export const stale = 1;\n" };
+  base[signIn] = { ...base[signIn]!, content: base[signIn]!.content + "<!-- older -->\n" }; // an app-owned base entry
+  writeFileSync(record, JSON.stringify(base, null, 2) + "\n");
+  commit("edit and age");
+
+  const localConfig = sh(["git", "config", "--list", "--local"]).stdout.toString();
+  // 3. Upgrade: exit 0, one line per changed file, nothing committed.
+  const r = sh([process.execPath, join(import.meta.dir, "../src/index.ts"), "upgrade"]);
+  const out = r.stdout.toString();
+  console.log(out.trimEnd());
+  if (r.exitCode !== 0) throw new Error(`upgrade exited ${r.exitCode}: ${r.stderr.toString()}`);
+  for (const line of [`replaced ${aged}`, `added ${dropped}`, `removed ${stale}`]) if (!out.includes(line)) throw new Error(`upgrade output has no "${line}":\n${out}`);
+  if (out.includes("CONFLICT")) throw new Error(`upgrade reported a conflict:\n${out}`);
+  if (!/^Summary: .* 0 in conflict\.$/m.test(out) || !out.trimEnd().endsWith("git clean -fd")) throw new Error(`upgrade output lacks the summary or ends without the undo commands:\n${out}`);
+  if (sh(["git", "log", "--oneline"]).stdout.toString().trim().split("\n").length !== 2) throw new Error("upgrade committed");
+  if (existsSync(join(app, UPGRADE_TMP))) throw new Error("upgrade left its temporary folder");
+  if (sh(["git", "diff", "--cached", "--name-only"]).stdout.toString().trim()) throw new Error("upgrade staged files");
+  if (sh(["git", "config", "--list", "--local"]).stdout.toString() !== localConfig) throw new Error("upgrade changed the app's local git config");
+
+  // 4. The scaffold-owned files equal a fresh scaffold's, the owner's edit is intact, and the record is what a fresh scaffold writes.
+  const freshApp = join(root, "fresh", name);
+  mkdirSync(join(root, "fresh"));
+  await scaffold(config, freshApp);
+  const ownedOf = (dir: string) => JSON.stringify(Object.entries(readTree(dir)).filter(([p]) => scaffoldOwned(p)));
+  if (ownedOf(app) !== ownedOf(freshApp)) throw new Error("the upgraded app's scaffold-owned files differ from a fresh scaffold's");
+  if (readFileSync(steps, "utf8") !== edited) throw new Error("the upgrade changed the owner's edit in src/app/onboarding.ts");
+  if (readFileSync(settings, "utf8") !== editedSettings) throw new Error("the upgrade changed the owner's edit in src/app/settings.ts");
+  if (existsSync(exampleRoute)) throw new Error("the upgrade brought back the example route the owner dropped");
+  for (const f of ["manifest.json", "base.json"])
+    if (readFileSync(join(app, RECORD_DIR, f), "utf8") !== readFileSync(join(freshApp, RECORD_DIR, f), "utf8")) throw new Error(`${RECORD_DIR}/${f} differs from a fresh scaffold's`);
+  for (const [p, e] of Object.entries(readTree(app))) if (e.encoding === "utf8" && /^(<{7} |>{7} )/m.test(e.content)) throw new Error(`conflict markers in ${p}`);
+
+  // 5. And it still verifies.
+  await run([process.execPath, "run", "verify"], app);
+  console.log("gate: upgrade replaced, added and removed what an older app needed, kept the owner's edit, matches a fresh scaffold, and verify passes");
+}
+
 try {
   preflight();
   const input = {
@@ -60,6 +135,16 @@ try {
   const pkgJson = JSON.parse(readFileSync(join(app, "package.json"), "utf8"));
   if (JSON.stringify(pkgJson.trustedDependencies) !== JSON.stringify(TRUSTED_DEPENDENCIES))
     throw new Error(`package.json trustedDependencies is ${JSON.stringify(pkgJson.trustedDependencies)}`);
+  if (config.framework !== "svelte") { // react, vue and solid stay as v0.1: no record, no notice
+    const noticed = listFiles(app).filter((f) => readFileSync(join(app, f), "utf8").includes("Scaffold-owned by zero-stack"));
+    if (existsSync(join(app, RECORD_DIR)) || noticed.length) throw new Error(`${config.framework} app has ${RECORD_DIR}/ or a notice (${noticed.join(", ")})`);
+    console.log(`gate: ${config.framework} has no ${RECORD_DIR}/ and no notice`);
+  }
+  if (hasSeq(["--upgrade"])) { // gate-only flag (matrix entry svelte-upgrade): the honesty test replaces the HTTP checks
+    await upgradeGate(config);
+    rmSync(root, { recursive: true, force: true }); // process.exit skips the finally below; nothing else is running
+    process.exit(0);
+  }
   await step(["check"]);
   await step(["build"]);
   if (config.tailwind) {

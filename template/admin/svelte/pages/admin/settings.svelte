@@ -46,7 +46,7 @@
 {#if loadError}
   <p role="alert">Couldn't load settings. <a href="/admin/settings">Retry</a></p>
 {:else if settings.length === 0}
-  <p>Nothing declared yet. Add settings in <code>src/settings.ts</code>.</p>
+  <p>Nothing declared yet. Add settings in <code>src/app/settings.ts</code>.</p>
 {:else}
   <p class="hint">Each setting is saved on its own. Settings are plain text that every admin sees: never put a secret here.</p>
   {#each settings as s (s.key)}
