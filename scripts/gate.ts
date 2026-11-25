@@ -68,6 +68,11 @@ async function upgradeGate(config: Config): Promise<void> {
   if (!editedSettings.includes("site-title")) throw new Error("src/app/settings.ts has no example setting to edit");
   writeFileSync(settings, editedSettings);
   rmSync(exampleRoute);
+  // A trusted origin added to the auth extension (#104), the only place an app edits for auth.
+  const extension = join(app, "src/app/auth.ts");
+  const editedExtension = readFileSync(extension, "utf8").replace("trustedOrigins: []", 'trustedOrigins: ["https://app.example"]');
+  if (!editedExtension.includes("https://app.example")) throw new Error("src/app/auth.ts has no empty trustedOrigins list to edit");
+  writeFileSync(extension, editedExtension);
 
   // 2. Make the app look older, four ways.
   const base: BaseCopy = JSON.parse(readFileSync(record, "utf8"));
@@ -107,6 +112,7 @@ async function upgradeGate(config: Config): Promise<void> {
   if (ownedOf(app) !== ownedOf(freshApp)) throw new Error("the upgraded app's scaffold-owned files differ from a fresh scaffold's");
   if (readFileSync(steps, "utf8") !== edited) throw new Error("the upgrade changed the owner's edit in src/app/onboarding.ts");
   if (readFileSync(settings, "utf8") !== editedSettings) throw new Error("the upgrade changed the owner's edit in src/app/settings.ts");
+  if (readFileSync(extension, "utf8") !== editedExtension) throw new Error("the upgrade changed the owner's edit in src/app/auth.ts");
   if (existsSync(exampleRoute)) throw new Error("the upgrade brought back the example route the owner dropped");
   for (const f of ["manifest.json", "base.json"])
     if (readFileSync(join(app, RECORD_DIR, f), "utf8") !== readFileSync(join(freshApp, RECORD_DIR, f), "utf8")) throw new Error(`${RECORD_DIR}/${f} differs from a fresh scaffold's`);
@@ -114,7 +120,7 @@ async function upgradeGate(config: Config): Promise<void> {
 
   // 5. And it still verifies.
   await run([process.execPath, "run", "verify"], app);
-  console.log("gate: upgrade replaced, added and removed what an older app needed, kept the owner's edit, matches a fresh scaffold, and verify passes");
+  console.log("gate: upgrade replaced, added and removed what an older app needed, kept the owner's edits (declarations and auth extension), matches a fresh scaffold, and verify passes");
 }
 
 // The cross-version honesty test (#102, entry `svelte-upgrade-baseline`): scaffold the pinned baseline from GitHub, edit only a declaration file it already
@@ -182,6 +188,36 @@ try {
     await upgradeGate(config);
     rmSync(root, { recursive: true, force: true }); // process.exit skips the finally below; nothing else is running
     process.exit(0);
+  }
+  // #104: a svelte app with auth runs with an app plugin in its auth extension (an allowed init, one hook and a trusted origin), so every check below also proves
+  // that zero-stack's protections (invite-only, cancel-before-delete, the admin guard) hold with the extension in use.
+  const GATE_ORIGIN = "https://gate-app.example";
+  if (config.framework === "svelte" && config.auth) {
+    writeFileSync(join(app, "src/app/auth.ts"), `import { APIError, createAuthMiddleware } from "better-auth/api";
+
+export default function authExtension(_env: Record<string, unknown>) {
+  return {
+    plugins: [
+      {
+        id: "gate-app",
+        init: async () => ({ options: { databaseHooks: { user: { create: { before: async () => ({ data: { image: "gate-app-db-hook" } }) } } } } }),
+        hooks: {
+          before: [
+            {
+              matcher: (ctx: { path?: string }) => ctx.path === "/sign-up/email",
+              handler: createAuthMiddleware(async (ctx) => {
+                if (ctx.body?.name === "gate-app-hook") throw new APIError("BAD_REQUEST", { code: "GATE_APP_HOOK", message: "Refused by the app hook." });
+              }),
+            },
+          ],
+        },
+      },
+    ],
+    trustedOrigins: ["${GATE_ORIGIN}"],
+  };
+}
+`);
+    await step(["check", "--fix"]);
   }
   await step(["check"]);
   await step(["build"]);
@@ -532,6 +568,22 @@ try {
     const session = await fetch(`${base}/api/auth/get-session`, { headers: { cookie } }).then((r) => r.json() as Promise<any>);
     if (session?.user?.email !== email) throw new Error("auth get-session did not return the signed-in user");
     console.log("gate: auth sign-up -> sign-in -> session ok");
+    if (config.framework === "svelte") {
+      // #104: the app plugin's hook refuses, its init's database hook ran for the user above, and its trusted origin is trusted (a foreign one is not).
+      const hooked = await post("/api/auth/sign-up/email", { name: "gate-app-hook", email: `hook-${email}`, password });
+      const hookedBody = (await hooked.json().catch(() => null)) as { code?: string } | null;
+      if (hooked.status !== 400 || hookedBody?.code !== "GATE_APP_HOOK") throw new Error(`the app plugin's before hook did not run: sign-up -> ${hooked.status} ${JSON.stringify(hookedBody)}`);
+      if (session.user.image !== "gate-app-db-hook") throw new Error("the app plugin's init database hook did not run for a new user");
+      const from = (origin: string) =>
+        fetch(`${base}/api/auth/sign-in/email`, {
+          method: "POST",
+          headers: { "content-type": "application/json", origin, cookie, ...(config.turnstile && { "x-captcha-response": DUMMY_TOKEN }) },
+          body: JSON.stringify({ email, password }),
+        });
+      const [trusted, foreign] = [await from(GATE_ORIGIN), await from("https://evil.example")];
+      if (!trusted.ok || foreign.status !== 403) throw new Error(`trusted origins: the app's origin -> ${trusted.status} (want 200), a foreign origin -> ${foreign.status} (want 403)`);
+      console.log("gate: auth extension: the app plugin's hook and database hook run, its trusted origin is trusted, a foreign origin is refused");
+    }
     // --invite-only: the create hook refuses before any row or mail. The scaffold's list is @example.com; `kept` is an existing user for the restarts below.
     if (config.inviteOnly) {
       await signUpVerified(base, kept);

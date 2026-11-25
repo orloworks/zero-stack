@@ -10,6 +10,8 @@ export const scaffoldOwned = (p: string): boolean =>
 
 // The app-owned file to edit instead, where there is one.
 const EDIT_INSTEAD: Record<string, string> = {
+  "auth.ts": "Add Better Auth plugins and trusted origins in src/app/auth.ts.",
+  "src/auth-extension.ts": "Add Better Auth plugins and trusted origins in src/app/auth.ts.",
   "src/onboarding.ts": "Declare onboarding steps in src/app/onboarding.ts.",
   "src/settings.ts": "Declare settings in src/app/settings.ts.",
 };

@@ -266,6 +266,7 @@ test("react, vue and solid --auth keep v0.1 output: sign-in/up only, an auth.ts 
       'import { defineAuth } from "void/auth";\n\nexport default defineAuth(({ defaults }) => ({\n  ...defaults,\n  rateLimit: { storage: "database" },\n}));\n',
     );
     expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).not.toContain("/settings");
+    for (const f of ["src/app/auth.ts", "src/auth-extension.ts", "tests/auth-extension.test.ts"]) expect(existsSync(join(dir, f))).toBe(false); // the auth extension is svelte only
   }
 });
 
@@ -275,8 +276,12 @@ test("svelte --auth ships /settings with its loader, a plain composed auth.ts an
   expect(readdirSync(join(dir, "pages")).sort()).toEqual(["settings.server.ts", "settings.svelte", "sign-in.svelte", "sign-up.svelte"]);
   expect(readFileSync(join(dir, "auth.ts"), "utf8")).toStartWith("// Scaffold-owned by zero-stack"); // the notice is added by the pipeline; the composed text follows it
   expect(readFileSync(join(dir, "auth.ts"), "utf8").replace(/^\/\/ Scaffold-owned by zero-stack[^\n]*\n/, "")).toBe(
-    'import { defineAuth } from "void/auth";\n\nexport default defineAuth(({ defaults }) => ({\n  ...defaults,\n  rateLimit: { storage: "database" },\n}));\n',
+    'import { defineAuth } from "void/auth";\nimport authExtension from "./src/app/auth";\nimport { extendAuth } from "./src/auth-extension";\n\nexport default defineAuth(({ defaults, env }) => {\n  const app = extendAuth([], authExtension(env));\n  return {\n  ...defaults,\n  rateLimit: { storage: "database" },\n  plugins: app.plugins,\n  trustedOrigins: [...((defaults.trustedOrigins as string[] | undefined) ?? []), ...app.trustedOrigins],\n};\n});\n',
   );
+  // the auth extension: the app-owned file with empty lists, its guards and their test (svelte only)
+  expect(readFileSync(join(dir, "src/app/auth.ts"), "utf8")).toContain("return { plugins: [], trustedOrigins: [] };");
+  expect(readFileSync(join(dir, "src/auth-extension.ts"), "utf8")).toContain("export function extendAuth");
+  expect(existsSync(join(dir, "tests/auth-extension.test.ts"))).toBe(true);
   expect(readFileSync(join(dir, "pages/settings.svelte"), "utf8")).toContain("<!-- zero-stack:account-deletion -->");
   expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain("`/settings`");
 });
