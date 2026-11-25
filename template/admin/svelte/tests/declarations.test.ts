@@ -7,13 +7,23 @@ import { parseSetting, type SettingDecl } from "../src/lib/setting-value";
 // files below and on bad examples after them, so a check that stops working fails here too.
 const LISTS = ["features", "settings", "onboarding", "plans"];
 
-// A runtime import (or a dynamic one) in a declaration file: only `import type` and `export type ... from` are allowed.
+// A runtime import (or a dynamic one) in a declaration file: only `import type`, `export type ... from` and `import { type X }` are allowed. Comments and the text
+// of strings are ignored, so prose like "these require (at least) two" is not a call.
 function runtimeImports(source: string): string[] {
-  const found = source.match(/^\s*(?:import|export)\b[^;'"]*?\bfrom\s*["'][^"']+["']|^\s*import\s*["'][^"']+["']|\bimport\s*\(|\brequire\s*\(/gm) ?? [];
-  return found.filter((s) => !/^\s*(?:import|export)\s+type\b/.test(s)).map((s) => s.trim());
+  const code = source.replace(/\/\*[^]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  const statements = code.match(/^\s*(?:import|export)\b[^;'"]*?\bfrom\s*["'][^"']+["']|^\s*import\s*["'][^"']+["']/gm) ?? [];
+  const typeOnly = (s: string) => {
+    if (/^\s*(?:import|export)\s+type\b/.test(s)) return true;
+    const names = /^\s*import\s*\{([^}]*)\}/.exec(s)?.[1]?.split(",").map((n) => n.trim()).filter(Boolean);
+    return !!names?.length && names.every((n) => n.startsWith("type "));
+  };
+  const strings = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g;
+  const calls = code.replace(strings, '""').match(/\bimport\s*\(|\brequire\s*\(/g) ?? [];
+  return [...statements.filter((s) => !typeOnly(s)).map((s) => s.trim()), ...calls.map((c) => c.replace(/\s+/g, ""))];
 }
 
-// Top-level keys of the SETTINGS object (two-space indent), read from the source because a duplicate key is gone once the object exists.
+// Top-level keys of the SETTINGS object (two-space indent), read from the source because a duplicate key is gone once the object exists. tsc (in `verify`) already
+// rejects a duplicate property (TS1117) and is the real gate; this only gives the named reason, so it is deliberately simple.
 const settingKeys = (source: string) => [...source.matchAll(/^ {2}"?([\w-]+)"?:\s*\{/gm)].map((m) => m[1]!);
 const duplicates = (names: readonly string[]) => names.filter((n, i) => names.indexOf(n) !== i);
 
@@ -63,7 +73,10 @@ it("the checks fail with the reason", () => {
   expect(runtimeImports('import { env } from "void/env";\nimport "./side";\nconst m = await import("./x");\nexport { z } from "./z";\n')).toEqual([
     'import { env } from "void/env"',
     'import "./side"',
-    "import(",
     'export { z } from "./z"',
+    "import(",
   ]);
+  expect(runtimeImports('import { type A, type B } from "./t";\n')).toEqual([]);
+  expect(runtimeImports('import { type A, b } from "./t";\n')).toEqual(['import { type A, b } from "./t"']);
+  expect(runtimeImports('// These require (at least) one\n/* import("x") */\nexport const D = { description: "needs require(1) or import(2)" };\nconst r = require("x");\n')).toEqual(["require("]);
 });

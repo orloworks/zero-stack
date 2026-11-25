@@ -17,7 +17,7 @@ It scaffolds the new version with the flags the manifest recorded into `.zero-st
 - a file the new version added is **added** when nothing is at that path; one it removed is **removed** when you never edited it;
 - a file you deleted stays deleted.
 
-After the per-file lines it prints a summary (counts of replaced, added, removed, merged and in conflict), names every scaffold-owned file you edited with the app-owned file where that change belongs (`You edited src/settings.ts, which zero-stack owns. Declare settings in src/app/settings.ts.`), says to run `bun install` when `package.json` changed, and ends with the two commands that undo it. An app that is already current gets "Nothing to do" and exit 0.
+After the per-file lines it prints a summary (counts of replaced, added, removed, merged, kept and in conflict), names every scaffold-owned file you edited with the app-owned file where that change belongs (`You edited src/settings.ts, which zero-stack owns. Declare settings in src/app/settings.ts.`), says to run `bun install` when `package.json` changed, and ends with the two commands that undo it. An app that is already current gets "Nothing to do" and exit 0.
 
 It refuses when `core.autocrlf` is `true` (every file would differ from its recorded copy; run `git config core.autocrlf false` for the app). A change it cannot apply (a binary file you also changed, a path that is a folder, a symlinked folder) is kept as it is, listed, and makes the command exit 1. If a write fails partway it says so and how to undo it.
 

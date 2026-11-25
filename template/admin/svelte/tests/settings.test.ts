@@ -33,10 +33,6 @@ it("exports the typed getter, the declarations and the admin editor", () => {
   expect(Object.keys(settings).sort()).toEqual(["SETTINGS", "adminSettings", "setting"]);
 });
 
-it("every declared default fits its own declaration", () => {
-  for (const [key, d] of Object.entries(SETTINGS)) expect([key, parseSetting(d as SettingDecl, d.default).ok]).toEqual([key, true]);
-});
-
 it("number: plain decimals only, so 0x10, 0b11, 1e3 and Infinity are refused", () => {
   expect(value(open, "42")).toBe(42);
   expect(value(open, " -1.5 ")).toBe(-1.5);

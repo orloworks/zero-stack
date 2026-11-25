@@ -392,7 +392,7 @@ test("the summary counts each outcome, and the undo commands come last", async (
   expect(r.code).toBe(1);
   expect(r.lines).toEqual([
     "replaced a.ts", "removed b.ts", "merged d.ts", "CONFLICT e.ts", "added f.ts",
-    "Summary: 1 replaced, 1 added, 1 removed, 1 merged, 1 in conflict.",
+    "Summary: 1 replaced, 1 added, 1 removed, 1 merged, 0 kept, 1 in conflict.",
     UNDO,
   ]);
 });
@@ -416,9 +416,36 @@ test("an edited scaffold-owned file is named with the app-owned file where the c
 test("package.json changing says to run bun install, before the undo commands; unchanged says nothing", async () => {
   const dir = makeApp({ "package.json": '{"a":1}\n', "a.ts": "1\n" });
   const r = await runAll(dir, { "package.json": '{"a":2}\n', "a.ts": "1\n" });
-  expect(r.lines).toEqual(["replaced package.json", "Summary: 1 replaced, 0 added, 0 removed, 0 merged, 0 in conflict.", "package.json changed: run `bun install`.", UNDO]);
+  expect(r.lines).toEqual(["replaced package.json", "Summary: 1 replaced, 0 added, 0 removed, 0 merged, 0 kept, 0 in conflict.", "package.json changed: run `bun install`.", UNDO]);
   const other = makeApp({ "package.json": '{"a":1}\n', "a.ts": "1\n" });
   expect((await runAll(other, { "package.json": '{"a":1}\n', "a.ts": "2\n" })).lines.some((l) => l.includes("bun install"))).toBe(false);
+});
+
+test("package.json in conflict says to resolve it before bun install", async () => {
+  const dir = makeApp({ "package.json": lines(3) }, { "package.json": lines(3).replace("line 2", "mine") });
+  const r = await runAll(dir, { "package.json": lines(3).replace("line 2", "theirs") });
+  expect(r.code).toBe(1);
+  expect(r.lines).toContain("package.json is in conflict: resolve it, then run `bun install`.");
+  expect(r.lines.some((l) => l === "package.json changed: run `bun install`.")).toBe(false);
+});
+
+test("kept files are counted, so the counts add up to the lines above them", async () => {
+  const dir = makeApp({ "a.ts": "1\n", "b.ts": "1\n" }, { "a.ts": "mine\n", "b.ts": null });
+  const r = await runAll(dir, { "b.ts": "2\n" });
+  expect(r.lines.slice(0, 2)).toEqual(["kept a.ts (removed in the new version, but you edited it)", "skipped b.ts (you deleted it; the new version changed it)"]);
+  expect(r.lines).toContain("Summary: 0 replaced, 0 added, 0 removed, 0 merged, 2 kept, 0 in conflict.");
+});
+
+test("a run that changes only the record still prints the undo commands; a byte-identical record is left alone", async () => {
+  const dir = makeApp({ "db/migrations/0001_a.sql": "one;\n", "a.ts": "1\n" });
+  const r = await runAll(dir, { "db/migrations/0001_a.sql": "two;\n", "a.ts": "1\n" });
+  expect(r.lines[0]).toBe("No file of yours changed; .zero-stack/ now records the new version.");
+  expect(r.lines.at(-1)).toBe(UNDO);
+  expect(git(dir, "status", "--porcelain")).toContain(".zero-stack/manifest.json");
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "up");
+  expect(await runAll(dir, { "db/migrations/0001_a.sql": "two;\n", "a.ts": "1\n" })).toEqual({ code: 0, lines: ["Nothing to do: your app is already current."] });
+  expect(git(dir, "status", "--porcelain")).toBe("");
 });
 
 test("paths that differ only by case get their own refusal, nothing changes", async () => {

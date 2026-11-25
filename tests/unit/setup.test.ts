@@ -349,7 +349,7 @@ test("doctor: the R2 row passes only on the app's exact bucket name, never a loo
   // The real CLI's output format is unconfirmed: a JSON line and a table cell must match too, and their look-alikes must not.
   for (const line of ['  "name": "app-storage",', "│ app-storage │ 2026-11-24 │"]) expect(res({ BUCKETS_RAW: line })).toMatch(/^PASS/);
   for (const line of ['  "name": "myapp-storage",', "│ app-storage-old │ 2026-11-24 │"]) expect(res({ BUCKETS_RAW: line })).toMatch(/^FAIL/);
-}, 30000); // nine doctor runs in a row: over bun's 5s default on a busy machine
+}, 30000); // many doctor runs in a row (each spawns bash): slow on a loaded machine, so it gets more than bun's 5s default
 
 test("doctor: the R2 row fails until the app is connected", () => {
   const r = doctorRun(cfg({ storage: true }), {}, undefined, false);

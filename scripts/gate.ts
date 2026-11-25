@@ -93,6 +93,7 @@ async function upgradeGate(config: Config): Promise<void> {
   if (r.exitCode !== 0) throw new Error(`upgrade exited ${r.exitCode}: ${r.stderr.toString()}`);
   for (const line of [`replaced ${aged}`, `added ${dropped}`, `removed ${stale}`]) if (!out.includes(line)) throw new Error(`upgrade output has no "${line}":\n${out}`);
   if (out.includes("CONFLICT")) throw new Error(`upgrade reported a conflict:\n${out}`);
+  if (!/^Summary: .* 0 in conflict\.$/m.test(out) || !out.trimEnd().endsWith("git clean -fd")) throw new Error(`upgrade output lacks the summary or ends without the undo commands:\n${out}`);
   if (sh(["git", "log", "--oneline"]).stdout.toString().trim().split("\n").length !== 2) throw new Error("upgrade committed");
   if (existsSync(join(app, UPGRADE_TMP))) throw new Error("upgrade left its temporary folder");
   if (sh(["git", "diff", "--cached", "--name-only"]).stdout.toString().trim()) throw new Error("upgrade staged files");

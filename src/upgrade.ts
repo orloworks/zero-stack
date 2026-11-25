@@ -112,6 +112,7 @@ export async function upgrade(dir: string, log: (line: string) => void = console
   clean(); // a leftover from a killed run
   const dispose = onTerminate(clean);
   let plans: Plan[];
+  let recordChanged = false;
   let next: { manifest: Manifest; base: BaseCopy };
   try {
     mkdirSync(tmp, { recursive: true });
@@ -141,7 +142,12 @@ export async function upgrade(dir: string, log: (line: string) => void = console
           }
         }
       }
-      for (const f of ["manifest.json", "base.json"]) copyFileSync(join(fresh, RECORD_DIR, f), join(dir, RECORD_DIR, f));
+      for (const f of ["manifest.json", "base.json"]) {
+        const [from, to] = [join(fresh, RECORD_DIR, f), join(dir, RECORD_DIR, f)];
+        if (readFileSync(from).equals(readFileSync(to))) continue; // byte-identical: leave it, so a current app stays clean
+        copyFileSync(from, to);
+        recordChanged = true;
+      }
     } catch (e) {
       throw new Error(`the upgrade stopped partway (${(e as Error).message}); undo with \`git checkout . && git clean -fd\``);
     }
@@ -150,15 +156,14 @@ export async function upgrade(dir: string, log: (line: string) => void = console
     dispose();
   }
   for (const p of plans) log(p.line);
-  if (!plans.length) log("Nothing to do: your app is already current.");
-  else {
-    const n = (word: string) => plans.filter((p) => p.line.startsWith(word)).length;
-    log(`Summary: ${n("replaced")} replaced, ${n("added")} added, ${n("removed")} removed, ${n("merged")} merged, ${plans.filter((p) => p.conflict).length} in conflict.`);
-  }
+  const n = (word: string) => plans.filter((p) => p.line.startsWith(word) && !p.conflict).length;
+  if (!plans.length) log(recordChanged ? "No file of yours changed; .zero-stack/ now records the new version." : "Nothing to do: your app is already current.");
+  else log(`Summary: ${n("replaced")} replaced, ${n("added")} added, ${n("removed")} removed, ${n("merged")} merged, ${n("kept") + n("skipped")} kept, ${plans.filter((p) => p.conflict).length} in conflict.`);
   // An edit in a scaffold-owned file is a merge now and again at every upgrade: say where it belongs.
   for (const p of plans) if (p.edited && scaffoldOwned(p.path)) log(`You edited ${p.path}, which zero-stack owns. ${editInstead(p.path)}`);
-  if (plans.some((p) => p.path === "package.json" && p.write)) log("package.json changed: run `bun install`.");
+  const pkg = plans.find((p) => p.path === "package.json" && p.write);
+  if (pkg) log(pkg.conflict ? "package.json is in conflict: resolve it, then run `bun install`." : "package.json changed: run `bun install`.");
   if (old.manifest.migrations !== next.manifest.migrations) log("The schema changed: run `void db generate` and read the migration it writes before you deploy. Nothing was migrated.");
-  if (plans.length) log("To undo this upgrade, run:\n  git checkout .\n  git clean -fd");
+  if (plans.length || recordChanged) log("To undo this upgrade, run:\n  git checkout .\n  git clean -fd");
   return plans.some((p) => p.conflict) ? 1 : 0;
 }
