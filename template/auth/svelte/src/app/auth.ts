@@ -13,7 +13,7 @@
 //   names of its argument. A plugin's `rateLimit` rules never match a path Better Auth or zero-stack owns. The `init` checks run when Better Auth builds its context, so they
 //   fail the first auth request; the others fail at startup.
 // - Known limits: the guards stop replacement by declaration. They do not stop a plugin whose `hooks`, `onRequest` or `middlewares` deliberately answer or rewrite a
-//   request, or an `init` that changes something inside its argument that the guard does not compare (it compares the secret, rate limiting, trusted origins, sessions, cookies, OAuth and trusted-provider settings, and the options emailAndPassword, emailVerification, advanced, session, user, account and rateLimit; nothing else). App database hooks run first, so zero-stack's checks (invite-only) see the final data.
+//   request, or an `init` that changes something inside its argument that the guard does not compare (it compares the secret and its key config, the origin and CSRF check switches, rate limiting, trusted origins, sessions, cookies, OAuth and trusted-provider settings, and the options emailAndPassword, emailVerification, advanced, session, user, account and rateLimit; nothing else). App database hooks run first, so zero-stack's checks (invite-only) see the final data.
 //   Read a plugin before you add it.
 export default function authExtension(_env: Record<string, unknown>) {
   return { plugins: [], trustedOrigins: [] };
