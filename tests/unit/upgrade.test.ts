@@ -337,7 +337,7 @@ const tamperBase = (dir: string, key: string) => {
 };
 
 test("recorded paths that a case-insensitive or odd file system would read as protected or elsewhere are refused, before anything is done", async () => {
-  for (const key of [".GIT/HEAD", ".ENV", "Node_Modules/x.js", "a\\b.ts", "x.ts.", "x /y.ts", "a\0b.ts"]) {
+  for (const key of [".GIT/HEAD", ".ENV", "Node_Modules/x.js", "a\\b.ts", "x.ts.", "x /y.ts", "a\0b.ts", "a//b.ts"]) {
     const dir = makeApp({ "a.ts": "1\n" });
     tamperBase(dir, key);
     let scaffolded = false;
