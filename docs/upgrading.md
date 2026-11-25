@@ -35,10 +35,10 @@ For a svelte app made with 0.5.x or earlier (no `.zero-stack/` folder). Do it on
 
 1. Apply the template diff by hand (section 2 below), old = the version your app was made with, new = the version you are porting to, both scaffolded with your app's name and flags. The diff also carries `.zero-stack/` (the manifest and base copy of the new version) and the `.zero-stack/upgrade-tmp` line in `.gitignore`: that is how your app gets them, so there is nothing to copy afterwards. If you edited `SETTINGS` or the onboarding `STEPS`, `src/settings.ts` and `src/onboarding.ts` come out as conflicts: step 2 resolves them.
 2. Take the new version's `src/settings.ts` and `src/onboarding.ts` as they are, and put your own `SETTINGS` and `STEPS` into `src/app/settings.ts` and `src/app/onboarding.ts` (the modules import and re-export them, so no import in your code changes). Anything you changed in `auth.ts` stays where it is: the upgrade merges it like any other edit.
-3. Compare your app with the fresh scaffold of the new version you made in step 1, and read every difference:
+3. Compare your app with the fresh scaffold of the new version you made in step 1, and read every difference. Run this in your app's folder (`old/` and `new/` sit next to it, as in section 2):
 
    ```bash
-   diff -rq -x node_modules -x .git -x .env -x .void -x bun.lock -x migrations -x .cloudflare -x .void-wrangler.jsonc new/<name> .
+   diff -rq -x node_modules -x .git -x .env -x .void -x bun.lock -x migrations -x .cloudflare -x .void-wrangler.jsonc ../new/<name> .
    ```
 
    (Use `diff -u` on a file to see it.) **Each difference must be a change you meant to keep.** `.zero-stack/` now says your app is exactly the new version, so from here on the upgrade treats every difference as your own edit: a hunk of the template diff you missed or resolved wrongly stays that way, and later upstream changes in that region are merged around it or conflict. Fix a missed hunk now by taking the fresh scaffold's file. Your own files (your pages, your dependencies in `package.json`, your lists in `src/app/`) will differ; that is expected.

@@ -140,7 +140,7 @@ async function baselineGate(): Promise<void> {
   const out = r.stdout.toString();
   console.log(out.trimEnd());
   if (r.exitCode !== 0) throw new Error(`upgrade exited ${r.exitCode}: ${r.stderr.toString()}`);
-  if (!/^(replaced|added|merged) /m.test(out)) throw new Error(`the upgrade changed nothing, so the baseline ${UPGRADE_BASELINE.slice(0, 7)} is too new to prove anything (set UPGRADE_BASELINE to an older commit or tag):\n${out}`);
+  if (!/^(replaced|added|removed|merged) /m.test(out)) throw new Error(`the upgrade changed nothing, so the baseline ${UPGRADE_BASELINE.slice(0, 7)} is too new to prove anything (set UPGRADE_BASELINE to an older commit or tag):\n${out}`);
   if (out.includes("CONFLICT") || !/^Summary: .* 0 in conflict\.$/m.test(out)) throw new Error(`upgrade reported a conflict or no summary:\n${out}`);
   if (readFileSync(steps, "utf8") !== edited) throw new Error("the upgrade changed the owner's edit in src/app/onboarding.ts");
   for (const [p, e] of Object.entries(readTree(app))) if (e.encoding === "utf8" && /^(<{7} |>{7} )/m.test(e.content)) throw new Error(`conflict markers in ${p}`);
