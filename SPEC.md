@@ -86,6 +86,11 @@ tests/
   (`getAuthTables` from `better-auth/db`, read once at load) or in a zero-stack plugin; a plugin's `rateLimit` rules are wrapped so they never match a path Better Auth or zero-stack owns (`dist/api/rate-limiter/index.mjs`,
   `resolveRateLimitConfig`: a matching plugin rule beats the default rule, then `customRules` apply, so the Stripe webhook exemption holds); an `init` that changes `ctx.password`, `ctx.adapter` or the option names of its argument is
   refused; repeated slashes are collapsed when comparing paths. Better Auth's table is built once at module load; zero-stack's plugins are added per call.
+  A field counts as taken under its key and under the column it writes (`fieldName`), and a plugin may not set `modelName` or `disableMigration` on a table
+  Better Auth or zero-stack already has (the last plugin to set them wins, which would leave zero-stack's checks reading an empty table). An `init`'s
+  options are read once, so what was checked is what is used. A refused origin that only differs in spelling says what was meant.
+  Decision: an origin with a custom scheme (`myapp://`, `capacitor://localhost`) is refused for now, because its origin is not a plain web origin; open
+  this up with the mobile app (#79), which will need it.
   Known limits, in the extension file's comment and in `AGENTS.md`: the guards stop replacement by declaration, not a plugin whose `hooks`, `onRequest` or `middlewares` deliberately answer or rewrite a request, and not an `init` that
   changes a nested value of its argument in place or an endpoint list changed after startup. App database hooks run first, so zero-stack's checks (invite-only) see the final data. A plugin that needs a refused `init` waits until an app asks.
   Gate: in every svelte permutation with auth the gate gives the app a plugin with an allowed `init` and one hook, and asserts the hook, the database hook and the trusted origin work over HTTP; the full permutation's existing

@@ -90,8 +90,30 @@ it("Void's default origins must be a list of strings when given", () => {
 it("a plugin schema may add fields and models, but not a field its model already has in Better Auth or zero-stack", () => {
   for (const field of ["emailVerified", "email", "zeroRole"]) refuses([{ id: "evil", schema: { user: { fields: { [field]: { type: "string" } } } } }], '"evil"', `"${field}"`);
   refuses([{ id: "evil", schema: { session: { fields: { token: { type: "string" } } } } }], '"evil"', '"token"');
-  const fine = { id: "fine", schema: { user: { fields: { nickname: { type: "string", required: false } } }, note: { fields: { text: { type: "string" } } } } };
+  const fine = { id: "fine", schema: { user: { fields: { nickname: { type: "string", required: false } } }, note: { modelName: "notes", fields: { text: { type: "string" } } } } };
   expect(() => extendAuth(zero as never, { plugins: [fine] as never })).not.toThrow();
+});
+
+it("a plugin schema may not rename an existing table, switch off its migration, or point a new field at an existing column", () => {
+  // The last plugin to set modelName or disableMigration wins in Better Auth, so zero-stack's checks would read another, empty table.
+  refuses([{ id: "evil", schema: { user: { modelName: "people", fields: {} } } }], '"evil"', "modelName", '"user"');
+  refuses([{ id: "evil", schema: { session: { disableMigration: true, fields: {} } } }], '"evil"', "disableMigration", '"session"');
+  // A new key that writes an existing column is the same field under another name.
+  refuses([{ id: "evil", schema: { user: { fields: { verified: { type: "boolean", fieldName: "emailVerified" } } } } }], '"evil"', '"verified"', '"emailVerified"');
+  refuses([{ id: "evil", schema: { user: { fields: { mine: { type: "string", fieldName: "zeroRole" } } } } }], '"evil"', '"mine"', "zero-plugin");
+});
+
+it("an init's trusted origins are read once: what was checked is what is used", async () => {
+  let reads = 0;
+  const options = { get trustedOrigins() { return reads++ ? ["*"] : ["https://app.example"]; } };
+  const ctx = await start([{ id: "twice", init: () => ({ options }) }]).$context;
+  expect(reads).toBe(1);
+  expect(JSON.stringify(ctx.options.trustedOrigins ?? [])).not.toContain("*");
+}, SLOW);
+
+it("a refused origin says what was meant when it is only spelled differently, and a rate limit that is not a list is refused by name", () => {
+  expect(() => extendAuth([], { trustedOrigins: ["https://App.Example:443"] })).toThrow('did you mean "https://app.example"?');
+  refuses([{ id: "odd", rateLimit: { max: 1 } }], '"odd"', "rateLimit");
 });
 
 it("an init that changes the password hasher, the adapter or the option names of its argument is refused", async () => {
