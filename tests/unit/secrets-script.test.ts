@@ -1,14 +1,15 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
 const script = join(import.meta.dir, "../../template/secrets/scripts/secrets.ts");
 
 // A linked folder with a fake infisical on PATH: it logs its argv to `calls`, writes FAKE_EXPORT to --output-file, rejects a --file
 // holding an empty value (as the real CLI does) and exits FAKE_EXIT.
 function app(env: string, exported = "", fakeExit = "0") {
-  const dir = mkdtempSync(join(tmpdir(), "zs-sec-"));
+  const dir = mkTmp("zs-sec-");
   const bin = join(dir, "bin");
   const log = join(dir, "calls.log");
   mkdirSync(bin);

@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { addNotices, scaffoldOwned, withNotice } from "../../src/ownership";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
 // Paths of a real `--framework svelte` scaffold with every flag (probe, 2026-11-24).
 const OWNED = [
@@ -44,7 +45,7 @@ test("the notice: line 2 under a shebang, an HTML comment before a svelte script
 });
 
 test("addNotices marks scaffold-owned files only, and leaves JSON, app-owned and skipped files alone", () => {
-  const dir = mkdtempSync(join(tmpdir(), "zs-own-"));
+  const dir = mkTmp("zs-own-");
   const files: Record<string, string> = {
     "src/mail.ts": "export {};\n", "src/app/onboarding.ts": "export const STEPS = [] as const;\n", "pages/sign-in.svelte": "<p>hi</p>\n",
     "tests/data.json": "{}\n", "node_modules/x/src/y.ts": "x\n",

@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validateFlags } from "../../src/flags";
 import { writeRecord } from "../../src/manifest";
 import { upgrade } from "../../src/upgrade";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
 const config = validateFlags({ name: "app", framework: "svelte" }).config;
 type Files = Record<string, string | Buffer | null>;
@@ -28,7 +29,7 @@ const IGNORE = ".env\n.zero-stack/upgrade-tmp\n";
 
 // An app that was generated from `old` (so its base copy is `old`), then edited by the owner (`edits`; null deletes), and committed.
 function makeApp(old: Files, edits: Files = {}, { commit = true } = {}) {
-  const dir = join(mkdtempSync(join(tmpdir(), "zs-up-")), "app");
+  const dir = join(mkTmp("zs-up-"), "app");
   mkdirSync(join(dir, "node_modules"), { recursive: true }); // empty, so git ignores it; the upgrade refuses an app without one
   put(dir, { ".gitignore": IGNORE, ...old });
   writeRecord(dir, config);
@@ -173,7 +174,7 @@ test("a file where the new version needs a folder (or the reverse) keeps the app
 });
 
 test("refuses, changing nothing, with no manifest, a dirty tree (untracked counts) or no git work tree", async () => {
-  const none = join(mkdtempSync(join(tmpdir(), "zs-up-")), "app");
+  const none = join(mkTmp("zs-up-"), "app");
   mkdirSync(none);
   put(none, { "a.ts": "1\n" });
   git(none, "init", "-q");
@@ -231,7 +232,7 @@ test("the folder is cleaned after a successful upgrade, and a path that leaves t
 });
 
 test("the CLI runs upgrade in the current folder, takes no options, and exits 1 with the fix when there is no manifest", () => {
-  const dir = mkdtempSync(join(tmpdir(), "zs-cli-"));
+  const dir = mkTmp("zs-cli-");
   const cli = (...args: string[]) => Bun.spawnSync([process.execPath, join(import.meta.dir, "../../src/index.ts"), ...args], { cwd: dir, stdout: "pipe", stderr: "pipe" });
   const plain = cli("upgrade");
   expect(plain.exitCode).toBe(1);
@@ -246,7 +247,7 @@ const commitAll = (dir: string, msg = "more") => {
   git(dir, "commit", "-q", "-m", msg);
 };
 const outsideDir = (files: Record<string, string>) => {
-  const out = mkdtempSync(join(tmpdir(), "zs-out-"));
+  const out = mkTmp("zs-out-");
   for (const [p, t] of Object.entries(files)) writeFileSync(join(out, p), t);
   return out;
 };
@@ -268,7 +269,7 @@ test("a symlinked folder leads nowhere: nothing outside the app is written, chmo
 
 test("a symlinked .zero-stack folder is refused and nothing changes", async () => {
   const dir = makeApp({ "a.ts": "1\n" });
-  const out = join(mkdtempSync(join(tmpdir(), "zs-out-")), "rec");
+  const out = join(mkTmp("zs-out-"), "rec");
   renameSync(join(dir, ".zero-stack"), out);
   symlinkSync(out, join(dir, ".zero-stack"));
   commitAll(dir);
@@ -332,7 +333,7 @@ test("a hand-edited manifest with a non-boolean flag is refused", async () => {
 
 test("a symlink at the path itself, dangling or not, is never written through: kept, exit 1, its target is not created", async () => {
   const dir = makeApp({ "a.ts": "1\n" });
-  const target = join(mkdtempSync(join(tmpdir(), "zs-out-")), "zshenv");
+  const target = join(mkTmp("zs-out-"), "zshenv");
   symlinkSync(target, join(dir, "new.ts")); // dangling, at a path the new version adds
   commitAll(dir);
   const r = await run(dir, { "a.ts": "1\n", "new.ts": "n\n" });
@@ -360,7 +361,7 @@ test("recorded paths that a case-insensitive or odd file system would read as pr
 test("a symlinked manifest.json or base.json is refused, so the record can't overwrite another app's", async () => {
   for (const f of ["manifest.json", "base.json"]) {
     const dir = makeApp({ "a.ts": "1\n" });
-    const other = join(mkdtempSync(join(tmpdir(), "zs-out-")), f);
+    const other = join(mkTmp("zs-out-"), f);
     renameSync(join(dir, ".zero-stack", f), other);
     symlinkSync(other, join(dir, ".zero-stack", f));
     commitAll(dir);

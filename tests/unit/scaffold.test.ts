@@ -1,15 +1,16 @@
 import { ADMIN_TEST_DEV_DEPS } from "../../src/versions";
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, chmodSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, writeFileSync, chmodSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { installShadcn } from "../../src/installers/shadcn";
 import { installZodRpc } from "../../src/installers/zod-rpc";
 import { installTailwind } from "../../src/installers/tailwind";
 import { scaffold } from "../../src/pipeline";
 import { listFiles } from "../../src/manifest";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
-const tmp = () => mkdtempSync(join(tmpdir(), "zs-test-"));
+const tmp = () => mkTmp("zs-test-");
 const cfg = { name: "app", framework: "react", tailwind: false, shadcn: false, zodRpc: false, auth: false } as const;
 
 test("refuses a non-empty target and writes nothing", async () => {

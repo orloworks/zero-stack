@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FEATURE_LIST, validateFlags } from "../../src/flags";
 import { authEnv } from "../../src/installers/auth";
 import { composeEnvTs } from "../../src/installers/env-ts";
 import { composeDoctor, composeSetupDoc, composeSetupSection, composeWizard, STEPS, stepsFor, writeSetupFiles } from "../../src/setup";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
 const cfg = (o: object = {}) => validateFlags({ name: "app", framework: "svelte", ...o }).config;
 const ALL = Object.fromEntries(FEATURE_LIST.filter((f) => !f.frameworks || f.frameworks.includes("svelte")).map((f) => [f.key, true]));
@@ -70,7 +71,7 @@ test("the wizard exists when a human step applies, and has stages only for human
 
 // Runs the wizard against fake `void`/`infisical` binaries. The fake `void secret list` reports the names in $LISTED.
 function wizardRun(c: ReturnType<typeof cfg>, input: string, listed: string, voidOnPath = true, putFails = "") {
-  const dir = mkdtempSync(join(tmpdir(), "zs-wiz-"));
+  const dir = mkTmp("zs-wiz-");
   writeSetupFiles(dir, c);
   const bin = join(dir, "fakebin");
   mkdirSync(bin);
@@ -166,7 +167,7 @@ test("--secrets also writes the value to Infisical prod, through stdin, not argv
 
 // Kill the wizard while `infisical secrets set` hangs: no file anywhere under the run's TMPDIR or app dir may hold the value.
 test("killing the wizard during the Infisical call leaves no file holding the value", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "zs-kill-"));
+  const dir = mkTmp("zs-kill-");
   const tmp = join(dir, "tmp");
   mkdirSync(tmp);
   writeSetupFiles(dir, cfg({ admin: true, secrets: true }));
@@ -209,7 +210,7 @@ test("bash -n accepts the wizard for every flag set that has one", () => {
 // The fake `void secret list` prints $LISTED; `void cloudflare status` exits $CF_STATUS; the file-only steps are satisfied by the files written here.
 const SENTINEL = "s3cr3t-sentinel-value";
 function doctorRun(c: ReturnType<typeof cfg>, env: Record<string, string> = {}, listed = stepsFor(c).flatMap((s) => s.covers ?? []).join("\n"), connected = true) {
-  const dir = mkdtempSync(join(tmpdir(), "zs-doc-"));
+  const dir = mkTmp("zs-doc-");
   writeSetupFiles(dir, c);
   mkdirSync(join(dir, ".void"));
   mkdirSync(join(dir, "src/sub"), { recursive: true });
