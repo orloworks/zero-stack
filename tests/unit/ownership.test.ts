@@ -13,7 +13,7 @@ const OWNED = [
   "routes/admin/users.ts", "routes/api/admin/features/[feature].ts", "routes/api/admin/invites.ts", "routes/api/admin/users/[id]/sessions/[sessionId]/revoke.ts",
   "routes/api/files/[name].ts", "scripts/doctor.sh", "scripts/secrets.ts", "scripts/setup-wizard.sh", "scripts/stripe-seed.ts",
   "src/access.ts", "src/admin.ts", "src/auth-extension.ts", "src/billing.ts", "src/lib/admin-action.ts", "src/lib/turnstile.ts", "src/mail.ts", "src/onboarding.ts", "src/rpc.ts", "src/settings.ts",
-  "tests/access.test.ts", "tests/auth-extension.test.ts", "tests/hello.test.ts", "tests/onboarding.test.ts",
+  "tests/access.test.ts", "tests/auth-extension.test.ts", "tests/signed-in.ts", "tests/signed-in.test.ts", "tests/hello.test.ts", "tests/onboarding.test.ts",
 ];
 const APP_OWNED = [
   "src/app/auth.ts", "src/app/features.ts", "src/app/onboarding.ts", "src/app/plans.ts", "src/app/settings.ts", "pages/admin/layout.svelte", "pages/sign-in.svelte", "pages/sign-up.svelte", "pages/forgot-password.svelte", "pages/reset-password.svelte",

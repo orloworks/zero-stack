@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Generated tests (svelte, `--auth`, #132):** `tests/signed-in.ts` exports `signedIn({ admin?, email? })`, a verified signed-in user for tests that call the running dev server (set `DEV_URL`), with or without `--turnstile` and with no mail or captcha. It uses Better Auth's `testUtils` on the dev server's local database, in a test file only: nothing of it is in a deployed Worker, and the gate checks the build output. `tests/signed-in.test.ts` is the example; `AGENTS.md` documents it.
+- **`AGENTS.md` (svelte, #133):** a "Dev server exits right after ready" note for the miniflare `#handleLoopback` assertion (a stray WebSocket from another tab): close the tab or run on another port with `--strictPort`; no `BETTER_AUTH_URL` change is needed. The default port stays 5173.
+
 ## v0.6.0 (2026-11-25)
 
 Run it with `bunx github:orloworks/zero-stack#v0.6.0 <dir>`. An app made with v0.5.0 or older needs the one-time port in `docs/upgrading.md` before `upgrade` works on it.

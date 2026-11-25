@@ -96,6 +96,31 @@ tests/
   Gate: in every svelte permutation with auth the gate gives the app a plugin with an allowed `init` and one hook, and asserts the hook, the database hook and the trusted origin work over HTTP; the full permutation's existing
   checks (invite-only refusals, cancel-before-delete, the admin guard) run with it present. The `svelte-upgrade` honesty scenario also adds a trusted origin to the extension and expects no conflict.
 
+### Signed-in test user (svelte, with auth; #132)
+
+`tests/signed-in.ts` (scaffold-owned) exports `signedIn({ admin?, email? })`, which returns `{ headers, cookie, cookies, user }` for a verified user the running dev
+server accepts. It is a test-only Better Auth instance with the library's `testUtils` plugin (`better-auth/plugins`), built on `drizzleAdapter` with the app's own
+`.void/better-auth-schema` over the dev server's local database (the miniflare `.sqlite` file under `.void/` that has a `user` table; the same file the gate opens),
+signed with `BETTER_AUTH_SECRET` from `.env`. `saveUser` writes the user (`emailVerified: true`) and `login({ userId })` writes a session row and builds the signed cookie, so
+no captcha, mail or network call is involved and Turnstile makes no difference. Spike result (2026-11-25, Void 1.11.0, better-auth 1.7.28): yes, a second process can share
+the dev server's local database, the cookie is accepted, and no seed fallback was needed. The drizzle adapter, not Kysely, is used so dates are written as the app's
+`timestamp_ms` integers. `admin: true` uses the first `ADMIN_EMAILS` entry (an exact address, or a fresh `admin-<id>` address on a listed `@domain`); the same address again
+returns the same user. It bypasses the sign-up allowlist because it writes the user itself.
+
+- It is reachable nowhere in a deployed Worker: the app never imports it, `auth.ts` and `src/app/auth.ts` never name `testUtils`, and `testUtils` registers no HTTP route.
+- `tests/signed-in.test.ts` uses it against `DEV_URL` (the dev server's origin) and is skipped without it, so `bun run verify` stays offline. `AGENTS.md` documents it, and that the
+  Turnstile test secret is checked by Cloudflare's siteverify, so a test through the real sign-in needs network.
+- Gate: after the build, no built file mentions `testUtils`, `test-utils` or `tests/signed-in`, and the auth config does not; then, in every svelte permutation with auth (with and
+  without `--turnstile`), `tests/signed-in.test.ts` and a gate test run against the dev server: the helper's user gets 200 and `emailVerified: true` from a `requireAuth` route
+  the gate adds (`routes/api/gate-whoami.ts`), a request without the cookie gets 401, and with `--admin` an ordinary helper user gets 404 and an admin one 200 on `/admin`.
+
+### Dev server exit (svelte; #133)
+
+`AGENTS.md` of every svelte app has a "Dev server exits right after ready" note: `vp dev` can exit with an `AssertionError` in miniflare's `#handleLoopback` when something on the
+machine (usually a browser tab from another app) holds a WebSocket to the port on a path the app does not route; close that tab or run `vp dev --port <n> --strictPort`. The default
+port stays 5173. Checked on Void 1.11.0: another port needs no `BETTER_AUTH_URL` change, since sign-up, sign-in and the mailed verification link follow the request's origin.
+React, vue and solid get no note (their output is unchanged). Reporting the assertion to miniflare is for the owner.
+
 ## Flags
 
 | Flag | Values | Notes |
