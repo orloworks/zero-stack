@@ -265,9 +265,12 @@ export const GET = defineHandler((c) => {
   if (config.framework === "svelte" && config.auth) {
     // #132: nothing of tests/signed-in.ts (the testUtils plugin, a helper) is reachable in a deployed Worker: it is in no built file, and auth.ts does not name it.
     const built = readdirSync(join(app, "dist"), { recursive: true, encoding: "utf8" }).map((f) => join(app, "dist", f)).filter((f) => statSync(f).isFile());
-    const leaked = built.filter((f) => /test-utils|testUtils|tests\/signed-in/.test(readFileSync(f, "utf8")));
-    if (!built.length || leaked.length) throw new Error(`the build output (${built.length} files) holds the signed-in test helper: ${leaked.join(", ")}`);
-    if (/testUtils|signed-in/.test(readFileSync(join(app, "auth.ts"), "utf8") + readFileSync(join(app, "src/app/auth.ts"), "utf8"))) throw new Error("the auth config names the test helper");
+    const texts = built.map((f) => [f, readFileSync(f, "utf8")] as const);
+    const leaked = texts.filter(([, t]) => /test-utils|testUtils|tests\/signed-in/.test(t)).map(([f]) => f);
+    // gate-whoami is a route the gate added: finding it proves the scan saw the Worker bundle, not only client assets.
+    if (!texts.some(([, t]) => t.includes("gate-whoami"))) throw new Error(`the build output (${built.length} files) has no Worker bundle (no file names gate-whoami)`);
+    if (leaked.length) throw new Error(`the build output holds the signed-in test helper: ${leaked.join(", ")}`);
+    if (/testUtils|tests\/signed-in/.test(readFileSync(join(app, "auth.ts"), "utf8") + readFileSync(join(app, "src/app/auth.ts"), "utf8"))) throw new Error("the auth config names the test helper");
     console.log(`gate: the signed-in test helper is in none of the ${built.length} built files and in no auth config`);
   }
   if (config.tailwind) {

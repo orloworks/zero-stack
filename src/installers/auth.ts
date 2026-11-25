@@ -2,7 +2,8 @@ import { cpSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { editFile, replaceAnchor } from "../anchor";
+import { editFile, editJson, needKey, replaceAnchor } from "../anchor";
+import { ADMIN_TEST_DEV_DEPS } from "../versions";
 import { addPaths, ignoreLine } from "./shared";
 import type { Config } from "../flags";
 import { composeAuthTs } from "./auth-ts";
@@ -34,6 +35,8 @@ export function installAuth(dir: string, config: Config): void {
   cpSync(join(slice, "pages"), join(dir, "pages"), { recursive: true });
   // The auth extension (src/app/auth.ts, app-owned), its guards and their tests: svelte only.
   if (framework === "svelte") for (const d of ["src", "tests"]) cpSync(join(slice, d), join(dir, d), { recursive: true });
+  // tests/signed-in.ts imports these directly; declared so a plain --auth app does not rely on Void's dependencies being hoisted.
+  if (framework === "svelte") editJson(dir, "package.json", (pkg) => { Object.assign(needKey(pkg, "devDependencies", "package.json"), ADMIN_TEST_DEV_DEPS); });
   if (config.accountDeletion) installAccountDeletion(dir, config);
   if (config.email) installEmail(dir);
   if (config.turnstile) installTurnstile(dir, config);
