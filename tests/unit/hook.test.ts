@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
 const hook = join(import.meta.dir, "../../.githooks/pre-push");
 
 // A stub `bun` first on PATH stands in for `bun run ci`, so no real code is broken.
 const run = (exit: number, env: Record<string, string> = {}) => {
-  const dir = mkdtempSync(join(tmpdir(), "hook-"));
+  const dir = mkTmp("hook-");
   writeFileSync(join(dir, "bun"), `#!/bin/sh\n[ "$*" = "run ci" ] || exit 99\n[ -z "$GIT_DIR$GIT_WORK_TREE$GIT_INDEX_FILE" ] || exit 98\nexit ${exit}\n`);
   chmodSync(join(dir, "bun"), 0o755);
   return Bun.spawnSync(["sh", hook], { env: { ...process.env, ...env, PATH: `${dir}:/usr/bin:/bin` } }).exitCode;

@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { linkSkill } from "../../scripts/link-skill";
 import { scaffold } from "../../src/pipeline";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
-const tmp = () => mkdtempSync(join(tmpdir(), "zs-test-"));
+const tmp = () => mkTmp("zs-test-");
 const OPEN = "<!-- zero-stack:routing -->";
 
 // Fake create-void: makes the dir with Void's AGENTS.md and a package.json.

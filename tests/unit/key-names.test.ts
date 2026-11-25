@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseEnv } from "node:util";
 import { authEnv } from "../../src/installers/auth";
 import { composeEnvTs } from "../../src/installers/env-ts";
 import { validateFlags } from "../../src/flags";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
 // Spec #38 "Key naming convention", rules 1, 5 and 6. Returns the rules a name breaks.
 const broken = (k: string): number[] => [
@@ -84,7 +85,7 @@ test("adding a bad key to the Turnstile env.ts makes the naming check fail", () 
 
 for (const sig of ["SIGTERM", "SIGHUP"] as const)
   test(`secrets.ts pull removes its temp file on ${sig} and exits non-zero`, async () => {
-    const dir = mkdtempSync(join(tmpdir(), "zs-sig-"));
+    const dir = mkTmp("zs-sig-");
     const bin = join(dir, "bin");
     mkdirSync(bin);
     writeFileSync(join(bin, "infisical"), "#!/bin/sh\nexec sleep 1\n");
@@ -100,7 +101,7 @@ for (const sig of ["SIGTERM", "SIGHUP"] as const)
   }, 20_000); // the handler runs only after the 1s child exits
 
 test("a missing infisical CLI says so", () => {
-  const dir = mkdtempSync(join(tmpdir(), "zs-nocli-"));
+  const dir = mkTmp("zs-nocli-");
   writeFileSync(join(dir, ".infisical.yaml"), "x: 1\n");
   const none = Bun.spawnSync([process.execPath, join(templates, "secrets/scripts/secrets.ts"), "pull"], { cwd: dir, env: { ...process.env, PATH: dirname(process.execPath) } });
   expect(none.stderr.toString()).toContain("the Infisical CLI was not found on PATH");

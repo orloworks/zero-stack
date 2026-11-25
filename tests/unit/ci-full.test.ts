@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { hash, isGreen, nodeVersion, runPool } from "../../scripts/ci-full";
 import { MATRIX } from "../../scripts/matrix";
 import { argv, FEATURE_LIST, validateFlags } from "../../src/flags";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
 test("never more than 2 in flight", async () => {
   let live = 0, peak = 0;
@@ -49,7 +50,7 @@ test("the matrix has svelte-secrets, with the argv() form of the valued flag", (
 
 test("hash is stable and tracks gate.ts and the routing doc", () => {
   const repo = join(import.meta.dir, "../..");
-  const tmp = mkdtempSync(join(tmpdir(), "zs-hash-"));
+  const tmp = mkTmp("zs-hash-");
   for (const d of ["src", "template", "docs", "scripts"]) mkdirSync(join(tmp, d), { recursive: true });
   for (const f of ["src/a.ts", "template/b.txt", "docs/cloudflare-routing.md", "scripts/gate.ts", "package.json", "bun.lock"])
     writeFileSync(join(tmp, f), f);
@@ -69,7 +70,7 @@ test("the Node version is part of the hash", () => {
 });
 
 test("nodeVersion reads `node` from PATH", () => {
-  const bin = mkdtempSync(join(tmpdir(), "zs-node-"));
+  const bin = mkTmp("zs-node-");
   writeFileSync(join(bin, "node"), "#!/bin/sh\necho v24.22.0\n");
   chmodSync(join(bin, "node"), 0o755);
   const path = process.env.PATH;

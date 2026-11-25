@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { graceMs, onTerminate, sweepTargets } from "../../src/children";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
 test("the SIGKILL sweep skips a pid reused since the snapshot", () => {
   const seen = new Set(["10 Mon Nov 16 05:00:00 2026", "11 Mon Nov 16 05:00:00 2026"]);
@@ -24,7 +25,7 @@ test("a run's grace timeout ends with its disposer", () => {
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 test("after the grace timeout a SIGTERM-ignoring child's own detached children are killed too", async () => {
-  const pidfile = join(mkdtempSync(join(tmpdir(), "zs-kill-")), "pid");
+  const pidfile = join(mkTmp("zs-kill-"), "pid");
   // child: ignores SIGTERM and starts a detached grandchild (its own process group), recording its pid
   const child = `process.on("SIGTERM", () => {});
     const g = Bun.spawn(["sleep", "60"], { detached: true });
