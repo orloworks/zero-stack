@@ -15,6 +15,7 @@ export const MATRIX: { name: string; args: string[] }[] = [
   { name: "svelte-admin", args: ["--framework", "svelte", "--admin"] },
   { name: "svelte-admin-storage", args: ["--framework", "svelte", "--admin", "--storage"] },
   { name: "svelte-admin-invite-only", args: ["--framework", "svelte", "--admin", "--invite-only"] },
+  { name: "svelte-upgrade", args: ["--framework", "svelte", "--admin", "--upgrade"] }, // gate-only flag: the upgrade honesty test (#101)
   { name: "svelte-payments", args: ["--framework", "svelte", "--auth", "--payments", "--account-deletion"] }, // deletion without --admin (#84)
   { name: "svelte-payments-admin", args: ["--framework", "svelte", "--auth", "--payments", "--admin"] }, // admin removal without self-service deletion (#84)
   { name: "storage", args: ["--storage"] },

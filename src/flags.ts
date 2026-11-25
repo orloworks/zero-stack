@@ -43,9 +43,12 @@ export function validateFlags(input: FlagInput): { config: Config; notes: string
   const { name, framework = "react" } = input;
   const notes: string[] = [];
   if (!/^[a-z0-9-]+$/.test(name)) throw new Error(`Name "${name}" must be lowercase a-z, 0-9 and "-" only.`);
+  if (name.startsWith("-")) throw new Error(`Name "${name}" must not start with "-": it would read as a flag.`);
+  if (name === "upgrade") throw new Error('Name "upgrade" is reserved: "upgrade" is the command that upgrades the app in the current folder. Pick another name.');
   if (name.length > 63) throw new Error(`Name must be 63 characters or fewer (got ${name.length}).`);
   if (!(FRAMEWORKS as readonly string[]).includes(framework))
     throw new Error(`--framework must be one of: ${FRAMEWORKS.join(", ")}.`);
+  for (const f of FEATURE_LIST) if (input[f.key] !== undefined && typeof input[f.key] !== "boolean") throw new Error(`${f.key} must be true or false (got ${JSON.stringify(input[f.key])}).`);
   const on = Object.fromEntries(FEATURE_LIST.map((f) => [f.key, input[f.key] ?? false])) as Record<FeatureKey, boolean>;
   for (const f of FEATURE_LIST)
     if (on[f.key] && f.frameworks && !f.frameworks.includes(framework))
