@@ -260,6 +260,7 @@ test("react, vue and solid --auth keep v0.1 output: sign-in/up only, an auth.ts 
   for (const fw of ["react", "vue", "solid"] as const) {
     const { dir, run } = authApp(fw);
     await run();
+    expect(JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).devDependencies ?? {}).not.toHaveProperty("better-sqlite3"); // the test helper's packages are svelte-only (#132)
     expect(readdirSync(join(dir, "pages")).sort()).toEqual(want[fw]!);
     for (const f of want[fw]!)
       expect(readFileSync(join(dir, "pages", f), "utf8")).toBe(readFileSync(join(import.meta.dir, "../../template/auth", fw, "pages", f), "utf8"));
@@ -275,6 +276,7 @@ test("svelte --auth ships /settings with its loader, a plain composed auth.ts an
   const { dir, run } = authApp("svelte");
   await run();
   expect(readdirSync(join(dir, "pages")).sort()).toEqual(["settings.server.ts", "settings.svelte", "sign-in.svelte", "sign-up.svelte"]);
+  expect(JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).devDependencies).toMatchObject(ADMIN_TEST_DEV_DEPS); // tests/signed-in.ts imports these directly (#132)
   expect(readFileSync(join(dir, "auth.ts"), "utf8")).toStartWith("// Scaffold-owned by zero-stack"); // the notice is added by the pipeline; the composed text follows it
   expect(readFileSync(join(dir, "auth.ts"), "utf8").replace(/^\/\/ Scaffold-owned by zero-stack[^\n]*\n/, "")).toBe(
     'import { defineAuth } from "void/auth";\nimport authExtension from "./src/app/auth";\nimport { extendAuth } from "./src/auth-extension";\n\nexport default defineAuth(({ defaults, env }) => {\n  const app = extendAuth([], authExtension(env), defaults.trustedOrigins);\n  return {\n  ...defaults,\n  rateLimit: { storage: "database" },\n  plugins: app.plugins,\n  trustedOrigins: app.trustedOrigins,\n};\n});\n',

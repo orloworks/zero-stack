@@ -40,9 +40,11 @@ function authDatabase(): string {
 
 let testAuth: ReturnType<typeof makeAuth> | undefined;
 function makeAuth() {
+  const secret = env("BETTER_AUTH_SECRET");
+  if (!secret) throw new Error("no BETTER_AUTH_SECRET=... line in .env: the helper must sign its cookie with the app's secret");
   const db = drizzle(new Database(authDatabase()), { schema });
   return betterAuth({
-    secret: env("BETTER_AUTH_SECRET"),
+    secret,
     baseURL: process.env.DEV_URL ?? "http://localhost:5173",
     database: drizzleAdapter(db, { provider: "sqlite", schema }),
     plugins: [testUtils()],
