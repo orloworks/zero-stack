@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validateFlags } from "../../src/flags";
 import { bytesOf, listFiles, migrationsHash, readTree, writeRecord } from "../../src/manifest";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
-const tmp = () => mkdtempSync(join(tmpdir(), "zs-man-"));
+const tmp = () => mkTmp("zs-man-");
 const put = (dir: string, files: Record<string, string | Buffer>) => {
   for (const [p, t] of Object.entries(files)) {
     mkdirSync(join(dir, p, ".."), { recursive: true });

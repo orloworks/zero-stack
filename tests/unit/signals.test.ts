@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { tmpMaker } from "./tmp";
+const mkTmp = tmpMaker();
 
 const scripts = join(import.meta.dir, "../../scripts");
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -16,7 +17,7 @@ async function termWhen(p: Bun.Subprocess, ready: () => boolean) {
 
 // A real gate / ci:full is "under way" once create-void has created the app inside its zs-gate-* temp dir.
 async function gateTerm(script: string, args: string[]) {
-  const tmp = mkdtempSync(join(tmpdir(), "zs-sig-"));
+  const tmp = mkTmp("zs-sig-");
   const gateDirs = () => readdirSync(tmp).filter((f) => f.startsWith("zs-gate-"));
   const p = Bun.spawn([process.execPath, join(scripts, script), ...args], { env: { ...process.env, TMPDIR: tmp }, stdout: "ignore", stderr: "ignore" });
   const code = await termWhen(p, () => gateDirs().some((d) => readdirSync(join(tmp, d)).length > 0));
@@ -32,7 +33,7 @@ test("ci:full: SIGTERM exits 143 and no gate temp dir survives", async () => {
 }, 60_000);
 
 test("the real CLI (src/index.ts): SIGTERM mid-create-void exits 143, removes the target, leaves no child", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "zs-cli-"));
+  const cwd = mkTmp("zs-cli-");
   const name = `zs-sigtest-${Math.random().toString(36).slice(2, 8)}`;
   const procs = () => Bun.spawnSync(["ps", "-axo", "pid=,command="]).stdout.toString().split("\n").filter((l) => l.includes(name));
   const p = Bun.spawn([process.execPath, join(import.meta.dir, "../../src/index.ts"), name], { cwd, stdout: "ignore", stderr: "ignore", stdin: "ignore" });
