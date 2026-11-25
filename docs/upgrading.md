@@ -31,10 +31,14 @@ An app without `.zero-stack/` (made before it existed, or react, vue or solid) i
 
 ### Port an older svelte app
 
-1. Apply the template diff by hand (section 2 below).
-2. Move your `SETTINGS` into `src/app/settings.ts` (the module `src/settings.ts` imports and re-exports them, so no import changes) and your onboarding steps into `src/app/onboarding.ts`.
-3. Scaffold a fresh app of the same version with the same name and flags, and copy its `.zero-stack/` folder into yours. Add `.zero-stack/upgrade-tmp` to your `.gitignore`.
-4. Commit. From then on, `upgrade` works; it lists anything the port missed as a merge or a conflict.
+For a svelte app made with 0.5.x or earlier (no `.zero-stack/` folder). Do it once, with a clean git tree and `bun install` already run in the app (the upgrade formats the new scaffold with the app's own toolchain).
+
+1. Apply the template diff by hand (section 2 below), old = the version your app was made with, new = the version you are porting to. The diff also carries `.zero-stack/` and the new `src/app/` files; that is expected. If you edited `SETTINGS` or the onboarding `STEPS`, `src/settings.ts` and `src/onboarding.ts` come out as conflicts: step 2 resolves them.
+2. Take the new version's `src/settings.ts` and `src/onboarding.ts` as they are, and put your own `SETTINGS` and `STEPS` into `src/app/settings.ts` and `src/app/onboarding.ts` (the modules import and re-export them, so no import in your code changes). Anything you changed in `auth.ts` stays where it is: the upgrade merges it like any other edit.
+3. Scaffold a fresh app of the version you are porting to, with the same name and flags, and copy its `.zero-stack/` folder (`manifest.json` and `base.json`) over yours. Check that `.gitignore` has `.zero-stack/upgrade-tmp`.
+4. Commit, then run `bunx github:orloworks/zero-stack#v<new-version> upgrade`. A complete port prints "Nothing to do: your app is already current." and exits 0; anything else it lists (a merge, a conflict, a file it adds) is something the port missed. Resolve it, run `bun run verify`, and commit.
+
+This section was followed once on a real v0.5.0 scaffold (`--framework svelte --admin`) with edited `SETTINGS` and `STEPS`, and the upgrade afterwards printed "Nothing to do" with `bun run verify` green (#102).
 
 Two separate things change over time: the packages in your app, and the files zero-stack generated for you. Upgrade them one at a time.
 

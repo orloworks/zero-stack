@@ -67,6 +67,8 @@ tests/
   It never commits, never touches `.env` or migrations, and writes only inside the app (a recorded path with `..` or an absolute path is refused).
 - **Gate** (`svelte-upgrade` in `scripts/matrix.ts`; the gate-only flag `--upgrade`; logic in `scripts/gate.ts`, so the `ci:full` hash covers it): scaffold, edit `src/app/onboarding.ts` and a setting in `src/app/settings.ts` (dropping `routes/api/example-settings.ts`, which that orphans), age the app four ways,
   run the upgrade, assert exit 0, no conflict, scaffold-owned files and `.zero-stack/` equal to a fresh scaffold's, the edit intact, and `bun run verify` green.
+- **Cross-version gate** (`svelte-upgrade-baseline`; gate-only flag `--baseline`): scaffolds `UPGRADE_BASELINE` (`src/versions.ts`, so the `ci:full` hash covers it; a commit sha until a release tag writes a manifest, then that tag)
+  from GitHub with `bun x github:orloworks/zero-stack#<baseline>`, edits `src/app/onboarding.ts`, upgrades with the working tree's code, and asserts exit 0, no conflict, the edit intact and `bun run verify` green. A failed fetch or scaffold fails the run with that message.
 
 ## Flags
 

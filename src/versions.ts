@@ -17,3 +17,7 @@ export const TRUSTED_DEPENDENCIES = ["esbuild", "workerd", "sharp"];
 
 // Version pins forced on the generated app when an upstream release breaks a fresh scaffold; empty while none is needed.
 export const OVERRIDES: Record<string, string> = {};
+
+// The zero-stack the cross-version upgrade gate (matrix entry svelte-upgrade-baseline) scaffolds first: the commit that first wrote a manifest (the merge of
+// #101), because no release tag does yet. Release step: move it to the new tag (docs/release-checklist.md); the gate fetches it from GitHub.
+export const UPGRADE_BASELINE = "5c27062d43a4020138b7e587080e08bf494f3f83";
