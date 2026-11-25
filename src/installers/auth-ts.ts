@@ -218,7 +218,7 @@ export function composeAuthTs(config: Config): string {
         ]
       : []),
     // svelte: the one plugins and trustedOrigins keys come from the auth extension (below); react, vue and solid keep their file byte for byte.
-    ...(svelte ? ["  plugins: app.plugins,", "  trustedOrigins: [...((defaults.trustedOrigins as string[] | undefined) ?? []), ...app.trustedOrigins],"] : zeroPlugins.length ? [`  plugins: [${zeroPlugins.join(", ")}],`] : []),
+    ...(svelte ? ["  plugins: app.plugins,", "  trustedOrigins: app.trustedOrigins,"] : zeroPlugins.length ? [`  plugins: [${zeroPlugins.join(", ")}],`] : []),
     ...databaseHooks({
       user: [...(config.inviteOnly ? [inviteOnlyUserCreate(!!config.admin)] : []), ...(config.admin || (config.payments && config.accountDeletion) ? [userDelete(config)] : [])],
       session: config.admin ? [ADMIN_SESSION_CREATE] : [],
@@ -232,7 +232,7 @@ export function composeAuthTs(config: Config): string {
   return `import { defineAuth } from "void/auth";
 ${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.payments ? paymentsImports(!!(config.accountDeletion || config.admin)) : ""}${svelte ? EXTENSION_IMPORTS : ""}
 export default defineAuth(({ defaults${svelte || zeroPlugins.length ? ", env" : ""} }) => ${svelte ? `{
-  const app = extendAuth([${zeroPlugins.join(", ")}], authExtension(env));
+  const app = extendAuth([${zeroPlugins.join(", ")}], authExtension(env), defaults.trustedOrigins);
   return {` : "({"}
   ...defaults,
 ${options.map((o) => o + "\n").join("")}${svelte ? "};\n});" : "}));"}

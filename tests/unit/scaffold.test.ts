@@ -277,7 +277,7 @@ test("svelte --auth ships /settings with its loader, a plain composed auth.ts an
   expect(readdirSync(join(dir, "pages")).sort()).toEqual(["settings.server.ts", "settings.svelte", "sign-in.svelte", "sign-up.svelte"]);
   expect(readFileSync(join(dir, "auth.ts"), "utf8")).toStartWith("// Scaffold-owned by zero-stack"); // the notice is added by the pipeline; the composed text follows it
   expect(readFileSync(join(dir, "auth.ts"), "utf8").replace(/^\/\/ Scaffold-owned by zero-stack[^\n]*\n/, "")).toBe(
-    'import { defineAuth } from "void/auth";\nimport authExtension from "./src/app/auth";\nimport { extendAuth } from "./src/auth-extension";\n\nexport default defineAuth(({ defaults, env }) => {\n  const app = extendAuth([], authExtension(env));\n  return {\n  ...defaults,\n  rateLimit: { storage: "database" },\n  plugins: app.plugins,\n  trustedOrigins: [...((defaults.trustedOrigins as string[] | undefined) ?? []), ...app.trustedOrigins],\n};\n});\n',
+    'import { defineAuth } from "void/auth";\nimport authExtension from "./src/app/auth";\nimport { extendAuth } from "./src/auth-extension";\n\nexport default defineAuth(({ defaults, env }) => {\n  const app = extendAuth([], authExtension(env), defaults.trustedOrigins);\n  return {\n  ...defaults,\n  rateLimit: { storage: "database" },\n  plugins: app.plugins,\n  trustedOrigins: app.trustedOrigins,\n};\n});\n',
   );
   // the auth extension: the app-owned file with empty lists, its guards and their test (svelte only)
   expect(readFileSync(join(dir, "src/app/auth.ts"), "utf8")).toContain("return { plugins: [], trustedOrigins: [] };");

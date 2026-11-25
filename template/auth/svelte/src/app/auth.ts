@@ -8,10 +8,13 @@
 // - Guards: the app refuses to start (the error names the plugin and the reason) when a plugin has the id of one of zero-stack's plugins; defines an endpoint whose
 //   key or path Better Auth or one of zero-stack's plugins already has (a later endpoint replaces an earlier one, so it could replace account deletion); or has an
 //   `init` that returns anything but `databaseHooks` and `trustedOrigins` (other options fill what zero-stack leaves unset, and a returned context replaces the
-//   password hasher or the adapter). The `init` check runs when Better Auth builds its context, so it fails the first auth request; the others fail at startup.
-// - Known limits: the guards stop replacement by declaration. They do not stop a plugin whose hook deliberately answers or rewrites a request (`hooks`, `onRequest`,
-//   `middlewares`, `rateLimit` rules; database hooks from an `init` run before zero-stack's own, so they can rewrite the data those see), or an `init` that changes its
-//   argument in place. Read a plugin before you add it.
+//   password hasher or the adapter). Also refused: a trusted origin that is not a plain origin like "https://app.example" (no wildcard, path or trailing slash; from here
+//   or from an `init`); a plugin `schema` field its model already has (new fields and models are fine); an `init` that changes the password hasher, the adapter or the option
+//   names of its argument. A plugin's `rateLimit` rules never match a path Better Auth or zero-stack owns. The `init` checks run when Better Auth builds its context, so they
+//   fail the first auth request; the others fail at startup.
+// - Known limits: the guards stop replacement by declaration. They do not stop a plugin whose `hooks`, `onRequest` or `middlewares` deliberately answer or rewrite a
+//   request, or an `init` that changes a nested value of its argument in place. App database hooks run first, so zero-stack's checks (invite-only) see the final data.
+//   Read a plugin before you add it.
 export default function authExtension(_env: Record<string, unknown>) {
   return { plugins: [], trustedOrigins: [] };
 }

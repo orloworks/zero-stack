@@ -15,7 +15,7 @@ const SLOW = 30_000;
 
 const endpoint = (path: string) => createAuthEndpoint(path, { method: "POST" }, async (ctx) => ctx.json({ ok: true }));
 // A plugin id and endpoint of zero-stack's own, for the clash cases.
-const zero = [{ id: "zero-plugin", endpoints: { zeroThing: endpoint("/zero/thing") } }];
+const zero = [{ id: "zero-plugin", endpoints: { zeroThing: endpoint("/zero/thing") }, schema: { user: { fields: { zeroRole: { type: "string" as const, required: false } } } } }];
 
 // A real Better Auth instance with the extension's plugins, as the app builds it. Better Auth runs a plugin's `init` while it builds its context, so a refused
 // init shows as a rejected context. Hashing is not under test (scrypt makes every sign-up slow), so it is swapped for a plain compare.
@@ -57,10 +57,53 @@ it("a plugin id that equals one of zero-stack's is refused", () => {
   refuses([{ id: "zero-plugin" }], '"zero-plugin"');
 });
 
+it("repeated slashes do not make another route", () => {
+  // Better Auth's own builder refuses these, so the plugins are written by hand.
+  refuses([{ id: "evil", endpoints: { a: { path: "//delete-user" } } }], '"evil"', '"a"');
+  refuses([{ id: "evil", endpoints: { b: { path: "/zero//thing" } } }], '"evil"', '"b"', "zero-plugin");
+});
+
+it("a rate-limit rule never matches a path Better Auth or zero-stack owns, and still applies to the plugin's own", () => {
+  const rule = { window: 1, max: 1_000_000, pathMatcher: () => true };
+  const mine = { id: "loose", endpoints: { mine: endpoint("/loose/ping") }, rateLimit: [rule] };
+  const [wrapped] = extendAuth(zero as never, { plugins: [mine] as never }).plugins.at(-1)!.rateLimit!;
+  for (const owned of ["/sign-in/email", "/sign-up/email", "/delete-user", "/zero/thing", "/reset-password/abc", "/Sign-In/Email/"]) expect([owned, wrapped!.pathMatcher(owned)]).toEqual([owned, false]);
+  expect(wrapped!.pathMatcher("/loose/ping")).toBe(true);
+  expect(wrapped!.max).toBe(rule.max);
+});
+
+it("trusted origins must be plain origins, from the extension and from an init", async () => {
+  for (const bad of ["*", "https://*", "https://app.example/", "https://app.example/x", "app.example", "https://app.example?x"])
+    expect(() => extendAuth([], { trustedOrigins: [bad] })).toThrow(JSON.stringify(bad));
+  expect(() => extendAuth([], { trustedOrigins: (() => []) as never })).toThrow("not a list");
+  expect(extendAuth([], { trustedOrigins: ["https://app.example", "http://localhost:3000"] }, ["http://localhost:5173"]).trustedOrigins).toEqual(["http://localhost:5173", "https://app.example", "http://localhost:3000"]);
+  await expect(start([{ id: "wild", init: () => ({ options: { trustedOrigins: ["https://*.example"] } }) }]).$context).rejects.toThrow(/"wild".*"https:\/\/\*\.example"/);
+  await expect(start([{ id: "fn", init: () => ({ options: { trustedOrigins: () => ["https://app.example"] } }) }]).$context).rejects.toThrow(/"fn".*not a list/);
+}, SLOW);
+
+it("Void's default origins must be a list of strings when given", () => {
+  expect(() => extendAuth([], {}, "https://app.example")).toThrow("default trustedOrigins");
+  expect(() => extendAuth([], {}, [1])).toThrow("default trustedOrigins");
+  expect(extendAuth([], {}, undefined).trustedOrigins).toEqual([]);
+});
+
+it("a plugin schema may add fields and models, but not a field its model already has in Better Auth or zero-stack", () => {
+  for (const field of ["emailVerified", "email", "zeroRole"]) refuses([{ id: "evil", schema: { user: { fields: { [field]: { type: "string" } } } } }], '"evil"', `"${field}"`);
+  refuses([{ id: "evil", schema: { session: { fields: { token: { type: "string" } } } } }], '"evil"', '"token"');
+  const fine = { id: "fine", schema: { user: { fields: { nickname: { type: "string", required: false } } }, note: { fields: { text: { type: "string" } } } } };
+  expect(() => extendAuth(zero as never, { plugins: [fine] as never })).not.toThrow();
+});
+
+it("an init that changes the password hasher, the adapter or the option names of its argument is refused", async () => {
+  await expect(start([{ id: "hash", init: (ctx: any) => void (ctx.password = { ...ctx.password }) }]).$context).rejects.toThrow(/"hash".*in its init argument/);
+  await expect(start([{ id: "adapt", init: (ctx: any) => void (ctx.adapter = { ...ctx.adapter }) }]).$context).rejects.toThrow(/"adapt".*in its init argument/);
+  await expect(start([{ id: "opt", init: (ctx: any) => void (ctx.options.emailVerification = { sendOnSignUp: true }) }]).$context).rejects.toThrow(/"opt".*in its init argument/);
+}, SLOW);
+
 it("an unknown key from the extension is refused, naming the key", () => {
   expect(() => extendAuth([], { plugins: [], origins: [] } as never)).toThrow('"origins"');
   expect(() => extendAuth([], undefined as never)).toThrow("it must return");
-  expect(() => extendAuth([], { trustedOrigins: [1] } as never)).toThrow("origin strings");
+  expect(() => extendAuth([], { trustedOrigins: [1] } as never)).toThrow("plain origin");
 });
 
 it("an init that returns advanced, or a real plugin whose init sets email verification, stops the app starting", async () => {
@@ -107,6 +150,7 @@ it("auth.ts appends the app's plugins after zero-stack's and adds its origins to
   expect(options.plugins.filter((p: { id: string }) => p.id === "mine")).toHaveLength(1);
   expect(options.trustedOrigins).toEqual(["http://localhost:5173", "https://app.example"]);
   // an unknown key from the extension stops the app; so does a plugin that takes zero-stack's account deletion
+  expect(() => define({ defaults: { ...defaults, trustedOrigins: "https://x" }, env })).toThrow("default trustedOrigins");
   app.value = { plugins: [], hooks: {} };
   expect(() => define({ defaults, env })).toThrow('"hooks"');
   app.value = { plugins: [{ id: "evil", endpoints: { deleteUser: endpoint("/evil/delete") } }] };

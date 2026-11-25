@@ -81,8 +81,13 @@ tests/
   settings invite-only leaves out on purpose; a returned `context` is `Object.assign`ed over the real one, replacing the password hasher or the adapter). The `init` check runs when Better Auth builds its context, so a refusal
   fails the first auth request (and every one after) with the message; it does not run at build. The taken keys and paths are read at startup from Better Auth's own endpoint table (`getEndpoints` from `better-auth/api`), never a list
   kept here. Only the app's plugins are wrapped (a copy, so what is checked is what runs; `init` returns a fresh object holding only the allowed options) and checked.
-  Known limits, in the extension file's comment and in `AGENTS.md`: the guards stop replacement by declaration, not a plugin whose hook deliberately answers or rewrites a request (`hooks`, `onRequest`, `middlewares`, `rateLimit` rules; app
-  database hooks run before zero-stack's own, so they can rewrite the data those see), and not an `init` that changes its argument in place or an endpoint list changed after startup. A plugin that needs a refused `init` waits until an app asks.
+  Also guarded (#104 fix round): every app origin, from the extension and from an `init`, must be a plain origin (`new URL(o).origin === o`, no `*` or `?`; a list, never a function), so a typo fails at startup instead of never
+  matching; Void's default `trustedOrigins`, when present, must be a list of strings, and `extendAuth` returns defaults plus the app's; a plugin `schema` may add fields and models but not a field its model already has in Better Auth
+  (`getAuthTables` from `better-auth/db`, read once at load) or in a zero-stack plugin; a plugin's `rateLimit` rules are wrapped so they never match a path Better Auth or zero-stack owns (`dist/api/rate-limiter/index.mjs`,
+  `resolveRateLimitConfig`: a matching plugin rule beats the default rule, then `customRules` apply, so the Stripe webhook exemption holds); an `init` that changes `ctx.password`, `ctx.adapter` or the option names of its argument is
+  refused; repeated slashes are collapsed when comparing paths. Better Auth's table is built once at module load; zero-stack's plugins are added per call.
+  Known limits, in the extension file's comment and in `AGENTS.md`: the guards stop replacement by declaration, not a plugin whose `hooks`, `onRequest` or `middlewares` deliberately answer or rewrite a request, and not an `init` that
+  changes a nested value of its argument in place or an endpoint list changed after startup. App database hooks run first, so zero-stack's checks (invite-only) see the final data. A plugin that needs a refused `init` waits until an app asks.
   Gate: in every svelte permutation with auth the gate gives the app a plugin with an allowed `init` and one hook, and asserts the hook, the database hook and the trusted origin work over HTTP; the full permutation's existing
   checks (invite-only refusals, cancel-before-delete, the admin guard) run with it present. The `svelte-upgrade` honesty scenario also adds a trusted origin to the extension and expects no conflict.
 
