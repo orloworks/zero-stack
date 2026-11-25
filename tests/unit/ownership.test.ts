@@ -15,7 +15,7 @@ const OWNED = [
   "tests/access.test.ts", "tests/hello.test.ts", "tests/onboarding.test.ts",
 ];
 const APP_OWNED = [
-  "src/app/onboarding.ts", "pages/admin/layout.svelte", "pages/sign-in.svelte", "pages/sign-up.svelte", "pages/forgot-password.svelte", "pages/reset-password.svelte",
+  "src/app/onboarding.ts", "src/app/settings.ts", "pages/admin/layout.svelte", "pages/sign-in.svelte", "pages/sign-up.svelte", "pages/forgot-password.svelte", "pages/reset-password.svelte",
   "pages/settings.svelte", "pages/settings.server.ts", "pages/billing.svelte", "pages/billing.server.ts", "pages/index.svelte", "pages/index.server.ts", "pages/style.css",
   "routes/api/hello.ts", "routes/api/echo.ts", "routes/api/example-feature.ts", "routes/api/example-plan.ts", "routes/api/example-settings.ts",
   "package.json", "tsconfig.json", "vite.config.ts", "void.config.ts", "env.ts", "db/schema.ts", "db/seed.ts", "AGENTS.md", ".gitignore", ".mcp.json", "public/void.svg",
@@ -37,8 +37,9 @@ test("the notice: line 2 under a shebang, an HTML comment before a svelte script
   expect(withNotice("pages/admin/admin.css", "a {}\n")).toMatch(/^\/\* Scaffold-owned[^]*? \*\/\na/);
   expect(withNotice("some.json", "{}\n")).toBeNull();
   expect(withNotice("public/void.svg", "<svg/>")).toBeNull();
-  // the one declaration file that exists says where steps go
+  // a module whose list lives in src/app/ says where to declare it
   expect(withNotice("src/onboarding.ts", "x\n")).toContain("Declare onboarding steps in src/app/onboarding.ts.");
+  expect(withNotice("src/settings.ts", "x\n")).toContain("Declare settings in src/app/settings.ts.");
 });
 
 test("addNotices marks scaffold-owned files only, and leaves JSON, app-owned and skipped files alone", () => {

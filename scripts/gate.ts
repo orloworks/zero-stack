@@ -55,12 +55,19 @@ async function upgradeGate(config: Config): Promise<void> {
   };
   const record = join(app, ".zero-stack/base.json");
   const steps = join(app, "src/app/onboarding.ts");
+  const settings = join(app, "src/app/settings.ts");
+  const exampleRoute = join(app, "routes/api/example-settings.ts");
   commit("scaffold");
 
   // 1. Edit as an owner would: only the declaration file.
   const edited = readFileSync(steps, "utf8").replace('["example-step"]', '["signed-in-once", "invited-a-friend"]');
   if (!edited.includes("invited-a-friend")) throw new Error("src/app/onboarding.ts has no example step to edit");
   writeFileSync(steps, edited);
+  // A setting renamed, and the example route that read it dropped, as an owner would.
+  const editedSettings = readFileSync(settings, "utf8").replace('"example-text"', '"site-title"');
+  if (!editedSettings.includes("site-title")) throw new Error("src/app/settings.ts has no example setting to edit");
+  writeFileSync(settings, editedSettings);
+  rmSync(exampleRoute);
 
   // 2. Make the app look older, four ways.
   const base: BaseCopy = JSON.parse(readFileSync(record, "utf8"));
@@ -98,6 +105,8 @@ async function upgradeGate(config: Config): Promise<void> {
   const ownedOf = (dir: string) => JSON.stringify(Object.entries(readTree(dir)).filter(([p]) => scaffoldOwned(p)));
   if (ownedOf(app) !== ownedOf(freshApp)) throw new Error("the upgraded app's scaffold-owned files differ from a fresh scaffold's");
   if (readFileSync(steps, "utf8") !== edited) throw new Error("the upgrade changed the owner's edit in src/app/onboarding.ts");
+  if (readFileSync(settings, "utf8") !== editedSettings) throw new Error("the upgrade changed the owner's edit in src/app/settings.ts");
+  if (existsSync(exampleRoute)) throw new Error("the upgrade brought back the example route the owner dropped");
   for (const f of ["manifest.json", "base.json"])
     if (readFileSync(join(app, RECORD_DIR, f), "utf8") !== readFileSync(join(freshApp, RECORD_DIR, f), "utf8")) throw new Error(`${RECORD_DIR}/${f} differs from a fresh scaffold's`);
   for (const [p, e] of Object.entries(readTree(app))) if (e.encoding === "utf8" && /^(<{7} |>{7} )/m.test(e.content)) throw new Error(`conflict markers in ${p}`);

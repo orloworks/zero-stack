@@ -9,7 +9,11 @@ export const scaffoldOwned = (p: string): boolean =>
   (/^(src|scripts|tests|db\/schema|pages\/admin|routes\/admin|routes\/api\/admin)\//.test(p) && !p.startsWith("src/app/") && p !== "pages/admin/layout.svelte");
 
 // The app-owned file to edit instead, where there is one.
-const EDIT_INSTEAD: Record<string, string> = { "src/onboarding.ts": "Declare onboarding steps in src/app/onboarding.ts." };
+const EDIT_INSTEAD: Record<string, string> = {
+  "src/onboarding.ts": "Declare onboarding steps in src/app/onboarding.ts.",
+  "src/settings.ts": "Declare settings in src/app/settings.ts.",
+};
+export const editInstead = (p: string): string => EDIT_INSTEAD[p] ?? "Move the change to an app-owned file (AGENTS.md lists them).";
 
 const noticeText = (p: string) =>
   `Scaffold-owned by zero-stack: an upgrade merges new versions into this file. Keep your changes in app-owned files (AGENTS.md lists them).${EDIT_INSTEAD[p] ? ` ${EDIT_INSTEAD[p]}` : ""}`;

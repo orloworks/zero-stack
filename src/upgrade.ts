@@ -4,6 +4,7 @@ import { type Config, validateFlags } from "./flags";
 import { type BaseCopy, badPath, bytesOf, FORMAT_VERSION, type Manifest, RECORD_DIR, UPGRADE_TMP } from "./manifest";
 import { type Run, run, scaffold } from "./pipeline";
 import { onTerminate } from "./children";
+import { editInstead, scaffoldOwned } from "./ownership";
 
 const GUIDE = "https://github.com/orloworks/zero-stack/blob/main/docs/upgrading.md";
 const git = (cwd: string, args: string[]) => Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
@@ -21,7 +22,7 @@ const nestedRun: Run = async (cmd, cwd) => {
   }
 };
 
-type Plan = { path: string; line: string; write?: { bytes: Buffer; mode?: number }; remove?: true; conflict?: true };
+type Plan = { path: string; line: string; write?: { bytes: Buffer; mode?: number }; remove?: true; conflict?: true; edited?: true };
 
 const isLink = (p: string) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
 // A path may be acted on only when its nearest existing parent folder is where its own name says, with no symlink anywhere on the way: a link
@@ -36,10 +37,15 @@ function inside(dir: string, root: string, abs: string): boolean {
   }
 }
 const refuseBad = (keys: string[]) => {
-  const seen = new Set<string>();
-  // Two paths that differ only by case are one file on macOS and Windows: acting on both could delete what was just written.
-  const bad = keys.find((k) => badPath(k) || seen.size === seen.add(k.toLowerCase()).size);
+  const bad = keys.find(badPath);
   if (bad) throw new Error(`refusing the path ${JSON.stringify(bad)}: it is not a file of the app's own tree`);
+  // Two paths that differ only by case are one file on macOS and Windows: acting on both could delete what was just written.
+  const seen = new Map<string, string>();
+  for (const k of keys) {
+    const twin = seen.get(k.toLowerCase());
+    if (twin !== undefined && twin !== k) throw new Error(`refusing the paths ${JSON.stringify(twin)} and ${JSON.stringify(k)}: they differ only by case, so one file on macOS and Windows`);
+    seen.set(k.toLowerCase(), k);
+  }
 };
 
 // Three-way merge of one text file with git's own file merge. Exit code: conflict count (capped at 127); anything above is an error.
@@ -69,16 +75,16 @@ function decide(dir: string, root: string, scratch: string, path: string, base: 
   const mine = stat ? readFileSync(abs) : null;
   const was = base && bytesOf(base);
   const now = next && bytesOf(next);
-  if (!now) return !mine || !was ? null : mine.equals(was) ? { path, line: `removed ${path}`, remove: true } : { path, line: `kept ${path} (removed in the new version, but you edited it)` };
+  if (!now) return !mine || !was ? null : mine.equals(was) ? { path, line: `removed ${path}`, remove: true } : { path, line: `kept ${path} (removed in the new version, but you edited it)`, edited: true };
   // Only a replaced or added file takes the new version's mode; a merged one keeps the app's.
   const put = (bytes: Buffer, line: string, conflict?: true, chmod = false): Plan => ({ path, line, write: { bytes, mode: chmod ? next!.mode : undefined }, conflict });
   if (!mine) return base && was!.equals(now) ? null : base ? { path, line: `skipped ${path} (you deleted it; the new version changed it)` } : put(now, `added ${path}`, undefined, true);
   if (was?.equals(now) || mine.equals(now)) return null;
   if (was?.equals(mine)) return put(now, `replaced ${path}`, undefined, true);
   if (base?.encoding === "base64" || next.encoding === "base64" || !Buffer.from(mine.toString("utf8"), "utf8").equals(mine))
-    return { path, line: `kept ${path} (binary, changed on both sides)`, conflict: true };
+    return { path, line: `kept ${path} (binary, changed on both sides)`, conflict: true, edited: true };
   const m = merge(scratch, path, mine, was ?? Buffer.alloc(0), now, labels);
-  return put(m.bytes, `${m.conflict ? "CONFLICT" : "merged"} ${path}`, m.conflict ? true : undefined);
+  return { ...put(m.bytes, `${m.conflict ? "CONFLICT" : "merged"} ${path}`, m.conflict ? true : undefined), edited: true };
 }
 
 const readRecord = (dir: string): { manifest: Manifest; base: BaseCopy } | null => {
@@ -144,7 +150,15 @@ export async function upgrade(dir: string, log: (line: string) => void = console
     dispose();
   }
   for (const p of plans) log(p.line);
-  if (!plans.length) log("Already current: no files changed.");
+  if (!plans.length) log("Nothing to do: your app is already current.");
+  else {
+    const n = (word: string) => plans.filter((p) => p.line.startsWith(word)).length;
+    log(`Summary: ${n("replaced")} replaced, ${n("added")} added, ${n("removed")} removed, ${n("merged")} merged, ${plans.filter((p) => p.conflict).length} in conflict.`);
+  }
+  // An edit in a scaffold-owned file is a merge now and again at every upgrade: say where it belongs.
+  for (const p of plans) if (p.edited && scaffoldOwned(p.path)) log(`You edited ${p.path}, which zero-stack owns. ${editInstead(p.path)}`);
+  if (plans.some((p) => p.path === "package.json" && p.write)) log("package.json changed: run `bun install`.");
   if (old.manifest.migrations !== next.manifest.migrations) log("The schema changed: run `void db generate` and read the migration it writes before you deploy. Nothing was migrated.");
+  if (plans.length) log("To undo this upgrade, run:\n  git checkout .\n  git clean -fd");
   return plans.some((p) => p.conflict) ? 1 : 0;
 }
