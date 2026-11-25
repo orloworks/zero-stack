@@ -8,9 +8,11 @@ import { parseSetting, type SettingDecl } from "../src/lib/setting-value";
 const LISTS = ["features", "settings", "onboarding", "plans"];
 
 // A runtime import (or a dynamic one) in a declaration file: only `import type`, `export type ... from` and `import { type X }` are allowed. Comments and the text
-// of strings are ignored, so prose like "these require (at least) two" is not a call.
+// of strings are ignored, so prose like "these require (at least) two" is not a call. Strings are stepped over in the same pass that drops comments, so a comment
+// marker inside a string ("https://x", "/admin/*") hides nothing after it.
+// shortcut: a call inside `${...}` or after a regex literal holding a quote can be missed, upgrade if tsc and the build ever stop catching a runtime import here.
 function runtimeImports(source: string): string[] {
-  const code = source.replace(/\/\*[^]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  const code = source.replace(/("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|\/\*[^]*?\*\/|\/\/.*$/gm, (_m, s: string | undefined) => s ?? "");
   const statements = code.match(/^\s*(?:import|export)\b[^;'"]*?\bfrom\s*["'][^"']+["']|^\s*import\s*["'][^"']+["']/gm) ?? [];
   const typeOnly = (s: string) => {
     if (/^\s*(?:import|export)\s+type\b/.test(s)) return true;
@@ -79,4 +81,6 @@ it("the checks fail with the reason", () => {
   expect(runtimeImports('import { type A, type B } from "./t";\n')).toEqual([]);
   expect(runtimeImports('import { type A, b } from "./t";\n')).toEqual(['import { type A, b } from "./t"']);
   expect(runtimeImports('// These require (at least) one\n/* import("x") */\nexport const D = { description: "needs require(1) or import(2)" };\nconst r = require("x");\n')).toEqual(["require("]);
+  // A comment marker inside a string must not hide what follows it.
+  expect(runtimeImports('export const D = { path: "/admin/*", url: "https://x", m: require("y") };\n/** doc */\nimport { env } from "void/env";\n')).toEqual(['import { env } from "void/env"', "require("]);
 });
