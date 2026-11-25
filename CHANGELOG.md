@@ -2,14 +2,23 @@
 
 ## Unreleased
 
+## v0.6.0 (2026-11-25)
+
+Run it with `bunx github:orloworks/zero-stack#v0.6.0 <dir>`. An app made with v0.5.0 or older needs the one-time port in `docs/upgrading.md` before `upgrade` works on it.
+
 - **`upgrade` (svelte, #101):** `bunx github:orloworks/zero-stack#v<new> upgrade`, run in an app with a clean git tree, scaffolds the new version with the app's recorded flags and three-way-merges every file against a stored base copy. Untouched files are replaced, edited ones merged, conflicts left as markers with exit 1. It never commits and never touches `.env` or migrations. See `docs/upgrading.md`. React, vue and solid output is unchanged.
 - **Breaking layout change for svelte apps:**
   - Every svelte app now commits `.zero-stack/manifest.json` and `.zero-stack/base.json` (what it was made from, and every generated file as written).
   - Scaffold-owned files start with a "Scaffold-owned by zero-stack" notice, and `AGENTS.md` says which files those are.
   - With `--admin`, the onboarding steps list moved to `src/app/onboarding.ts`; `src/onboarding.ts` imports and re-exports it, so no import changes.
   - With `--admin`, the feature list moved to `src/app/features.ts` and, with `--payments`, the plan list to `src/app/plans.ts`; with both, `PLAN_FEATURES` is declared in `src/app/features.ts`. `src/access.ts` and `src/plans.ts` import and re-export them, so no import changes (#105).
+  - With `--admin`, the settings list moved to `src/app/settings.ts` (#103).
+  - With `--auth`, `src/app/auth.ts` is where an app adds Better Auth plugins and trusted origins. A plugin that would replace a zero-stack endpoint, table, column or rate-limit rule, or weaken the listed sign-in settings, is refused at start with a message naming it. Origins must be exact (`https://host`), so wildcards and custom schemes are refused (#104).
+  - A declarations test in every svelte app checks the lists in `src/app/` (names, duplicates, plan features that name an undeclared plan or feature). The lists may be emptied.
   - Port an older app once: see `docs/upgrading.md`.
 - `upgrade` is no longer a valid app name.
+- **`doctor`:** the R2 bucket is matched by its exact name, so a bucket whose name only starts the same no longer passes the check (#108).
+- **Generated tests:** password-hashing tests have explicit timeouts and the email tests no longer depend on each other's order (#125).
 
 ## v0.5.0 (2026-11-24)
 
