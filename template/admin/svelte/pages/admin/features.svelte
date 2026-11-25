@@ -39,7 +39,7 @@
 {#if loadError}
   <p role="alert">Couldn't load features. <a href="/admin/features">Retry</a></p>
 {:else if features.length === 0}
-  <p>Nothing declared yet. Add features in <code>src/access.ts</code>.</p>
+  <p>Nothing declared yet. Add features in <code>src/app/features.ts</code>.</p>
 {:else}
   <p class="hint">Each feature is saved on its own. A kill switch beats every user's setting.</p>
   {#each features as f (f.name)}

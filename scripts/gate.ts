@@ -68,6 +68,21 @@ async function upgradeGate(config: Config): Promise<void> {
   if (!editedSettings.includes("site-title")) throw new Error("src/app/settings.ts has no example setting to edit");
   writeFileSync(settings, editedSettings);
   rmSync(exampleRoute);
+  // A feature renamed (and the plan features keyed by it, when --payments is on), and the example route that gated on it dropped (#105).
+  const featuresFile = join(app, "src/app/features.ts");
+  const editedFeatures = readFileSync(featuresFile, "utf8").replaceAll('"example-feature"', '"early-access"');
+  if (!editedFeatures.includes("early-access")) throw new Error("src/app/features.ts has no example feature to edit");
+  writeFileSync(featuresFile, editedFeatures);
+  const featureRoute = join(app, "routes/api/example-feature.ts");
+  rmSync(featureRoute);
+  // A second plan added to the plans list (--payments only).
+  const plansFile = join(app, "src/app/plans.ts");
+  const plansExist = existsSync(plansFile);
+  const editedPlans = plansExist ? readFileSync(plansFile, "utf8").replace(/,?\s*\] as const satisfies/, `,\n  {\n    name: "team",\n    label: "Team",\n    currency: "usd",\n    monthly: { lookupKey: "team_monthly", amount: 4000 },\n  },\n] as const satisfies`) : "";
+  if (plansExist) {
+    if (!editedPlans.includes("team_monthly")) throw new Error("src/app/plans.ts has no plan list to edit");
+    writeFileSync(plansFile, editedPlans);
+  }
   // A trusted origin added to the auth extension (#104), the only place an app edits for auth.
   const extension = join(app, "src/app/auth.ts");
   const editedExtension = readFileSync(extension, "utf8").replace("trustedOrigins: []", 'trustedOrigins: ["https://app.example"]');
@@ -113,7 +128,9 @@ async function upgradeGate(config: Config): Promise<void> {
   if (readFileSync(steps, "utf8") !== edited) throw new Error("the upgrade changed the owner's edit in src/app/onboarding.ts");
   if (readFileSync(settings, "utf8") !== editedSettings) throw new Error("the upgrade changed the owner's edit in src/app/settings.ts");
   if (readFileSync(extension, "utf8") !== editedExtension) throw new Error("the upgrade changed the owner's edit in src/app/auth.ts");
-  if (existsSync(exampleRoute)) throw new Error("the upgrade brought back the example route the owner dropped");
+  if (readFileSync(featuresFile, "utf8") !== editedFeatures) throw new Error("the upgrade changed the owner's edit in src/app/features.ts");
+  if (plansExist && readFileSync(plansFile, "utf8") !== editedPlans) throw new Error("the upgrade changed the owner's edit in src/app/plans.ts");
+  if (existsSync(exampleRoute) || existsSync(featureRoute)) throw new Error("the upgrade brought back an example route the owner dropped");
   for (const f of ["manifest.json", "base.json"])
     if (readFileSync(join(app, RECORD_DIR, f), "utf8") !== readFileSync(join(freshApp, RECORD_DIR, f), "utf8")) throw new Error(`${RECORD_DIR}/${f} differs from a fresh scaffold's`);
   for (const [p, e] of Object.entries(readTree(app))) if (e.encoding === "utf8" && /^(<{7} |>{7} )/m.test(e.content)) throw new Error(`conflict markers in ${p}`);

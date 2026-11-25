@@ -10,6 +10,8 @@ vi.mock("void/auth", () => ({
   },
 }));
 vi.mock("void/env", () => ({ env: { ADMIN_EMAILS: "boss@example.com" } }));
+// The test brings its own declarations, so it passes whatever the app declares (examples replaced, or the lists emptied). PLAN_FEATURES is read only with --payments.
+vi.mock("../src/app/features", () => ({ FEATURES: ["test-feature"], PLAN_FEATURES: {} }));
 vi.mock("void/db", () => {
   throw new Error("database down");
 });
@@ -52,13 +54,13 @@ it("decide: the named rules", () => {
 it("signed out: features is the empty set and requireFeature is 401", async () => {
   session.user = null;
   expect([...(await features(c()))]).toEqual([]);
-  expect(await status(requireFeature(c(), "example-feature"))).toBe(401);
+  expect(await status(requireFeature(c(), "test-feature" as never))).toBe(401);
 });
 
 it("a database error fails closed: requireFeature is 500, features is empty and never throws", async () => {
   session.user = { id: "u1", email: "u@example.com", emailVerified: true };
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
-  expect(await status(requireFeature(c(), "example-feature"))).toBe(500);
+  expect(await status(requireFeature(c(), "test-feature" as never))).toBe(500);
   expect([...(await features(c()))]).toEqual([]);
   log.mockRestore();
 });

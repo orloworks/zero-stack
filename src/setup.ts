@@ -88,7 +88,7 @@ export const STEPS: Step[] = [
   {
     id: "stripe-sandbox", on: (c) => !!c.payments, title: "Try billing in the Stripe sandbox", who: "agent",
     why: "Local billing runs against your Stripe sandbox only; agents never write to live Stripe. `.env` ships placeholder keys, so the Billing page says \"Stripe isn't set up yet.\" until real sandbox keys are there. Put the repo's sandbox key (from the repo's Stripe CLI profile, never printed) in `.env` as `STRIPE_SECRET_KEY`, write the secret from `stripe listen --print-secret` into `.env` as `STRIPE_WEBHOOK_SECRET` without printing it, then forward events with `stripe listen --forward-to localhost:5173/api/auth/stripe/webhook` while `vp dev` runs. `STRIPE_API_URL` is for tests against a fake Stripe only and is never set in production. A restricted key (`rk_test_`) needs read access to subscriptions, customers and prices, and write access to Checkout sessions and Customer portal sessions (plus write on customers, which the first checkout creates, and on prices and products for `stripe:seed`).",
-    action: "`bun run stripe:seed` (creates the plans in `src/plans.ts` by lookup key, skips existing ones, refuses live keys)", verify: "grep -Eq '^STRIPE_SECRET_KEY=[sr]k_test_' .env && ! grep -q '^STRIPE_SECRET_KEY=sk_test_placeholder' .env && grep -q '^STRIPE_WEBHOOK_SECRET=whsec_' .env && ! grep -q '^STRIPE_WEBHOOK_SECRET=whsec_placeholder' .env",
+    action: "`bun run stripe:seed` (creates the plans in `src/app/plans.ts` by lookup key, skips existing ones, refuses live keys)", verify: "grep -Eq '^STRIPE_SECRET_KEY=[sr]k_test_' .env && ! grep -q '^STRIPE_SECRET_KEY=sk_test_placeholder' .env && grep -q '^STRIPE_WEBHOOK_SECRET=whsec_' .env && ! grep -q '^STRIPE_WEBHOOK_SECRET=whsec_placeholder' .env",
     covers: ["STRIPE_API_URL"],
   },
   {
@@ -96,7 +96,7 @@ export const STEPS: Step[] = [
     why: "Live mode charges real cards, so only you touch it. The deploy fails until the key is stored.",
     action: "In the Stripe dashboard (live mode), then `void secret put STRIPE_SECRET_KEY` (masked prompt), or run the wizard", capture: "STRIPE_SECRET_KEY",
     click: [
-      "Create each plan in src/plans.ts as a product with a recurring price whose lookup key matches the file.",
+      "Create each plan in src/app/plans.ts as a product with a recurring price whose lookup key matches the file.",
       "Billing, Revenue recovery: when all retries fail, cancel the subscription (so a failed payment always ends).",
       "Set up the Customer portal, and Stripe Tax and branding if you use them.",
       "Developers, API keys: copy the secret key (sk_live_...) or a restricted key.",

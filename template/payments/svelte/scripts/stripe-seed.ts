@@ -1,4 +1,4 @@
-// bun run stripe:seed — creates the prices declared in src/plans.ts in the Stripe sandbox, by lookup key, skipping any that exist (safe to rerun).
+// bun run stripe:seed — creates the prices declared in src/app/plans.ts in the Stripe sandbox, by lookup key, skipping any that exist (safe to rerun).
 // Sandbox only: it refuses live keys. Live products and prices are created by the owner in the Stripe dashboard (see docs/setup.md).
 import { type Plan, PLANS } from "../src/plans";
 import { PLACEHOLDER_KEY, stripeClient } from "../src/stripe";

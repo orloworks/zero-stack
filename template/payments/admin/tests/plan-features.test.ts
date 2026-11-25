@@ -3,6 +3,8 @@ import { expect, it, vi } from "vite-plus/test";
 vi.mock("void/auth", () => ({ getUser: () => null, requireAuth: () => null }));
 vi.mock("void/env", () => ({ env: { ADMIN_EMAILS: "" } }));
 vi.mock("void/db", () => ({}));
+// The test brings its own feature and plan, so it passes whatever the app declares (examples replaced, or the lists emptied).
+vi.mock("../src/app/features", () => ({ FEATURES: ["test-feature"], PLAN_FEATURES: { "test-feature": ["pro"] } }));
 
 const { decide, FEATURES, featuresForPlan, PLAN_FEATURES } = await import("../src/access");
 const { dashboardUrl, STATUS } = await import("../src/admin-billing");

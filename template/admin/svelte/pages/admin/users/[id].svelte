@@ -161,7 +161,7 @@
 <section aria-labelledby="features-title">
   <h2 id="features-title">Feature overrides</h2>
   {#if features.length === 0}
-    <p>Nothing declared yet. Add features in <code>src/access.ts</code>.</p>
+    <p>Nothing declared yet. Add features in <code>src/app/features.ts</code>.</p>
   {:else}
     {#each features as f (f.name)}
       <form onsubmit={(e) => saveOverride(e, f.name)}>

@@ -541,7 +541,7 @@ const adminApp = (config: Record<string, unknown>, schema = SCHEMA) => {
     await s.exec(cmd);
     if (cmd[1] !== "x") return;
     writeFileSync(join(s.dir, "void.config.ts"), "export default defineConfig({\n});\n");
-    writeFileSync(join(s.dir, "tsconfig.json"), tsconfig());
+    writeFileSync(join(s.dir, "tsconfig.json"), tsconfig().replace(/\}\n$/, ",\n\"include\": [\"src\"]\n}\n"));
     mkdirSync(join(s.dir, "db"), { recursive: true });
     writeFileSync(join(s.dir, "db/schema.ts"), schema);
   };
@@ -557,7 +557,7 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
     "routes/admin/users.ts", "routes/api/admin/users/[id]/send-link.ts", "routes/api/admin/users/[id]/sessions/[sessionId]/revoke.ts", "pages/admin/layout.svelte", "pages/admin/admin.css", "pages/admin/index.svelte", "pages/admin/index.server.ts",
     "pages/admin/users/[id].svelte", "pages/admin/users/[id].server.ts", "pages/admin/audit.svelte", "pages/admin/audit.server.ts",
     "src/access.ts", "routes/api/example-feature.ts", "routes/api/admin/features/[feature].ts", "routes/api/admin/users/[id]/features/[feature].ts", "pages/admin/features.svelte", "pages/admin/features.server.ts",
-    "src/settings.ts", "src/app/settings.ts", "tests/declarations.test.ts", "src/lib/setting-value.ts", "routes/api/example-settings.ts", "routes/api/admin/settings/[key].ts", "pages/admin/settings.svelte", "pages/admin/settings.server.ts",
+    "src/settings.ts", "src/app/features.ts", "src/app/settings.ts", "tests/declarations.test.ts", "src/lib/setting-value.ts", "routes/api/example-settings.ts", "routes/api/admin/settings/[key].ts", "pages/admin/settings.svelte", "pages/admin/settings.server.ts",
     "tests/settings.test.ts", "tests/settings-pages.test.ts", "tests/access.test.ts", "tests/access-pages.test.ts", "tests/admin.test.ts", "tests/admin-guard.test.ts", "tests/admin-action.test.ts", "tests/admin-display.test.ts", "tests/admin-pages.test.ts", "tests/signup-allowlist.test.ts",
   ])
     expect([f, existsSync(join(dir, f))]).toEqual([f, true]);
@@ -577,8 +577,31 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
   expect(agents).not.toContain("${");
   expect(agents).toContain("Every admin change writes exactly one audit entry");
   expect(agents).toContain("self-delete. The deleted user's email");
-  for (const t of ["### Feature switches", "requireFeature(c, \"my-feature\")", "`FEATURES` in `src/access.ts`", "`decide()`", "kill switch"]) expect(agents).toContain(t);
+  for (const t of ["### Feature switches", "requireFeature(c, \"my-feature\")", "`FEATURES` in `src/app/features.ts`", "`decide()`", "kill switch"]) expect(agents).toContain(t);
   for (const t of ["### Settings", "`SETTINGS` in `src/app/settings.ts`", "await setting(\"my-setting\")", "never a secret"]) expect(agents).toContain(t);
+});
+
+test("svelte --admin --payments keeps the feature, plan and plan-feature lists in their declaration files, and the modules re-export them (#105)", async () => {
+  const { dir, run } = adminApp({ payments: true });
+  await run();
+  const read = (f: string) => readFileSync(join(dir, f), "utf8");
+  expect(read("src/app/features.ts")).toContain('export const FEATURES = ["example-feature"] as const;');
+  expect(read("src/app/features.ts")).toContain('{ "example-feature": ["pro"] }');
+  expect(read("src/app/plans.ts")).toContain('name: "pro"');
+  const access = read("src/access.ts");
+  for (const t of ['import { FEATURES, PLAN_FEATURES } from "./app/features";', "export { FEATURES };", "export { PLAN_FEATURES };"]) expect(access).toContain(t);
+  expect(access).not.toContain('["example-feature"]');
+  expect(read("src/plans.ts")).toContain('import { PLANS } from "./app/plans";');
+  expect(read("src/plans.ts")).not.toContain("lookupKey: \"pro_monthly\"");
+  // Every message that says where to declare names the new files.
+  for (const f of ["src/access.ts", "pages/admin/features.svelte", "pages/admin/users/[id].svelte", "tests/access-pages.test.ts"]) expect([f, read(f).includes("src/access.ts</code>")]).toEqual([f, false]);
+  expect(read("AGENTS.md")).toContain("`PLAN_FEATURES` in `src/app/features.ts`");
+  expect(read("AGENTS.md")).toContain("`src/app/plans.ts`");
+  // Without --payments the plan features are not written.
+  const plain = adminApp({});
+  await plain.run();
+  expect(readFileSync(join(plain.dir, "src/app/features.ts"), "utf8")).not.toContain("PLAN_FEATURES");
+  expect(existsSync(join(plain.dir, "src/app/plans.ts"))).toBe(false);
 });
 
 test("svelte --admin --storage checks the user row after an upload; --admin --invite-only reuses the one matcher", async () => {
