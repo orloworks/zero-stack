@@ -551,7 +551,7 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
     "routes/admin/users.ts", "routes/api/admin/users/[id]/send-link.ts", "routes/api/admin/users/[id]/sessions/[sessionId]/revoke.ts", "pages/admin/layout.svelte", "pages/admin/admin.css", "pages/admin/index.svelte", "pages/admin/index.server.ts",
     "pages/admin/users/[id].svelte", "pages/admin/users/[id].server.ts", "pages/admin/audit.svelte", "pages/admin/audit.server.ts",
     "src/access.ts", "routes/api/example-feature.ts", "routes/api/admin/features/[feature].ts", "routes/api/admin/users/[id]/features/[feature].ts", "pages/admin/features.svelte", "pages/admin/features.server.ts",
-    "src/settings.ts", "src/lib/setting-value.ts", "routes/api/example-settings.ts", "routes/api/admin/settings/[key].ts", "pages/admin/settings.svelte", "pages/admin/settings.server.ts",
+    "src/settings.ts", "src/app/settings.ts", "tests/declarations.test.ts", "src/lib/setting-value.ts", "routes/api/example-settings.ts", "routes/api/admin/settings/[key].ts", "pages/admin/settings.svelte", "pages/admin/settings.server.ts",
     "tests/settings.test.ts", "tests/settings-pages.test.ts", "tests/access.test.ts", "tests/access-pages.test.ts", "tests/admin.test.ts", "tests/admin-guard.test.ts", "tests/admin-action.test.ts", "tests/admin-display.test.ts", "tests/admin-pages.test.ts", "tests/signup-allowlist.test.ts",
   ])
     expect([f, existsSync(join(dir, f))]).toEqual([f, true]);
@@ -572,7 +572,7 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
   expect(agents).toContain("Every admin change writes exactly one audit entry");
   expect(agents).toContain("self-delete. The deleted user's email");
   for (const t of ["### Feature switches", "requireFeature(c, \"my-feature\")", "`FEATURES` in `src/access.ts`", "`decide()`", "kill switch"]) expect(agents).toContain(t);
-  for (const t of ["### Settings", "`SETTINGS` in `src/settings.ts`", "await setting(\"my-setting\")", "never a secret"]) expect(agents).toContain(t);
+  for (const t of ["### Settings", "`SETTINGS` in `src/app/settings.ts`", "await setting(\"my-setting\")", "never a secret"]) expect(agents).toContain(t);
 });
 
 test("svelte --admin --storage checks the user row after an upload; --admin --invite-only reuses the one matcher", async () => {

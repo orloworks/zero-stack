@@ -45,10 +45,15 @@ const scaffoldOf = (next: Files) => async (c: typeof config, target: string) => 
   put(target, { ".gitignore": IGNORE, ...next });
   writeRecord(target, c);
 };
-async function run(dir: string, next: Files) {
+async function runAll(dir: string, next: Files) {
   const lines: string[] = [];
   const code = await upgrade(dir, (l) => lines.push(l), scaffoldOf(next));
   return { code, lines };
+}
+// The per-file report, without the summary block (which has its own tests at the end).
+async function run(dir: string, next: Files) {
+  const r = await runAll(dir, next);
+  return { code: r.code, lines: r.lines.filter((l) => !/^(Summary:|You edited |package\.json changed|To undo)/.test(l)) };
 }
 const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
 
@@ -72,7 +77,7 @@ test("an untouched file is replaced by the new version, with the new file mode",
 
 test("a file unchanged upstream is left alone, even when the app edited it", async () => {
   const dir = makeApp({ "a.ts": "same\n" }, { "a.ts": "mine\n" });
-  expect(await run(dir, { "a.ts": "same\n" })).toEqual({ code: 0, lines: ["Already current: no files changed."] });
+  expect(await run(dir, { "a.ts": "same\n" })).toEqual({ code: 0, lines: ["Nothing to do: your app is already current."] });
   expect(read(dir, "a.ts")).toBe("mine\n");
 });
 
@@ -155,7 +160,7 @@ test("a changed migration hash prints the void db generate reminder; an unchange
   expect(r.lines.at(-1)).toContain("void db generate");
   git(dir, "add", "-A");
   git(dir, "commit", "-q", "-m", "up");
-  expect((await run(dir, { "db/migrations/0001_a.sql": "two;\n", "a.ts": "1\n" })).lines).toEqual(["Already current: no files changed."]);
+  expect((await run(dir, { "db/migrations/0001_a.sql": "two;\n", "a.ts": "1\n" })).lines).toEqual(["Nothing to do: your app is already current."]);
 });
 
 test("a file where the new version needs a folder (or the reverse) keeps the app's copy and is listed", async () => {
@@ -374,4 +379,77 @@ test("a folder linked to another folder of the app is treated as outside: nothin
   commitAll(dir2);
   const r2 = await run(dir2, { "lib/x.ts": "1\n" }); // src/x.ts removed upstream; the link must not carry a delete of lib/x.ts too
   expect(r2.lines).toEqual(["kept lib/x.ts (outside your app)", "removed src/x.ts"]);
+});
+
+const UNDO = "To undo this upgrade, run:\n  git checkout .\n  git clean -fd";
+
+test("the summary counts each outcome, and the undo commands come last", async () => {
+  const dir = makeApp(
+    { "a.ts": "1\n", "b.ts": "1\n", "c.ts": "1\n", "d.ts": lines(3), "e.ts": lines(3) },
+    { "d.ts": lines(3).replace("line 1", "mine"), "e.ts": lines(3).replace("line 2", "mine") },
+  );
+  const r = await runAll(dir, { "a.ts": "2\n", "c.ts": "1\n", "d.ts": lines(3).replace("line 3", "new"), "e.ts": lines(3).replace("line 2", "theirs"), "f.ts": "new\n" });
+  expect(r.code).toBe(1);
+  expect(r.lines).toEqual([
+    "replaced a.ts", "removed b.ts", "merged d.ts", "CONFLICT e.ts", "added f.ts",
+    "Summary: 1 replaced, 1 added, 1 removed, 1 merged, 0 kept, 1 in conflict.",
+    UNDO,
+  ]);
+});
+
+test("nothing to do exits 0 and prints no undo commands", async () => {
+  const dir = makeApp({ "a.ts": "1\n" });
+  expect(await runAll(dir, { "a.ts": "1\n" })).toEqual({ code: 0, lines: ["Nothing to do: your app is already current."] });
+});
+
+test("an edited scaffold-owned file is named with the app-owned file where the change belongs; an edited app-owned one is not", async () => {
+  const files = { "src/settings.ts": lines(5), "src/mail.ts": lines(5), "pages/index.svelte": lines(5) };
+  const mine = (t: string) => t.replace("line 1", "mine 1");
+  const dir = makeApp(files, { "src/settings.ts": mine(lines(5)), "src/mail.ts": mine(lines(5)), "pages/index.svelte": mine(lines(5)) });
+  const r = await runAll(dir, Object.fromEntries(Object.keys(files).map((p) => [p, lines(5).replace("line 5", "new 5")])));
+  expect(r.lines.filter((l) => l.startsWith("You edited "))).toEqual([
+    "You edited src/mail.ts, which zero-stack owns. Move the change to an app-owned file (AGENTS.md lists them).",
+    "You edited src/settings.ts, which zero-stack owns. Declare settings in src/app/settings.ts.",
+  ]);
+});
+
+test("package.json changing says to run bun install, before the undo commands; unchanged says nothing", async () => {
+  const dir = makeApp({ "package.json": '{"a":1}\n', "a.ts": "1\n" });
+  const r = await runAll(dir, { "package.json": '{"a":2}\n', "a.ts": "1\n" });
+  expect(r.lines).toEqual(["replaced package.json", "Summary: 1 replaced, 0 added, 0 removed, 0 merged, 0 kept, 0 in conflict.", "package.json changed: run `bun install`.", UNDO]);
+  const other = makeApp({ "package.json": '{"a":1}\n', "a.ts": "1\n" });
+  expect((await runAll(other, { "package.json": '{"a":1}\n', "a.ts": "2\n" })).lines.some((l) => l.includes("bun install"))).toBe(false);
+});
+
+test("package.json in conflict says to resolve it before bun install", async () => {
+  const dir = makeApp({ "package.json": lines(3) }, { "package.json": lines(3).replace("line 2", "mine") });
+  const r = await runAll(dir, { "package.json": lines(3).replace("line 2", "theirs") });
+  expect(r.code).toBe(1);
+  expect(r.lines).toContain("package.json is in conflict: resolve it, then run `bun install`.");
+  expect(r.lines.some((l) => l === "package.json changed: run `bun install`.")).toBe(false);
+});
+
+test("kept files are counted, so the counts add up to the lines above them", async () => {
+  const dir = makeApp({ "a.ts": "1\n", "b.ts": "1\n" }, { "a.ts": "mine\n", "b.ts": null });
+  const r = await runAll(dir, { "b.ts": "2\n" });
+  expect(r.lines.slice(0, 2)).toEqual(["kept a.ts (removed in the new version, but you edited it)", "skipped b.ts (you deleted it; the new version changed it)"]);
+  expect(r.lines).toContain("Summary: 0 replaced, 0 added, 0 removed, 0 merged, 2 kept, 0 in conflict.");
+});
+
+test("a run that changes only the record still prints the undo commands; a byte-identical record is left alone", async () => {
+  const dir = makeApp({ "db/migrations/0001_a.sql": "one;\n", "a.ts": "1\n" });
+  const r = await runAll(dir, { "db/migrations/0001_a.sql": "two;\n", "a.ts": "1\n" });
+  expect(r.lines[0]).toBe("No file of yours changed; .zero-stack/ now records the new version.");
+  expect(r.lines.at(-1)).toBe(UNDO);
+  expect(git(dir, "status", "--porcelain")).toContain(".zero-stack/manifest.json");
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "up");
+  expect(await runAll(dir, { "db/migrations/0001_a.sql": "two;\n", "a.ts": "1\n" })).toEqual({ code: 0, lines: ["Nothing to do: your app is already current."] });
+  expect(git(dir, "status", "--porcelain")).toBe("");
+});
+
+test("paths that differ only by case get their own refusal, nothing changes", async () => {
+  const dir = makeApp({ "Readme.md": "1\n" });
+  await expect(upgrade(dir, () => {}, scaffoldOf({ "README.md": "1\n" }))).rejects.toThrow(/"README.md" and "Readme.md": they differ only by case/);
+  expect(read(dir, "Readme.md")).toBe("1\n");
 });

@@ -1,16 +1,10 @@
 import { requireAdmin, auditRow } from "./admin";
+import { SETTINGS } from "./app/settings";
 import { parseSetting, resolveSetting, type SettingDecl, type SettingValue, storedForm } from "./lib/setting-value";
 
-// Runtime settings. Declare one by adding it to SETTINGS: a key, a type (text, number with optional min and max, boolean, or a choice of fixed values), a default and a
-// description. Read it anywhere on the server with `await setting("key")`: it returns the stored value or the default, typed from the declaration. An admin edits
-// each one on the Settings page, one form per setting, and can reset it to the default. A setting is never a secret: admins and the audit log see every value, and
-// the Settings page is plain text. Put secrets in env.ts. The scaffold ships four examples (and routes/api/example-settings.ts, which reads them): replace them.
-export const SETTINGS = {
-  "example-text": { type: "text", default: "Hello", description: "A line of text the app shows somewhere." },
-  "example-number": { type: "number", default: 10, min: 1, max: 100, description: "A number between 1 and 100." },
-  "example-toggle": { type: "boolean", default: false, description: "An on/off switch." },
-  "example-choice": { type: "choice", values: ["small", "medium", "large"], default: "medium", description: "One of a fixed set of values." },
-} as const satisfies Record<string, SettingDecl>;
+// Runtime settings: declare them in src/app/settings.ts (this file never changes for that). Read one anywhere on the server with `await setting("key")`: it returns
+// the stored value or the default, typed from the declaration. An admin edits each one on the Settings page, one form per setting, and can reset it to the default.
+export { SETTINGS };
 export type SettingKey = keyof typeof SETTINGS;
 export type ValueOf<K extends SettingKey> = (typeof SETTINGS)[K] extends { type: "number" }
   ? number
@@ -52,7 +46,7 @@ export function adminSettings(c: Ctx) {
       });
     },
     async set(key: string, raw: unknown): Promise<Result> {
-      if (!declared(key)) return refuse(400, "That setting is not declared in src/settings.ts.");
+      if (!declared(key)) return refuse(400, "That setting is not declared in src/app/settings.ts.");
       const d = decl(key);
       const parsed = parseSetting(d, raw);
       if (!parsed.ok) return refuse(400, parsed.message);
@@ -70,7 +64,7 @@ export function adminSettings(c: Ctx) {
       return { ok: true };
     },
     async reset(key: string): Promise<Result> {
-      if (!declared(key)) return refuse(400, "That setting is not declared in src/settings.ts.");
+      if (!declared(key)) return refuse(400, "That setting is not declared in src/app/settings.ts.");
       const { db, and, eq, sql, setting: table, auditEntry } = await store();
       const now = new Date();
       const row = (await db.select().from(table).where(eq(table.key, key)).limit(1))[0];

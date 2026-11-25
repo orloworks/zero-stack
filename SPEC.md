@@ -63,9 +63,9 @@ tests/
   left over, and always after), decides every file from (the app's file, the base copy, the new version's copy), then writes: untouched, replaced (new file mode); unchanged upstream, left; both changed,
   `git merge-file` with labels `your app` / `zero-stack <old> (your last upgrade)` / `zero-stack <new> (new)`, conflicts left as markers, listed, exit 1; new, written when the path is free and merged against an empty base when not;
   removed upstream, deleted when untouched and kept when edited; deleted by the app, stays deleted; binary changed on both sides, a file/folder clash, or a path through a symlinked folder: kept, listed and counted as a conflict (exit 1). Refuses `core.autocrlf=true`, a symlinked `.zero-stack` or record file, and, before scaffolding, any recorded path on the skip list (compared without regard to case), with a backslash, a NUL or a part ending in a dot or space. Any symlink at a path or on its way makes the path "kept (outside your app)" or "not a file in your app". Modes recorded are only the executable bit; only replaced and added files are chmodded. A merge error aborts before any write.
-  It then replaces the manifest and base copy with the new scaffold's, prints one line per changed file and, when the migration hash changed, the `void db generate` reminder.
+  It then replaces the manifest and base copy with the new scaffold's and prints one line per changed file, then a summary: `Summary: n replaced, n added, n removed, n merged, n kept, n in conflict.`; a line `You edited <path>, which zero-stack owns.` plus the app-owned file where the change belongs (`src/app/settings.ts`, `src/app/onboarding.ts`, else a pointer to `AGENTS.md`) for every merged, conflicted or kept scaffold-owned file the app edited; `package.json changed: run \`bun install\`.` (or, with `package.json` in conflict, `package.json is in conflict: resolve it, then run \`bun install\`.`); the `void db generate` reminder when the migration hash changed; and last, whenever anything was written, the two undo commands (`git checkout .`, `git clean -fd`). An app already current prints `Nothing to do: your app is already current.` and exits 0, with no undo commands. The record files are rewritten only when their bytes differ: when only they changed, it prints `No file of yours changed; .zero-stack/ now records the new version.` and the undo commands. Two recorded paths that differ only by case are refused with their own message.
   It never commits, never touches `.env` or migrations, and writes only inside the app (a recorded path with `..` or an absolute path is refused).
-- **Gate** (`svelte-upgrade` in `scripts/matrix.ts`; the gate-only flag `--upgrade`; logic in `scripts/gate.ts`, so the `ci:full` hash covers it): scaffold, edit `src/app/onboarding.ts`, age the app four ways,
+- **Gate** (`svelte-upgrade` in `scripts/matrix.ts`; the gate-only flag `--upgrade`; logic in `scripts/gate.ts`, so the `ci:full` hash covers it): scaffold, edit `src/app/onboarding.ts` and a setting in `src/app/settings.ts` (dropping `routes/api/example-settings.ts`, which that orphans), age the app four ways,
   run the upgrade, assert exit 0, no conflict, scaffold-owned files and `.zero-stack/` equal to a fresh scaffold's, the edit intact, and `bun run verify` green.
 
 ## Flags
@@ -239,7 +239,8 @@ in `AGENTS.md`.
     log) is a `<fieldset>` radio group per feature with its own Save; user detail has a select per feature and the effective result. Copy: "Saved. Applies on the
     user's next page load." and "Nothing declared yet. Add features in `src/access.ts`." `routes/api/example-feature.ts` is the gated example the gate drives.
     Tests: `tests/access.test.ts` (exports, precedence table over every combination, fail-closed) and `tests/access-pages.test.ts`.
-  - **Settings** (`--admin`, #55; D16, E3, story 81-82, 54-56, 73). `src/settings.ts` exports exactly `SETTINGS`, `setting(key)` and `adminSettings(c)`. A setting is declared in
+  - **Settings** (`--admin`, #55; D16, E3, story 81-82, 54-56, 73). `src/settings.ts` exports exactly `SETTINGS`, `setting(key)` and `adminSettings(c)`; `SETTINGS` is declared in the app-owned declaration file `src/app/settings.ts` (data only, types imported
+    from `src/lib/setting-value.ts`) and re-exported. A setting is declared in
     `SETTINGS` as a key, a `type` (`text`, `number` with optional `min` and `max`, `boolean`, `choice` with `values`), a `default` and a `description` (the scaffold ships four
     examples and `routes/api/example-settings.ts` that reads them). `await setting("key")` is typed from the declaration and returns the stored value, or the default when
     nothing is stored or the stored text no longer fits (wrong type, out of range, not in the set: the Settings page says "Stored value is invalid; using the default.");
@@ -252,8 +253,10 @@ in `AGENTS.md`.
     Settings page (nav: Users, Invites, Features, Settings, Audit log) is one form per setting with its label, description, "Default: X" and its own Save: a checkbox plus Save for
     on/off (never save-on-tap), `type="number"` with `min` and `max`, a `<select>` for a choice, and "Reset to default" once a stored value differs; the form is `novalidate`, so the
     server's message ("Enter a number from 1 to 100.") is the inline error. Copy: "Saved. Applies on the user's next page load." and "Nothing declared yet. Add settings in
-    `src/settings.ts`." A setting is never a secret (AGENTS.md says so). Tests: `tests/settings.test.ts` (exports, defaults valid, text, number bounds, boolean, choice, undeclared
-    key, stale value) and `tests/settings-pages.test.ts`.
+    `src/app/settings.ts`." An undeclared key answers "That setting is not declared in src/app/settings.ts." A setting is never a secret (AGENTS.md says so). Tests: `tests/settings.test.ts` (exports, defaults valid, text, number bounds, boolean, choice, undeclared
+    key, stale value; it mocks `src/app/settings.ts` with its own setting, so it passes whatever the app declares), `tests/settings-pages.test.ts` and the scaffold-owned
+    `tests/declarations.test.ts`, which checks every declaration file the app has in `src/app/`: no runtime imports (only `import type`), each setting declared once with a default
+    that fits its type, onboarding steps unique and non-empty, each failure naming its reason; it also feeds itself bad examples so a check that stops working fails.
   - `session.create.before` writes `lastSignInAt` (a `user.additionalFields` column) and nothing else.
   - The CLI closes with "To use /admin, sign in with an email on ADMIN_EMAILS and verify it."; `AGENTS.md` gets an Admin
     section. Generated tests: `tests/admin*.test.ts` (matcher, `userStatus`, the guard over a real Better Auth, the action
