@@ -32,6 +32,8 @@ export function installAuth(dir: string, config: Config): void {
   }
 
   cpSync(join(slice, "pages"), join(dir, "pages"), { recursive: true });
+  // The auth extension (src/app/auth.ts, app-owned), its guards and their tests: svelte only.
+  if (framework === "svelte") for (const d of ["src", "tests"]) cpSync(join(slice, d), join(dir, d), { recursive: true });
   if (config.accountDeletion) installAccountDeletion(dir, config);
   if (config.email) installEmail(dir);
   if (config.turnstile) installTurnstile(dir, config);

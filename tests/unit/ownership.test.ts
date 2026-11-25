@@ -12,11 +12,11 @@ const OWNED = [
   "pages/admin/invites.svelte", "pages/admin/settings.server.ts", "pages/admin/users/[id].server.ts", "pages/admin/users/[id].svelte",
   "routes/admin/users.ts", "routes/api/admin/features/[feature].ts", "routes/api/admin/invites.ts", "routes/api/admin/users/[id]/sessions/[sessionId]/revoke.ts",
   "routes/api/files/[name].ts", "scripts/doctor.sh", "scripts/secrets.ts", "scripts/setup-wizard.sh", "scripts/stripe-seed.ts",
-  "src/access.ts", "src/admin.ts", "src/billing.ts", "src/lib/admin-action.ts", "src/lib/turnstile.ts", "src/mail.ts", "src/onboarding.ts", "src/rpc.ts", "src/settings.ts",
-  "tests/access.test.ts", "tests/hello.test.ts", "tests/onboarding.test.ts",
+  "src/access.ts", "src/admin.ts", "src/auth-extension.ts", "src/billing.ts", "src/lib/admin-action.ts", "src/lib/turnstile.ts", "src/mail.ts", "src/onboarding.ts", "src/rpc.ts", "src/settings.ts",
+  "tests/access.test.ts", "tests/auth-extension.test.ts", "tests/hello.test.ts", "tests/onboarding.test.ts",
 ];
 const APP_OWNED = [
-  "src/app/onboarding.ts", "src/app/settings.ts", "pages/admin/layout.svelte", "pages/sign-in.svelte", "pages/sign-up.svelte", "pages/forgot-password.svelte", "pages/reset-password.svelte",
+  "src/app/auth.ts", "src/app/onboarding.ts", "src/app/settings.ts", "pages/admin/layout.svelte", "pages/sign-in.svelte", "pages/sign-up.svelte", "pages/forgot-password.svelte", "pages/reset-password.svelte",
   "pages/settings.svelte", "pages/settings.server.ts", "pages/billing.svelte", "pages/billing.server.ts", "pages/index.svelte", "pages/index.server.ts", "pages/style.css",
   "routes/api/hello.ts", "routes/api/echo.ts", "routes/api/example-feature.ts", "routes/api/example-plan.ts", "routes/api/example-settings.ts",
   "package.json", "tsconfig.json", "vite.config.ts", "void.config.ts", "env.ts", "db/schema.ts", "db/seed.ts", "AGENTS.md", ".gitignore", ".mcp.json", "public/void.svg",
@@ -41,6 +41,7 @@ test("the notice: line 2 under a shebang, an HTML comment before a svelte script
   // a module whose list lives in src/app/ says where to declare it
   expect(withNotice("src/onboarding.ts", "x\n")).toContain("Declare onboarding steps in src/app/onboarding.ts.");
   expect(withNotice("src/settings.ts", "x\n")).toContain("Declare settings in src/app/settings.ts.");
+  expect(withNotice("auth.ts", "x\n")).toContain("in src/app/auth.ts.");
 });
 
 test("addNotices marks scaffold-owned files only, and leaves JSON, app-owned and skipped files alone", () => {

@@ -183,7 +183,20 @@ function userOption(config: Config): string[] {
   return [`  user: {\n${[lastSignIn, del].filter(Boolean).join("\n")}\n  },`];
 }
 
+// svelte: the app's extra plugins and trusted origins (src/app/auth.ts) go through extendAuth (src/auth-extension.ts), which appends them after zero-stack's plugins and
+// refuses what could replace one of zero-stack's protections. The app's object is never spread into the options. The formatter indents the returned object.
+const EXTENSION_IMPORTS = 'import authExtension from "./src/app/auth";\nimport { extendAuth } from "./src/auth-extension";\n';
+
 export function composeAuthTs(config: Config): string {
+  const svelte = config.framework === "svelte";
+  // Better Auth's captcha plugin guards its default endpoints (sign-up, sign-in, request-password-reset); the guard refuses a test secret off localhost (D14).
+  const zeroPlugins = [
+    config.turnstile && 'captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })',
+    config.inviteOnly && invitePlugin(!!config.admin),
+    config.admin && `admin({ bannedUserMessage: "${BANNED_MESSAGE}" })`,
+    config.admin && `adminGuard({ isAdmin: (user) => isAdmin(env.ADMIN_EMAILS, user), audit: recordAudit${config.storage ? ", purge: purgeUserFiles" : ""}${config.payments ? ", cancelBilling: (id) => cancelSubscriptions(env, id)" : ""} })`,
+    config.payments && "...billingPlugins(env)",
+  ].filter(Boolean) as string[];
   const options = [
     // One count across Worker instances (D3, Void docs/guide/auth.md); costs one D1 write per auth request. Off in dev, on for deployed Cloudflare requests.
     // --payments: Stripe sends webhook bursts from shared IPs, so its endpoint is never rate limited (it is signature-checked instead).
@@ -204,20 +217,8 @@ export function composeAuthTs(config: Config): string {
   },`}`,
         ]
       : []),
-    // Better Auth's captcha plugin guards its default endpoints (sign-up, sign-in, request-password-reset); the guard refuses a test secret off localhost (D14).
-    ...(config.turnstile || config.inviteOnly || config.admin || config.payments
-      ? [
-          `  plugins: [${[
-            config.turnstile && 'captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })',
-            config.inviteOnly && invitePlugin(!!config.admin),
-            config.admin && `admin({ bannedUserMessage: "${BANNED_MESSAGE}" })`,
-            config.admin && `adminGuard({ isAdmin: (user) => isAdmin(env.ADMIN_EMAILS, user), audit: recordAudit${config.storage ? ", purge: purgeUserFiles" : ""}${config.payments ? ", cancelBilling: (id) => cancelSubscriptions(env, id)" : ""} })`,
-            config.payments && "...billingPlugins(env)",
-          ]
-            .filter(Boolean)
-            .join(", ")}],`,
-        ]
-      : []),
+    // svelte: the one plugins and trustedOrigins keys come from the auth extension (below); react, vue and solid keep their file byte for byte.
+    ...(svelte ? ["  plugins: app.plugins,", "  trustedOrigins: app.trustedOrigins,"] : zeroPlugins.length ? [`  plugins: [${zeroPlugins.join(", ")}],`] : []),
     ...databaseHooks({
       user: [...(config.inviteOnly ? [inviteOnlyUserCreate(!!config.admin)] : []), ...(config.admin || (config.payments && config.accountDeletion) ? [userDelete(config)] : [])],
       session: config.admin ? [ADMIN_SESSION_CREATE] : [],
@@ -229,9 +230,11 @@ export function composeAuthTs(config: Config): string {
   const del = (config.accountDeletion || config.admin) && config.storage;
   const ba = config.accountDeletion || config.inviteOnly ? `import { APIError, createAuthMiddleware${config.inviteOnly ? ", isAPIError" : ""} } from "better-auth/api";\n` : "";
   return `import { defineAuth } from "void/auth";
-${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.payments ? paymentsImports(!!(config.accountDeletion || config.admin)) : ""}
-export default defineAuth(({ defaults${config.turnstile || config.inviteOnly || config.admin || config.payments ? ", env" : ""} }) => ({
+${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.payments ? paymentsImports(!!(config.accountDeletion || config.admin)) : ""}${svelte ? EXTENSION_IMPORTS : ""}
+export default defineAuth(({ defaults${svelte || zeroPlugins.length ? ", env" : ""} }) => ${svelte ? `{
+  const app = extendAuth([${zeroPlugins.join(", ")}], authExtension(env), defaults.trustedOrigins);
+  return {` : "({"}
   ...defaults,
-${options.map((o) => o + "\n").join("")}}));
+${options.map((o) => o + "\n").join("")}${svelte ? "};\n});" : "}));"}
 `;
 }
