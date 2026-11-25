@@ -126,6 +126,7 @@ it("an init that changes a value inside its argument (rate limiting, origins, em
   await expect(start([{ id: "rl", init: (ctx: any) => void (ctx.rateLimit.enabled = !ctx.rateLimit.enabled) }]).$context).rejects.toThrow(/"rl".*inside its init argument/);
   await expect(start([{ id: "org", init: (ctx: any) => void ctx.trustedOrigins.push("https://x.example") }]).$context).rejects.toThrow(/"org".*inside its init argument/);
   await expect(start([{ id: "ev", init: (ctx: any) => void (ctx.options.emailAndPassword.requireEmailVerification = true) }]).$context).rejects.toThrow(/"ev".*inside its init argument/);
+  await expect(start([{ id: "tp", init: (ctx: any) => void ctx.trustedProviders.push("github") }]).$context).rejects.toThrow(/"tp".*inside its init argument/);
   await expect(start([{ id: "quiet", init: (ctx: any) => void ctx.options.emailAndPassword.enabled }]).$context).resolves.toBeDefined(); // reading is fine
 }, SLOW);
 

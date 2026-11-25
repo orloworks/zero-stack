@@ -110,7 +110,7 @@ export function extendAuth<Z extends BetterAuthPlugin[], A extends BetterAuthPlu
         const guarded = () => {
           const c = ctx as unknown as Record<string, unknown>;
           const o = (ctx.options ?? {}) as Record<string, unknown>;
-          return picture([c.rateLimit, c.trustedOrigins, c.secret, c.sessionConfig, o.rateLimit, o.trustedOrigins, o.emailAndPassword, o.emailVerification, o.advanced, o.session, o.user, o.account], ids);
+          return picture([c.rateLimit, c.trustedOrigins, c.secret, c.sessionConfig, c.oauthConfig, c.trustedProviders, c.authCookies, o.rateLimit, o.trustedOrigins, o.emailAndPassword, o.emailVerification, o.advanced, o.session, o.user, o.account], ids);
         };
         const before = { password: ctx.password, adapter: ctx.adapter, keys: Object.keys(ctx.options ?? {}).sort().join(), guarded: guarded() };
         const result = await init.call(plugin, ctx);
