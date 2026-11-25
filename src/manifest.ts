@@ -27,8 +27,9 @@ const SKIP = new RegExp(
 export const skipped = (rel: string): boolean => SKIP.test(rel);
 
 // A recorded path the upgrade must never act on: outside the app, held back by the skip list, or spelled so that a file system may read it as something else.
+// Printable ASCII only: APFS folds case across Unicode (a Kelvin sign opens as "k"), so a look-alike spelling could name a held-back file.
 export const badPath = (p: string): boolean =>
-  p.startsWith("/") || /[\\\0]/.test(p) || p.split("/").some((part) => part === "" || part === ".." || /[. ]$/.test(part)) || skipped(p);
+  p.startsWith("/") || /[^\x20-\x7e]/.test(p) || p.includes("\\") || p.split("/").some((part) => part === "" || part === ".." || /[. ]$/.test(part)) || skipped(p);
 
 // Every file of a generated app that the base copy covers, as sorted relative paths.
 export function listFiles(dir: string, rel = ""): string[] {

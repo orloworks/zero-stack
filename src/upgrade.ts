@@ -36,7 +36,9 @@ function inside(dir: string, root: string, abs: string): boolean {
   }
 }
 const refuseBad = (keys: string[]) => {
-  const bad = keys.find(badPath);
+  const seen = new Set<string>();
+  // Two paths that differ only by case are one file on macOS and Windows: acting on both could delete what was just written.
+  const bad = keys.find((k) => badPath(k) || seen.size === seen.add(k.toLowerCase()).size);
   if (bad) throw new Error(`refusing the path ${JSON.stringify(bad)}: it is not a file of the app's own tree`);
 };
 
