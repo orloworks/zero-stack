@@ -146,6 +146,8 @@ async function upgradeGate(config: Config): Promise<void> {
     const fs = (f: string, edit: (s: string) => string) => writeFileSync(join(app, f), edit(readFileSync(join(app, f), "utf8")));
     fs("src/app/features.ts", (s) => s.replace(/export const FEATURES = \[[^\]]*\] as const;/, "export const FEATURES = [] as const;").replace(/(export const PLAN_FEATURES[^=]*= )\{[^]*?\};/, "$1{};"));
     fs("src/app/plans.ts", (s) => s.replace(/export const PLANS = \[[^]*?\] as const/, "export const PLANS = [] as const"));
+    const emptied = readFileSync(join(app, "src/app/features.ts"), "utf8") + readFileSync(join(app, "src/app/plans.ts"), "utf8");
+    for (const want of ["FEATURES = [] as const", "= {};", "PLANS = [] as const"]) if (!emptied.includes(want)) throw new Error(`the gate could not empty a list: no "${want}" after the edit`);
     await run([process.execPath, "x", "vp", "check", "--fix"], app); // formatting only; the empty lists are what verify must accept
     await run([process.execPath, "run", "verify"], app);
     console.log("gate: with the features, plan features and plans lists emptied, verify passes");
