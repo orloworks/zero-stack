@@ -1,7 +1,7 @@
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, sep } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { type Config, validateFlags } from "./flags";
-import { type BaseCopy, bytesOf, FORMAT_VERSION, type Manifest, RECORD_DIR, skipped, UPGRADE_TMP } from "./manifest";
+import { type BaseCopy, badPath, bytesOf, FORMAT_VERSION, type Manifest, RECORD_DIR, UPGRADE_TMP } from "./manifest";
 import { type Run, run, scaffold } from "./pipeline";
 import { onTerminate } from "./children";
 
@@ -24,17 +24,21 @@ const nestedRun: Run = async (cmd, cwd) => {
 type Plan = { path: string; line: string; write?: { bytes: Buffer; mode?: number }; remove?: true; conflict?: true };
 
 const isLink = (p: string) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };
-// A path may be acted on only when its nearest existing parent folder really is inside the app (a symlinked folder would lead out of it).
-function inside(root: string, abs: string): boolean {
+// A path may be acted on only when its nearest existing parent folder is where its own name says, with no symlink anywhere on the way: a link
+// can lead out of the app, or make two recorded paths the same file.
+function inside(dir: string, root: string, abs: string): boolean {
   let p = dirname(abs);
   while (!existsSync(p) && !isLink(p)) p = dirname(p);
   try {
-    const real = realpathSync(p);
-    return real === root || real.startsWith(root + sep);
+    return realpathSync(p) === join(root, relative(dir, p));
   } catch {
     return false; // a dangling link
   }
 }
+const refuseBad = (keys: string[]) => {
+  const bad = keys.find(badPath);
+  if (bad) throw new Error(`refusing the path ${JSON.stringify(bad)}: it is not a file of the app's own tree`);
+};
 
 // Three-way merge of one text file with git's own file merge. Exit code: conflict count (capped at 127); anything above is an error.
 function merge(scratch: string, path: string, mine: Buffer, base: Buffer, theirs: Buffer, labels: string[]): { bytes: Buffer; conflict: boolean } {
@@ -51,8 +55,14 @@ function merge(scratch: string, path: string, mine: Buffer, base: Buffer, theirs
 // What to do with one path, from the app's file (null: none), its base entry (null: none) and the new version's entry (null: none).
 function decide(dir: string, root: string, scratch: string, path: string, base: BaseCopy[string] | undefined, next: BaseCopy[string] | undefined, labels: string[]): Plan | null {
   const abs = join(dir, path);
-  if (!inside(root, abs)) return { path, line: `kept ${path} (outside your app)`, conflict: true };
-  const stat = existsSync(abs) ? lstatSync(abs) : null;
+  if (!inside(dir, root, abs)) return { path, line: `kept ${path} (outside your app)`, conflict: true };
+  // lstat: a symlink at the path itself (dangling or not) is not a file, and nothing may be written through it.
+  let stat: ReturnType<typeof lstatSync> | null = null;
+  try {
+    stat = lstatSync(abs);
+  } catch (e) {
+    if (!["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "")) throw e; // ENOTDIR: a parent is a file, so the path is free of a file
+  }
   if (stat && !stat.isFile()) return next ? { path, line: `kept ${path} (not a file in your app)`, conflict: true } : null;
   const mine = stat ? readFileSync(abs) : null;
   const was = base && bytesOf(base);
@@ -78,7 +88,7 @@ const readRecord = (dir: string): { manifest: Manifest; base: BaseCopy } | null 
 export async function upgrade(dir: string, log: (line: string) => void = console.log, scaffoldNext: (config: Config, target: string) => Promise<void> = (c, t) => scaffold(c, t, nestedRun)): Promise<number> {
   const root = realpathSync(dir);
   // A linked record folder would send the record, and the folder's removal, somewhere else.
-  for (const p of [RECORD_DIR, UPGRADE_TMP]) if (isLink(join(dir, p))) throw new Error(`${p} is a symbolic link: replace it with a real folder first.`);
+  for (const p of [RECORD_DIR, UPGRADE_TMP, `${RECORD_DIR}/manifest.json`, `${RECORD_DIR}/base.json`]) if (isLink(join(dir, p))) throw new Error(`${p} is a symbolic link: replace it with a real folder first.`);
   const old = readRecord(dir);
   if (!old) throw new Error(`no ${RECORD_DIR}/manifest.json here: this app was made before apps recorded one, or with react, vue or solid. Port it once, or upgrade by hand: ${GUIDE}`);
   if (old.manifest.formatVersion !== FORMAT_VERSION) throw new Error(`the manifest has format ${old.manifest.formatVersion}; this zero-stack reads format ${FORMAT_VERSION}. Run the zero-stack version that made it.`);
@@ -86,6 +96,7 @@ export async function upgrade(dir: string, log: (line: string) => void = console
   if (git(dir, ["status", "--porcelain", "--untracked-files=all"]).stdout.toString().trim()) throw new Error("uncommitted or untracked changes: commit or stash them first, so the upgrade can be undone.");
 
   if (git(dir, ["config", "core.autocrlf"]).stdout.toString().trim() === "true") throw new Error("core.autocrlf is true, so every file differs from its recorded LF copy: run `git config core.autocrlf false` for this app first.");
+  refuseBad(Object.keys(old.base)); // before the temporary scaffold exists
   const tmp = join(dir, UPGRADE_TMP);
   const { config } = validateFlags(old.manifest.config); // a hand-edited manifest still gets the name and flag rules
   const fresh = join(tmp, config.name);
@@ -103,8 +114,7 @@ export async function upgrade(dir: string, log: (line: string) => void = console
     const labels = ["your app", `zero-stack ${old.manifest.zeroStack} (your last upgrade)`, `zero-stack ${next.manifest.zeroStack} (new)`];
     const paths = [...new Set([...Object.keys(old.base), ...Object.keys(next.base)])].sort();
     // Paths come from files the app can edit: never act outside the app's folder.
-    const bad = paths.find((p) => isAbsolute(p) || p.split("/").includes("..") || skipped(p));
-    if (bad) throw new Error(`refusing the path ${JSON.stringify(bad)}: it is not a file of the app's own tree`);
+    refuseBad(paths);
     plans = paths.flatMap((p) => decide(dir, root, join(tmp, "merge"), p, old.base[p], next.base[p], labels) ?? []);
     // Everything is decided before the first write, so a merge error leaves the app untouched.
     try {

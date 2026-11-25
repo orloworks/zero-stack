@@ -22,8 +22,13 @@ const SKIP = new RegExp(
     "^(bun\\.lock|\\.void-wrangler\\.jsonc)$",
     "\\.tsbuildinfo$",
   ].join("|"),
+  "i", // macOS and Windows file systems ignore case: `.GIT/HEAD` is the repository
 );
 export const skipped = (rel: string): boolean => SKIP.test(rel);
+
+// A recorded path the upgrade must never act on: outside the app, held back by the skip list, or spelled so that a file system may read it as something else.
+export const badPath = (p: string): boolean =>
+  p.startsWith("/") || /[\\\0]/.test(p) || p.split("/").some((part) => part === ".." || /[. ]$/.test(part)) || skipped(p);
 
 // Every file of a generated app that the base copy covers, as sorted relative paths.
 export function listFiles(dir: string, rel = ""): string[] {

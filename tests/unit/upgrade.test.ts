@@ -318,3 +318,60 @@ test("a hand-edited manifest with a non-boolean flag is refused", async () => {
   await expect(run(dir, { "a.ts": "2\n" })).rejects.toThrow(/auth must be true or false/);
   expect(read(dir, "a.ts")).toBe("1\n");
 });
+
+test("a symlink at the path itself, dangling or not, is never written through: kept, exit 1, its target is not created", async () => {
+  const dir = makeApp({ "a.ts": "1\n" });
+  const target = join(mkdtempSync(join(tmpdir(), "zs-out-")), "zshenv");
+  symlinkSync(target, join(dir, "new.ts")); // dangling, at a path the new version adds
+  commitAll(dir);
+  const r = await run(dir, { "a.ts": "1\n", "new.ts": "n\n" });
+  expect(r).toEqual({ code: 1, lines: ["kept new.ts (not a file in your app)"] });
+  expect(existsSync(target)).toBe(false);
+});
+
+const tamperBase = (dir: string, key: string) => {
+  const base = JSON.parse(read(dir, ".zero-stack/base.json"));
+  base[key] = { mode: 0o644, encoding: "utf8", content: "x\n" };
+  writeFileSync(join(dir, ".zero-stack/base.json"), JSON.stringify(base, null, 2) + "\n");
+  commitAll(dir);
+};
+
+test("recorded paths that a case-insensitive or odd file system would read as protected or elsewhere are refused, before anything is done", async () => {
+  for (const key of [".GIT/HEAD", ".ENV", "Node_Modules/x.js", "a\\b.ts", "x.ts.", "x /y.ts", "a\0b.ts"]) {
+    const dir = makeApp({ "a.ts": "1\n" });
+    tamperBase(dir, key);
+    let scaffolded = false;
+    await expect(upgrade(dir, () => {}, async () => { scaffolded = true; })).rejects.toThrow(/refusing the path/);
+    expect([key, scaffolded, existsSync(join(dir, ".zero-stack/upgrade-tmp")), read(dir, "a.ts")]).toEqual([key, false, false, "1\n"]);
+  }
+});
+
+test("a symlinked manifest.json or base.json is refused, so the record can't overwrite another app's", async () => {
+  for (const f of ["manifest.json", "base.json"]) {
+    const dir = makeApp({ "a.ts": "1\n" });
+    const other = join(mkdtempSync(join(tmpdir(), "zs-out-")), f);
+    renameSync(join(dir, ".zero-stack", f), other);
+    symlinkSync(other, join(dir, ".zero-stack", f));
+    commitAll(dir);
+    const before = readFileSync(other, "utf8");
+    await expect(run(dir, { "a.ts": "2\n" })).rejects.toThrow(new RegExp(`${f.replace(".", "\\.")} is a symbolic link`));
+    expect(readFileSync(other, "utf8")).toBe(before);
+    expect(read(dir, "a.ts")).toBe("1\n");
+  }
+});
+
+test("a folder linked to another folder of the app is treated as outside: nothing is written or removed through the link", async () => {
+  const dir = makeApp({ "src/x.ts": "1\n", "lib/x.ts": "1\n" });
+  rmSync(join(dir, "lib"), { recursive: true });
+  symlinkSync("src", join(dir, "lib"));
+  commitAll(dir);
+  const r = await run(dir, { "src/x.ts": "2\n", "lib/x.ts": "2\n" });
+  expect(r).toEqual({ code: 1, lines: ["kept lib/x.ts (outside your app)", "replaced src/x.ts"] });
+  expect(read(dir, "src/x.ts")).toBe("2\n");
+  const dir2 = makeApp({ "src/x.ts": "1\n", "lib/x.ts": "1\n" });
+  rmSync(join(dir2, "lib"), { recursive: true });
+  symlinkSync("src", join(dir2, "lib"));
+  commitAll(dir2);
+  const r2 = await run(dir2, { "lib/x.ts": "1\n" }); // src/x.ts removed upstream; the link must not carry a delete of lib/x.ts too
+  expect(r2.lines).toEqual(["kept lib/x.ts (outside your app)", "removed src/x.ts"]);
+});
