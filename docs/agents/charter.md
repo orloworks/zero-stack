@@ -12,11 +12,12 @@ The owner's recorded voice for unattended planning (`/autopilot plan --auto` and
   - Payments: subscriptions, cancel before delete, admin billing and plan-gated features (spec #81; #82, #84, #85).
   - `bun run doctor` (spec #94).
 - **Must**
-  - The dogfood app: one real app built with v0.5.0, `fable-prompt-engine` and `/autopilot run` in its own repo, deployed through the generated setup guide, with the Stripe sandbox checklist. It is the real deploy (#89, #86), and its measurements go in #98.
+  - The dogfood app: one real app built with v0.5.0, `fable-prompt-engine` and `/autopilot run` in its own repo, deployed through the generated setup guide, with the Stripe sandbox checklist. It is the real deploy (#89, #86), and its measurements go in #98. The owner picks the app later; nothing else waits on it.
   - Every break the dogfood app finds, fixed (label `dogfood`; the first is #108).
   - The upgrade seam: app-owned and scaffold-owned files, a manifest, and `zero-stack upgrade` (spec #100; #101, #103, #102, #104, #105).
 - **Should**
   - Email expansion (spec #109; #110–#118): a `--marketing` flag with list sign-up by double opt-in, unsubscribe, an admin Subscribers page, templates with preview and test-send, and campaigns; billing notices switched on in Stripe, none sent by the app.
+  - Central monitoring (#123): a read-only stats route in every app (counts and monthly recurring revenue, never names, emails or ids) behind a per-app secret, an Overview page in the app's own admin, and later a separate small app that polls them all. Planned after the seam.
   - Installable web app with push, `--pwa` (#90), starting with its pass/fail push test.
   - Mobile app with Capacitor, `--mobile` (#79), after #90.
 - **Won't (until a real app asks)**
@@ -74,9 +75,10 @@ Everything under Won't; hosted services run by zero-stack; in-app purchase; team
 
 - **agent:** naming, file layout, copy, test shape, a library already in the stack, gate and matrix changes that keep coverage, fixes for `dogfood` bugs that change no data model.
 - **panel:** new seams, data model and migrations in generated apps, a core user flow, ticket slicing, what a flag includes, which files are app-owned.
-- **human:** a new runtime dependency or paid vendor (the marketing mail provider is one); pricing; anything that reaches real customers, including the first real send of any campaign; merging any payments, auth-model, secrets or consent change (#104, #105, #112, #113, #117, #118); the real deploy and everything in the dogfood app's repo; app-store submissions; lifting a Won't.
+- **human:** a new runtime dependency or paid vendor (the marketing mail provider is one; the owner picks it from a comparison that includes AhaSend); pricing; anything that reaches real customers, including the first real send of any campaign; the real deploy and everything in the dogfood app's repo; entering or changing any secret; live Stripe; app-store submissions; lifting a Won't.
+- **merges (owner, 2026-11-24):** a PR that touches payments, the auth model, secrets handling or email consent merges without asking when all of these hold on its current head: the full matrix is green, the independent review is clean, and `/cso` is clean. The owner is told afterwards. If any of the three is missing or not clean, it waits.
 - **escalate:** the arbiter is low-confidence and the decision is hard to reverse → human.
-- **stop before build:** off for the seam and for `dogfood` bugs. On for the email expansion until the owner has answered its decision list on #92.
+- **stop before build:** off. The email expansion's decisions were answered on 2026-11-24 (recommended answers accepted); only the campaign-send ticket (#118) waits, for the provider choice (#110).
 
 ## Wayfinder notes
 
