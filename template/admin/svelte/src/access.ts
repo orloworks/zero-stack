@@ -12,7 +12,8 @@ export type Feature = (typeof FEATURES)[number];
 type Ctx = Parameters<typeof requireAuth>[0];
 type State = "on" | "off" | "kill";
 type Override = "on" | "off";
-type Snapshot = { global: Partial<Record<Feature, State>>; overrides: Partial<Record<Feature, Override>>; plan: ReadonlySet<Feature> };
+// Keyed by string, not Feature: with the list emptied Feature is never, and a never key cannot be assigned to.
+type Snapshot = { global: Partial<Record<string, State>>; overrides: Partial<Record<string, Override>>; plan: ReadonlySet<Feature> };
 
 const STATES: readonly State[] = ["on", "off", "kill"];
 const OVERRIDES: readonly Override[] = ["on", "off"];

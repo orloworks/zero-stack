@@ -61,7 +61,7 @@ export const PLAN_FEATURES: Partial<Record<(typeof FEATURES)[number], readonly s
 // database: Void loads auth.ts at startup.
 export { PLAN_FEATURES };
 export const featuresForPlan = (plan: string | null): ReadonlySet<Feature> =>
-  new Set(plan ? FEATURES.filter((f) => PLAN_FEATURES[f]?.some((p) => p.toLowerCase() === plan.toLowerCase())) : []);
+  new Set(plan ? FEATURES.filter((f) => (PLAN_FEATURES as Partial<Record<string, readonly string[]>>)[f]?.some((p) => p.toLowerCase() === plan.toLowerCase())) : []);
 const sources: ((userId: string) => Promise<ReadonlySet<Feature>>)[] = [async (userId) => featuresForPlan(await (await import("./billing")).currentPlan(userId))];
 `,
       ACCESS,

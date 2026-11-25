@@ -49,7 +49,7 @@ export async function requirePlan(c: Ctx, plan?: PlanName) {
     console.error("plan check failed", e);
     throw new HTTPException(500, { message: "Internal Server Error" });
   }
-  if (!current || (plan && current !== plan.toLowerCase())) throw new HTTPException(403, { message: "Forbidden" });
+  if (!current || (plan && current !== (plan as string).toLowerCase())) throw new HTTPException(403, { message: "Forbidden" });
   return user;
 }
 
