@@ -482,8 +482,8 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
 - The gate is a harness plus check modules. `scripts/gate.ts` reads the arguments, scaffolds the app and runs a fixed, ordered list of check modules (`scripts/gate/checks/`, cut
   along the gate's blocks, not strictly per flag, because auth, admin and payments each walk one sequence with other flags' steps in it); the harness (`scripts/gate/harness.ts`) owns the
   app under test (dev server, one restart with `.env` edits, one request function, the dev inbox, the local databases, one way to make a user) and holds no test data. What one module
-  leaves for a later one (the auth checks' two invite-only users and mailed link) is returned to `gate.ts` and passed on. The order is load-bearing and modules are not order-independent.
-- Gate checks per flag (`scripts/gate.ts`, HTTP against `vp dev`): `--auth` sign-up, sign-in,
+  leaves for a later one (the first dev server's port; the auth checks' two invite-only users and mailed link) is returned to `gate.ts` and passed on. The order is load-bearing and modules are not order-independent.
+- Gate checks per flag (`scripts/gate/checks/`, HTTP against `vp dev`): `--auth` sign-up, sign-in,
   session, `/settings` signed in and out, wrong then right change-password, other session
   revoked, migration present, `.env` gitignored; `--email` reset mail in the dev inbox, link,
   new password signs in, bad or used token rejected, earlier sessions revoked;
