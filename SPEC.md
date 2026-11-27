@@ -341,8 +341,8 @@ in `AGENTS.md`.
     switch, on for a comped user) and the Billing section.
   - Billing notices (#112, spec #109): Stripe sends them and the app sends none, so nothing is ever sent twice. The human-only Stripe production step (`stripe-live-key`) lists the
     dashboard settings to switch on: successful-payment receipts, upcoming-renewal reminders, trial-ending reminders, the hosted link for payments that need the customer's confirmation, failed card payment emails, expiring-card emails, the
-    Billing automation for a canceled subscription (cancellation confirmation), and Stripe's custom email domain, and says a Stripe sandbox sends no customer emails. The expiring-card setting is named without
-    a second path, because Stripe documents two. No flag, no webhook events, no app mail, no new wizard stage, and the step's secret and doctor row are unchanged.
+    Billing automation for a canceled subscription (cancellation confirmation), and Stripe's custom email domain, and says a Stripe sandbox sends no customer emails. For expiring-card emails Stripe documents two
+    dashboard paths; the guide gives only the Revenue recovery one. No flag, no webhook events, no app mail, no new wizard stage, and the step's secret and doctor row are unchanged.
     The step's why says no Stripe API or CLI command we found reads these settings, so the doctor cannot report them. Appears in `docs/setup.md`, the `AGENTS.md` setup table and the wizard stage only with `--payments`.
 
 Void imports `void/email` and `void/storage` lazily in generated helpers: its plugin loads
