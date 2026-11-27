@@ -249,10 +249,30 @@ export default function authExtension(_env: Record<string, unknown>) {
   };
 }
 `);
+    // #132: a requireAuth route every svelte auth app has for the signed-in helper's proof below (the example routes exist only with --admin).
+    writeFileSync(join(app, "routes/api/gate-whoami.ts"), `import { defineHandler } from "void";
+import { requireAuth } from "void/auth";
+
+export const GET = defineHandler((c) => {
+  const user = requireAuth(c);
+  return c.json({ id: user.id, emailVerified: user.emailVerified });
+});
+`);
     await step(["check", "--fix"]);
   }
   await step(["check"]);
   await step(["build"]);
+  if (config.framework === "svelte" && config.auth) {
+    // #132: nothing of tests/signed-in.ts (the testUtils plugin, a helper) is reachable in a deployed Worker: it is in no built file, and auth.ts does not name it.
+    const built = readdirSync(join(app, "dist"), { recursive: true, encoding: "utf8" }).map((f) => join(app, "dist", f)).filter((f) => statSync(f).isFile());
+    const texts = built.map((f) => [f, readFileSync(f, "utf8")] as const);
+    const leaked = texts.filter(([, t]) => /test-utils|testUtils|tests\/signed-in/.test(t)).map(([f]) => f);
+    // gate-whoami is a route the gate added: finding it proves the scan saw the Worker bundle, not only client assets.
+    if (!texts.some(([, t]) => t.includes("gate-whoami"))) throw new Error(`the build output (${built.length} files) has no Worker bundle (no file names gate-whoami)`);
+    if (leaked.length) throw new Error(`the build output holds the signed-in test helper: ${leaked.join(", ")}`);
+    if (/testUtils|tests\/signed-in/.test(readFileSync(join(app, "auth.ts"), "utf8") + readFileSync(join(app, "src/app/auth.ts"), "utf8"))) throw new Error("the auth config names the test helper");
+    console.log(`gate: the signed-in test helper is in none of the ${built.length} built files and in no auth config`);
+  }
   if (config.tailwind) {
     // The banner only survives if tailwind processed pages/style.css (a raw `@import "tailwindcss"` would not have it).
     const css = readdirSync(join(app, "dist/client/assets")).filter((f) => f.endsWith(".css"))
@@ -615,6 +635,29 @@ export default function authExtension(_env: Record<string, unknown>) {
       const [trusted, foreign] = [await from(GATE_ORIGIN), await from("https://evil.example")];
       if (!trusted.ok || foreign.status !== 403) throw new Error(`trusted origins: the app's origin -> ${trusted.status} (want 200), a foreign origin -> ${foreign.status} (want 403)`);
       console.log("gate: auth extension: the app plugin's hook and database hook run, its trusted origin is trusted, a foreign origin is refused");
+      // #132: the generated tests/signed-in.ts test, plus a test of the gate's own: the helper's cookie gets 200 and emailVerified true from a requireAuth route (a
+      // request with no cookie gets 401), with no captcha, mail or sign-in call, and with --admin an ordinary helper user is 404 on /admin and an admin helper user 200.
+      writeFileSync(join(app, "tests/gate-signed-in.test.ts"), `import { expect, it } from "vite-plus/test";
+import { signedIn } from "./signed-in";
+
+const url = process.env.DEV_URL!;
+it("a requireAuth route accepts the helper's user", async () => {
+  const { headers, user } = await signedIn();
+  const res = await fetch(\`\${url}/api/gate-whoami\`, { headers });
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ id: user.id, emailVerified: true });
+  expect((await fetch(\`\${url}/api/gate-whoami\`)).status).toBe(401);
+}, 60_000);
+${config.admin ? `it("with --admin, only the admin helper user gets /admin", async () => {
+  expect((await fetch(\`\${url}/admin\`, { headers: (await signedIn()).headers })).status).toBe(404);
+  const admin = await signedIn({ admin: true });
+  expect((await fetch(\`\${url}/admin\`, { headers: admin.headers })).status).toBe(200);
+  expect((await signedIn({ email: admin.user.email })).user.id).toBe(admin.user.id);
+}, 60_000);
+` : ""}`);
+      const proof = spawnTracked([vp, "test", "tests/signed-in.test.ts", "tests/gate-signed-in.test.ts"], { cwd: app, stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, DEV_URL: base } });
+      if ((await proof.exited) !== 0) throw new Error("the signed-in helper tests failed against the dev server");
+      console.log(`gate: signed-in helper: a verified user (${config.turnstile ? "Turnstile on, no captcha token" : "no Turnstile"}) gets 200 from a requireAuth route${config.admin ? "; /admin is 404 for an ordinary one and 200 for an admin one" : ""}`);
     }
     // --invite-only: the create hook refuses before any row or mail. The scaffold's list is @example.com; `kept` is an existing user for the restarts below.
     if (config.inviteOnly) {

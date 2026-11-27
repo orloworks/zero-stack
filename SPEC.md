@@ -96,6 +96,37 @@ tests/
   Gate: in every svelte permutation with auth the gate gives the app a plugin with an allowed `init` and one hook, and asserts the hook, the database hook and the trusted origin work over HTTP; the full permutation's existing
   checks (invite-only refusals, cancel-before-delete, the admin guard) run with it present. The `svelte-upgrade` honesty scenario also adds a trusted origin to the extension and expects no conflict.
 
+### Signed-in test user (svelte, with auth; #132)
+
+`tests/signed-in.ts` (scaffold-owned) exports `signedIn({ admin?, email? })`, which returns `{ headers, cookie, cookies, user }` for a verified user the running dev
+server accepts. It is a test-only Better Auth instance with the library's `testUtils` plugin (`better-auth/plugins`), built on `drizzleAdapter` with the app's own
+`.void/better-auth-schema` over the dev server's local database (the miniflare `.sqlite` file under `.void/` that has a `user` table; the same file the gate opens),
+signed with `BETTER_AUTH_SECRET` from `.env`. `saveUser` writes the user (`emailVerified: true`) and `login({ userId })` writes a session row and builds the signed cookie, so
+no captcha, mail or network call is involved and Turnstile makes no difference. Spike result (2026-11-25, Void 1.11.0, better-auth 1.7.28): yes, a second process can share
+the dev server's local database, the cookie is accepted, and no seed fallback was needed. The drizzle adapter, not Kysely, is used so dates are written as the app's
+`timestamp_ms` integers. `admin: true` uses the first `ADMIN_EMAILS` entry (an exact address, or a fresh `admin-<id>` address on a listed `@domain`); the same address again
+returns the same user. It bypasses the sign-up allowlist because it writes the user itself, skips the app's own sign-in checks (a ban, the last-sign-in stamp) and marks an existing address verified. It reads `.env` values without one pair of surrounding quotes (`secrets:pull` writes `KEY='value'`), and refuses to run when more than one local database under `.void/` has a `user` table. `installAuth` declares `better-sqlite3` and `drizzle-orm` (`ADMIN_TEST_DEV_DEPS`) in devDependencies.
+
+- It is reachable nowhere in a deployed Worker: the app never imports it, `auth.ts` and `src/app/auth.ts` never name `testUtils`, and `testUtils` registers no HTTP route.
+- `tests/signed-in.test.ts` uses it against `DEV_URL` (the dev server's origin) and is skipped without it, so `bun run verify` stays offline. `AGENTS.md` documents it, and that the
+  Turnstile test secret is checked by Cloudflare's siteverify, so a test through the real sign-in needs network.
+- Gate: after the build, some built file names `gate-whoami` (so the scan saw the Worker bundle) and none mentions `testUtils`, `test-utils` or `tests/signed-in`, and the auth config does not; then, in every svelte permutation with auth (with and
+  without `--turnstile`), `tests/signed-in.test.ts` and a gate test run against the dev server: the helper's user gets 200 and `emailVerified: true` from a `requireAuth` route
+  the gate adds (`routes/api/gate-whoami.ts`), a request without the cookie gets 401, and with `--admin` an ordinary helper user gets 404 and an admin one 200 on `/admin`.
+
+### Dev server exit (svelte; #133)
+
+`AGENTS.md` of every svelte app has a "Dev server exits right after ready" note: `vp dev` can exit with an `AssertionError` in miniflare's `#handleLoopback` when something on the
+machine (usually a browser tab from another app) holds a WebSocket to the port on a path the app does not route; close that tab or run `vp dev --port <n> --strictPort`. The default
+port stays 5173. Checked by hand on Void 1.11.0 (not a guarantee, no gate step): another port needs no `BETTER_AUTH_URL` change, since sign-up, sign-in and the mailed verification link follow the request's origin.
+React, vue and solid get no note (their output is unchanged). Reporting the assertion to miniflare is for the owner.
+
+### Postgres-ready SQL guidance (svelte; #143)
+
+`AGENTS.md` of every svelte app has a "Keep SQL Postgres-ready" section (guidance only, no helper and no template change): Drizzle's builder, no SQLite-only raw SQL, `lower(col)` for case-insensitive
+search, Drizzle column modes for dates and booleans, `db.batch` is D1-only so keep each atomic write in one function, and the move itself per Void 1.11.0 (`database: 'pg'`, `void/schema-pg`,
+`void db connect --provider neon`, regenerated migrations, data copied by hand). A `--database pg` flag and a proven conversion are not planned.
+
 ## Flags
 
 | Flag | Values | Notes |
