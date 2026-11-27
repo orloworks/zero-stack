@@ -13,6 +13,7 @@ import { adminChecks } from "./gate/checks/admin";
 import { allowlistChecks } from "./gate/checks/allowlist";
 import { authChecks, writeAuthFixtures } from "./gate/checks/auth";
 import { firstDevChecks } from "./gate/checks/first-dev";
+import { marketingChecks } from "./gate/checks/marketing";
 import { paymentsChecks } from "./gate/checks/payments";
 import { secretsChecks } from "./gate/checks/secrets";
 import { scaffoldChecks, staticChecks } from "./gate/checks/static";
@@ -75,6 +76,7 @@ try {
     await allowlistChecks(ctx, invited);
     await adminChecks(ctx);
     await paymentsChecks(ctx, { port });
+    await marketingChecks(ctx); // its admin deletions add audit entries the admin checks count, and it restarts the dev server itself
     await secretsChecks(ctx);
   }
 } catch (e) {

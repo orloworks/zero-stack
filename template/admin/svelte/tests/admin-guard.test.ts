@@ -8,11 +8,12 @@ import { adminGuard } from "../src/admin-guard";
 // The real Better Auth server API over an in-memory database: the guard's hooks run for auth.api calls exactly as for HTTP requests.
 const PW = "correct-horse-battery";
 const SLOW = 30_000; // a loaded machine: the default 5s is for tests that do not build a Better Auth instance
-function setup(opts: { purgeFails?: boolean; auditFails?: boolean; cancelFails?: boolean } = {}) {
+function setup(opts: { purgeFails?: boolean; auditFails?: boolean; cancelFails?: boolean; subscriberFails?: boolean } = {}) {
   const db: Record<string, any[]> = { user: [], session: [], account: [], verification: [] };
   const listed = new Set<string>();
   const audit: any[] = [];
   const purged: string[] = [];
+  const removed: string[] = [];
   const state = { ...opts };
   const auth = betterAuth({
     secret: "test-secret-test-secret-test-secret-123",
@@ -32,6 +33,10 @@ function setup(opts: { purgeFails?: boolean; auditFails?: boolean; cancelFails?:
           if (state.purgeFails) throw new Error("r2 down");
           purged.push(id);
         },
+        removeSubscriber: async (user) => {
+          if (state.subscriberFails) throw new APIError("INTERNAL_SERVER_ERROR", { code: "SUBSCRIBER_REMOVAL_FAILED", message: "d1 down" });
+          removed.push(user.email);
+        },
         cancelBilling: async () => {
           if (state.cancelFails) throw new APIError("INTERNAL_SERVER_ERROR", { code: "BILLING_CANCEL_FAILED", message: "stripe down" });
         },
@@ -47,7 +52,7 @@ function setup(opts: { purgeFails?: boolean; auditFails?: boolean; cancelFails?:
     const cookie = headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
     return { id: row.id as string, row, headers: new Headers({ cookie }) };
   };
-  return { auth, db, listed, audit, purged, state, user };
+  return { auth, db, listed, audit, purged, removed, state, user };
 }
 const status = async (p: Promise<unknown>) => p.then(() => 200, (e) => (e as { statusCode: number }).statusCode);
 const code = async (p: Promise<unknown>) => p.then(() => "ok", (e) => (e as { body?: { code?: string } }).body?.code);
@@ -170,6 +175,20 @@ it("delete cancels billing ahead of the purge: a failed cancel refuses with its 
   t.state.cancelFails = false;
   expect(await status(t.auth.api.removeUser({ headers: boss.headers, body: { userId: victim.id } }))).toBe(200);
   expect(t.purged).toEqual([victim.id]);
+}, SLOW);
+
+it("delete removes the subscriber first: a failed removal refuses with its own code and nothing is cancelled, purged or deleted", async () => {
+  const t = setup({ subscriberFails: true, cancelFails: true });
+  const boss = await t.user("boss@x.com");
+  t.listed.add("boss@x.com");
+  const victim = await t.user("victim@x.com");
+  // cancelBilling would also fail: the subscriber's code wins, so the removal runs first
+  expect(await code(t.auth.api.removeUser({ headers: boss.headers, body: { userId: victim.id } }))).toBe("SUBSCRIBER_REMOVAL_FAILED");
+  expect([t.removed, t.purged, t.audit, t.db.user!.some((u) => u.id === victim.id)]).toEqual([[], [], [], true]);
+  t.state.subscriberFails = false;
+  t.state.cancelFails = false;
+  expect(await status(t.auth.api.removeUser({ headers: boss.headers, body: { userId: victim.id } }))).toBe(200);
+  expect([t.removed, t.purged]).toEqual([["victim@x.com"], [victim.id]]);
 }, SLOW);
 
 it("a self-delete is refused before anything is purged", async () => {

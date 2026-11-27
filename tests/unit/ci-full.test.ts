@@ -102,6 +102,10 @@ test("the matrix runs --admin alone and with --storage, and svelte-all picks it 
   expect(MATRIX.find((p) => p.name === "svelte-admin")?.args).toEqual(["--framework", "svelte", "--admin"]);
   expect(MATRIX.find((p) => p.name === "svelte-admin-storage")?.args).toEqual(["--framework", "svelte", "--admin", "--storage"]);
   expect(MATRIX.find((p) => p.name === "svelte-admin-invite-only")?.args).toEqual(["--framework", "svelte", "--admin", "--invite-only"]);
+  expect(MATRIX.find((p) => p.name === "svelte-marketing")?.args).toEqual(["--framework", "svelte", "--marketing", "--account-deletion"]);
+  expect(MATRIX.find((p) => p.name === "svelte-upgrade-marketing")?.args).toEqual(["--framework", "svelte", "--marketing", "--upgrade"]);
+  expect(MATRIX.find((p) => p.name === "svelte-all")!.args).toContain("--marketing");
+  for (const fw of ["react", "vue", "solid"]) expect(MATRIX.find((p) => p.name === `${fw}-all`)!.args).not.toContain("--marketing");
   expect(MATRIX.find((p) => p.name === "svelte-all")!.args).toContain("--admin");
   for (const fw of ["react", "vue", "solid"]) expect(MATRIX.find((p) => p.name === `${fw}-all`)!.args).not.toContain("--admin");
 });

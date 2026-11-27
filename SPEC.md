@@ -30,9 +30,10 @@ tests/
 3. Validate flags, fail fast with a one-line fix. Implied flags are declared once in
    `FEATURES` (`src/flags.ts`) and each is announced: `--shadcn` enables `--tailwind`;
    `--account-deletion`, `--email`, `--turnstile`, `--storage` and `--secrets` enable `--auth`;
-   `--invite-only` and `--admin` enable `--email` (and so `--auth`).
+   `--invite-only` and `--admin` enable `--email` (and so `--auth`); `--marketing` enables `--admin` and `--turnstile` (and so `--email` and `--auth`): the `requires` field of
+   a `FEATURES` row is one key or a list of keys, and the prompts and the optional config key follow every one.
    `--shadcn` requires `--framework react`; `--account-deletion`, `--email`,
-   `--turnstile`, `--invite-only` and `--admin` require `--framework svelte` (D33).
+   `--turnstile`, `--invite-only`, `--admin`, `--payments` and `--marketing` require `--framework svelte` (D33).
 4. Run pinned `bunx create-void@<pin> <name> --toolchain vite-plus --framework <fw>
    --starter sqlite --deploy none --git`. It always installs and cannot be prevented.
 5. Apply installers by anchored string replace against the known generated output of the
@@ -56,7 +57,7 @@ tests/
   One fixed skip list (`skipped` in `src/manifest.ts`): `.env` and `.env.*`, `node_modules`, `.git`, `dist`, `.void`, `.void-wrangler.jsonc`, `.wrangler`, `.cloudflare`,
   `bun.lock`, `db/migrations`, `*.tsbuildinfo`, `.DS_Store`, and `.zero-stack/` itself. Both files are `JSON.stringify(_, null, 2)` so `vp check` (which scans the folder) passes.
 - **Ownership** (`scaffoldOwned` in `src/ownership.ts`): scaffold-owned are `auth.ts`, `src/` except `src/app/`, `pages/admin/` except `layout.svelte`, `routes/admin/`,
-  `routes/api/admin/`, `routes/api/files/[name].ts`, `middleware/10.admin.ts`, `db/schema/`, `tests/`, `scripts/` and `docs/setup.md`. Everything else is app-owned.
+  `routes/api/admin/`, `routes/api/lists/`, `routes/api/files/[name].ts`, `middleware/10.admin.ts`, `db/schema/`, `tests/`, `scripts/` and `docs/setup.md`. Everything else is app-owned.
   Ownership is a label (the notice, `AGENTS.md`, the report); it does not decide what an upgrade overwrites.
 - **`upgrade`** (`bunx github:orloworks/zero-stack#v<new> upgrade`, in the app; `upgrade` is not a valid app name; no options). Refuses, changing nothing, with no manifest, outside a git
   work tree, or with uncommitted or untracked changes. Scaffolds the running version with the manifest's configuration into `.zero-stack/upgrade-tmp/<name>` (removed first if
@@ -142,6 +143,7 @@ search, Drizzle column modes for dates and booleans, `db.batch` is D1-only so ke
 | `--invite-only` | bool | Svelte only, implies `--email` and `--auth`. Sign-up limited to the `SIGNUP_ALLOWLIST` secret, with a verified email |
 | `--admin` | bool | Svelte only, implies `--email` and `--auth`. Admin area at `/admin`, see below |
 | `--payments` | bool | Svelte only, implies `--auth`. Stripe subscriptions through Better Auth's Stripe plugin (spec #81), see below |
+| `--marketing` | bool | Svelte only, implies `--admin` and `--turnstile` (so `--email` and `--auth`). Mailing lists: join, confirm, leave, and deletion with the account, see below. No marketing mail is sent yet (spec #109, ticket #113) |
 | `--storage` | bool | Any framework, implies `--auth`. R2 per-user file routes and helper |
 | `--secrets` | `infisical` (the only value) | Any framework, implies `--auth`. `secrets:pull` / `secrets:push` against Infisical `dev`, see below |
 
@@ -440,6 +442,51 @@ Scripts: `verify` (`void prepare && vp check && tsc --noEmit && vp build && vp t
 in Node; bindings are unavailable). `AGENTS.md` tells agents to run `verify` before
 finishing. No wrangler files, ever (Void migrates a root `wrangler.jsonc` itself).
 
+## `--marketing` (svelte; spec #109, ticket #113)
+
+The tracer for marketing mail: a person with no account joins a list, confirms from their inbox, and leaves again, and deleting an account takes its subscriber with it.
+**No marketing mail is sent**: the only mail is the one plain-text confirmation, through the transactional sender (`send()` in `src/mail.ts`, which stays for sign-in mail
+and this). Marketing mail never goes through it (ADR 0003). The marketing sender, templates, campaigns, the Account page tick, the sign-up checkbox, the admin Subscribers
+page and posting the form from another site are later tickets.
+
+- **Lists** are declared in `src/app/lists.ts` (app-owned, data only; type-only imports): `LISTS`, each `{ name, label, description }`, shipping `newsletter`. `src/consent.ts` (scaffold-owned) imports and
+  re-exports it. The declarations test checks the file (unique, lower-case names; a label and a description). Rows for an undeclared list are ignored.
+- **Records** (`db/schema/marketing.ts`, re-exported from `db/schema.ts`; migration from `void db generate`). `subscriber`: one row per address, lower case, unique, a random 256-bit
+  unsubscribe token (unique, never expires, not signed), created time; no user id. `consent`: one row per subscriber and list (primary key), the current state only (`pending`, `confirmed`,
+  `unsubscribed`), source, page, the exact wording shown (`label: description`), requested, confirmed and withdrawn times, how it was withdrawn (`link` or `one-click`), a random confirm
+  token (unique, valid seven days from the request, cleared on withdrawal), and the time the last confirmation mail was requested. Asking again overwrites the row.
+- **The consent module** (`src/consent.ts`; pages and routes call its named entry points, never the tables): `requestJoin` (the form), `requestAgain` ("Subscribe again", found by
+  unsubscribe token), `readConfirmation` (a read that never writes), `confirm` (the Confirm press), `unsubscribe` (one list or everything), `removeSubscriber` (throws on failure).
+  The rules are pure, with no database or clock, in `src/lib/consent-core.ts`: `nextConsent(state, event, facts)` and `mayReceive(state)`. Only a Confirm press with a valid token, or a
+  verified user's own choice (an event the core defines and tests; no page uses it yet), reaches `confirmed`; a request for a confirmed address changes and mails nothing; only `confirmed` may
+  receive. Invariant, in the module and tested: every way of adding an address needs a confirmation from that inbox before any marketing mail goes to it.
+- **Joining.** `pages/subscribe.svelte` posts to `POST /api/lists/subscribe` (a route handler, same origin required: a missing or foreign Origin is 403; the other-site form is a later
+  ticket). The server checks the Turnstile token itself (`src/turnstile-verify.ts`: header `x-captcha-response` or the form field `cf-turnstile-response`; an empty token is refused before Cloudflare is
+  called, because the test secret passes anything; no secret, a network error or anything but `success: true` fails closed). The answer is always 200 "Check your inbox to confirm" for any address
+  (400 for a bad address, an unknown list or a failed check; 502 when the mail fails). One mail per address and list per ten minutes, claimed with a conditional write before mailing and freed if
+  the mail fails (the invites pattern), and an app-wide ceiling of 100 an hour counted over `last_mail_at`, logged when hit. The link opens `/confirm?token=`: the GET changes nothing, the
+  Confirm button posts to `POST /api/lists/confirm` (same origin), a link older than seven days says to ask again.
+- **Leaving.** `/unsubscribe?token=&list=` shows "Unsubscribe from <list>" and "Unsubscribe from everything" and reads nothing from the database. `POST /api/lists/unsubscribe?token=&list=` is the one-click route
+  (RFC 8058; the `List-Unsubscribe` header of a later marketing mail points here): no sign-in, cookie or Origin, JSON, form or multipart body (`scope=all` for everything), 200 with no redirect,
+  repeatable, the same answer for an unknown token. **Its exemption is scoped to this one route**: Void applies no origin check to route handlers (page actions get one, Better Auth's covers
+  `/api/auth`), so every other route under `/api/lists/` and every `/api/admin/` route calls `requireSameOrigin`, and this one does not and never reads a session or cookie, acting only on the
+  secret token in its address. "Subscribe again" (`POST /api/lists/resubscribe`, same origin) is a new request: it mails a confirmation and confirms nothing by itself.
+- **Account deletion.** The subscriber and consent rows for the user's email are removed first, ahead of the subscription cancel and the file purge, on both paths: in `deleteUser.beforeDelete`
+  (`--account-deletion`) and as the admin guard's `removeSubscriber` option (the remove-user before-hook), both through `removeSubscriberOrRefuse` (`src/subscriber-removal.ts`). A failed removal
+  refuses the deletion with 500 `SUBSCRIBER_REMOVAL_FAILED` ("Couldn't remove the account's email subscriptions, so the account was not deleted. Try again."), which the Account page and the
+  admin user page already show. No record is kept: the same address subscribing again is pending until confirmed.
+- **Tests** (generated): `tests/consent-core.test.ts` (a table over state, event and facts, and the property that nothing reaches `confirmed` without a Confirm press or a verified user's choice),
+  `tests/consent-db.test.ts` (in-memory SQLite: a double submit mails once, a failed mail frees the slot, reads never write, removal clears both tables and throws when the database fails, a confirmed
+  address changes and mails nothing), `tests/request-helpers.test.ts`, the admin guard test's removal case, and the lists cases in `tests/declarations.test.ts`.
+- **Gate** (`scripts/gate/checks/marketing.ts`, after the payments checks; entries `svelte-marketing` and the full svelte permutation): the pages; no Turnstile token, no Origin and a foreign Origin refused
+  with nothing written; the same answer for a new, pending, confirmed and unsubscribed address; exactly one plain-text confirmation mail (read raw), none inside ten minutes (the throttle and the
+  seven-day expiry are tested by backdating rows), none for a confirmed address; the confirm GET changes nothing, an expired or unknown link and a press with no Origin do not confirm, the press does;
+  the unsubscribe GET changes nothing and the POST with no cookie and no Origin unsubscribes from urlencoded, multipart and JSON bodies, never redirects, repeats and answers an unknown token the
+  same; this list leaves the other alone and everything covers all; "Subscribe again" mails and does not confirm; both deletion paths remove the subscriber and consent rows, and with an aborting
+  trigger on `subscriber` (added and dropped by the gate) the account is not deleted. With `--payments` the payments checks also prove that failing removal leaves the subscription uncancelled and the
+  files intact. `svelte-upgrade-marketing` edits the lists file and upgrades with no conflict.
+- `AGENTS.md` gets a Marketing mail section: where lists are declared, the confirmation invariant, and no marketing mail through the transactional sender.
+
 ## Setup guide
 
 `src/setup.ts` holds one typed step list (`STEPS`): title, why, who (`agent`, `agent-browser`, `human`), action, a verify
@@ -478,7 +525,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   `nice`, shared bun cache, scaffolds skipped when the hash of pins + template is
   unchanged. The matrix (`scripts/matrix.ts`) is every framework with all its valid flags,
   bare, and solo runs per add-on: `svelte-auth`, `svelte-account-deletion`, `svelte-email`,
-  `svelte-turnstile`, `svelte-invite-only`, `svelte-admin`, `svelte-admin-storage`, `svelte-admin-invite-only`, `svelte-payments` (with `--account-deletion`), `svelte-payments-admin`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
+  `svelte-turnstile`, `svelte-invite-only`, `svelte-admin`, `svelte-admin-storage`, `svelte-admin-invite-only`, `svelte-marketing` (with `--account-deletion`), `svelte-upgrade-marketing` (the upgrade honesty scenario with the lists file edited), `svelte-payments` (with `--account-deletion`), `svelte-payments-admin`, `storage`, `svelte-storage-deletion`, `tailwind`, `zod-rpc`.
 - The gate is a harness plus check modules. `scripts/gate.ts` reads the arguments, scaffolds the app and runs a fixed, ordered list of check modules (`scripts/gate/checks/`, cut
   along the gate's blocks, not strictly per flag, because auth, admin and payments each walk one sequence with other flags' steps in it); the harness (`scripts/gate/harness.ts`) owns the
   app under test (dev server, one restart with `.env` edits, one request function, the dev inbox, the local databases, one way to make a user) and holds no test data. What one module
@@ -508,6 +555,7 @@ Local is the gate. No GitHub workflow on push or PR; the only workflow is a
   without a session, upload and download under `users/<id>/`, escaping names rejected, exactly 10 MB stored and 10 MB + 1 byte refused 413 with nothing stored (keys
   read back from the local R2 state), object gone after account deletion; `--payments` with `--account-deletion` and with `--admin`: while the fake Stripe is down (every call, or only the cancel) the deletion answers 500 `BILLING_CANCEL_FAILED` with the user, their subscription rows and (with `--storage`) their files intact, then it cancels the past_due and active subscriptions (ended ones are left alone) and expires the open Checkout session in the fake Stripe, the user, files and subscription rows go, and a late `customer.subscription.deleted` answers 200. The
   `STORAGE_PURGE_FAILED` path is covered by string tests only, not over HTTP.
+  `--marketing` (#113, entry `svelte-marketing`, module `scripts/gate/checks/marketing.ts`, and the payments checks): the list is in the `--marketing` section above; the dev-inbox helper can match a link by path and read the raw message.
 - Each wave also gets one manual svelte `/qa-only` browser pass (gstack browse) on the
   generated app, run by the controller before merge, not by the gate.
 - No Playwright in the gate. gstack browse may be recommended in generated `AGENTS.md` for agents to

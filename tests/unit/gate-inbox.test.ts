@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { firstLink, mailIds } from "../../scripts/gate/inbox";
+import { firstLink, linkByPath, mailIds } from "../../scripts/gate/inbox";
 
 const row = (id: string, subject: string, to: string) =>
   `<tr><td><a href="/__void/inbox/${id}?x=1">${subject}</a></td><td>${to}</td></tr>`;
@@ -35,4 +35,18 @@ test("firstLink returns the first http(s) link with &amp; decoded", () => {
 test("firstLink stops at whitespace and at a tag, and is undefined with no link", () => {
   expect(firstLink("<p>http://a.test/p</p>")).toBe("http://a.test/p");
   expect(firstLink("<p>no link here</p>")).toBeUndefined();
+});
+
+test("linkByPath takes the link with exactly that path, not the first link, and decodes &amp;", () => {
+  const html = "<pre>Confirm:\nhttp://app.test/confirm?token=abc&amp;x=1\n\nUnsubscribe: http://app.test/unsubscribe?token=u1&amp;list=newsletter\nhttps://other.test/confirm</pre>";
+  expect(firstLink(html)).toBe("http://app.test/confirm?token=abc&x=1");
+  expect(linkByPath(html, "/unsubscribe")).toBe("http://app.test/unsubscribe?token=u1&list=newsletter");
+  expect(linkByPath(html, "/confirm")).toBe("http://app.test/confirm?token=abc&x=1");
+});
+
+test("linkByPath matches the whole path, and is undefined with no such link or no links", () => {
+  const html = "<pre>http://app.test/confirm-later?t=1 http://app.test/x/confirm</pre>";
+  expect(linkByPath(html, "/confirm")).toBeUndefined();
+  expect(linkByPath("<p>nothing</p>", "/confirm")).toBeUndefined();
+  expect(linkByPath("<p>http://[bad</p>", "/confirm")).toBeUndefined();
 });

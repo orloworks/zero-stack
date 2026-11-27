@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { argv, FEATURE_LIST, parseFeature, validateFlags } from "../../src/flags";
+import { argv, type Config, FEATURE_LIST, parseFeature, validateFlags } from "../../src/flags";
 
-const base = { admin: false, inviteOnly: false, tailwind: false, shadcn: false, zodRpc: false, auth: false, accountDeletion: false, email: false, turnstile: false, payments: false, storage: false, secrets: false };
+const base = { admin: false, inviteOnly: false, tailwind: false, shadcn: false, zodRpc: false, auth: false, accountDeletion: false, email: false, turnstile: false, payments: false, storage: false, secrets: false, marketing: false };
 
 test("defaults: react, every installer off, no notes", () => {
   expect(validateFlags({ name: "my-app" })).toEqual({
@@ -141,6 +141,32 @@ test("--admin is refused on react, vue and solid, naming svelte", () => {
     expect(() => validateFlags({ name: "x", framework, admin: true })).toThrow(
       `--admin requires --framework svelte (got ${framework}); drop --admin or use --framework svelte.`,
     );
+});
+
+test("--marketing turns on admin, Turnstile, email and auth and announces each; the implies field takes several keys", () => {
+  const r = validateFlags({ name: "x", framework: "svelte", marketing: true });
+  expect(r.config).toMatchObject({ marketing: true, admin: true, turnstile: true, email: true, auth: true });
+  expect(r.notes).toEqual([
+    "--marketing implies --admin; enabling admin area.",
+    "--marketing implies --turnstile; enabling Turnstile.",
+    "--turnstile implies --auth; enabling auth.",
+    "--admin implies --email; enabling email.",
+  ]);
+  expect(validateFlags({ name: "x", framework: "svelte", marketing: true, admin: true, turnstile: true, email: true, auth: true }).notes).toEqual([]);
+  expect(FEATURE_LIST.find((f) => f.flag === "marketing")).toMatchObject({ key: "marketing", requires: ["admin", "turnstile"], frameworks: ["svelte"], prompt: "Add marketing mail (lists, consent, unsubscribe)?" });
+});
+
+test("--marketing is refused on react, vue and solid, naming svelte", () => {
+  for (const framework of ["react", "vue", "solid"])
+    expect(() => validateFlags({ name: "x", framework, marketing: true })).toThrow(
+      `--marketing requires --framework svelte (got ${framework}); drop --marketing or use --framework svelte.`,
+    );
+});
+
+test("the marketing key is optional in a hand-built config", () => {
+  const { marketing: _m, ...rest } = validateFlags({ name: "x", framework: "svelte" }).config;
+  const config: Config = rest; // a type test: this line fails typecheck if the key becomes required
+  expect(config.marketing).toBeUndefined();
 });
 
 test("upgrade is reserved: refused as an app name, with the reason", () => {

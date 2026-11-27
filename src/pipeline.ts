@@ -5,6 +5,7 @@ import { writeAgentFiles } from "./agent-files";
 import type { Config } from "./flags";
 import { installAdmin } from "./installers/admin";
 import { installAuth } from "./installers/auth";
+import { installMarketing } from "./installers/marketing";
 import { installPayments } from "./installers/payments";
 import { ignoreLine } from "./installers/shared";
 import { addNotices } from "./ownership";
@@ -99,6 +100,7 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     if (config.storage) installStorage(targetDir);
     if (config.admin) installAdmin(targetDir, config); // after storage: it edits the upload route
     if (config.payments) installPayments(targetDir, config);
+    if (config.marketing) installMarketing(targetDir); // after admin: it edits the admin schema line and declarations test
     addAppScripts(targetDir, config);
     await exec([process.execPath, "install"], targetDir);
     // Leaves the auth migration generated, not applied to any database.
