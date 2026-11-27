@@ -32,13 +32,13 @@ const files = (dir: string): string[] =>
 
 export const isGreen = (green: Record<string, string>, name: string, h: string, force: boolean) => !force && green[name] === h;
 
-// src/ already contains src/versions.ts. The Node on PATH (not process.versions) is what Void runs on.
+// src/ already contains src/versions.ts; scripts/gate/ holds the gate harness that scripts/gate.ts runs on. The Node on PATH (not process.versions) is what Void runs on.
 export const nodeVersion = (): string => Bun.spawnSync(["node", "--version"], { env: process.env }).stdout.toString();
 
 export function hash(repo: string, args: string[], node: string): string {
   const h = createHash("sha256").update(args.join(" ")).update(Bun.version).update(node);
   const all = [
-    ...files(join(repo, "src")), ...files(join(repo, "template")),
+    ...files(join(repo, "src")), ...files(join(repo, "template")), ...files(join(repo, "scripts/gate")),
     ...["docs/cloudflare-routing.md", "scripts/gate.ts", "package.json", "bun.lock"].map((f) => join(repo, f)),
   ];
   for (const f of all.sort()) h.update(f.slice(repo.length)).update(readFileSync(f));
