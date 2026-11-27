@@ -49,7 +49,7 @@ const age = (email: string, ms: number) => {
 };
 
 beforeEach(() => {
-  sqlite.exec("delete from consent; delete from subscriber; delete from mail_ceiling; drop trigger if exists no_delete");
+  sqlite.exec("delete from consent; delete from subscriber; delete from mail_ceiling; drop trigger if exists no_delete; drop trigger if exists no_restore");
   mail.send.mockReset();
   mail.send.mockImplementation(async () => {});
 });
@@ -68,6 +68,7 @@ it("a double submit mails once", async () => {
   await Promise.all([requestJoin(ANN, LIST, ASK), requestJoin(ANN, LIST, ASK)]);
   expect(mail.send).toHaveBeenCalledTimes(1);
   expect(rows("select * from consent")).toHaveLength(1);
+  expect(rows("select * from subscriber")).toHaveLength(1); // two first-time submits meet at one row
   await requestJoin(ANN, LIST, ASK); // and again inside ten minutes
   expect(mail.send).toHaveBeenCalledTimes(1);
 });
@@ -76,6 +77,7 @@ it("a failed mail frees the throttle slot: a new address leaves no row, a known 
   mail.send.mockRejectedValueOnce(new Error("mail down"));
   await expect(requestJoin(ANN, LIST, ASK)).rejects.toThrow("mail down");
   expect(rows("select * from consent")).toHaveLength(0);
+  expect(rows("select * from subscriber")).toHaveLength(0); // a failed send for a brand-new address keeps no address either
   await requestJoin(ANN, LIST, ASK);
   expect(mail.send).toHaveBeenCalledTimes(2);
   await unsubscribe(tokenOf(ANN), "all", "link");
@@ -116,8 +118,50 @@ it("the hourly ceiling counts real sends: 100 mails to a few addresses, then no 
   expect(rows("select sent from mail_ceiling")).toEqual([{ sent: CEILING_PER_HOUR }]);
   expect(warn).toHaveBeenCalledWith(expect.stringContaining("hourly ceiling"));
   expect(consentOf("new@example.com")).toBeUndefined(); // no mail, no pending row
-  expect(rows("select last_mail_at from subscriber where email = 'new@example.com'")).toEqual([{ last_mail_at: null }]); // and its ten-minute slot was given back
+  expect(rows("select * from subscriber where email = 'new@example.com'")).toHaveLength(0); // an address that is not mailed is not kept
+  expect(rows("select email from subscriber order by email")).toEqual(addresses.map((email) => ({ email }))); // and the ones already mailed (with consent) stay
   warn.mockRestore();
+});
+
+it("no path without a mail keeps a new address, and none deletes a known one: a confirmed address asking again, an address inside its ten minutes, a ceiling refusal", async () => {
+  await requestJoin(ANN, LIST, ASK);
+  await confirm(linkToken());
+  const known = everything();
+  await requestJoin(ANN, LIST, ASK); // confirmed: no mail
+  expect(everything()).toBe(known);
+  const BOB = "bob@example.com";
+  await requestJoin(BOB, LIST, ASK);
+  await requestJoin(BOB, LIST, ASK); // inside ten minutes: no mail
+  expect(rows("select email from subscriber order by email")).toEqual([{ email: ANN }, { email: BOB }]);
+  sqlite.prepare("update mail_ceiling set sent = ?").run(CEILING_PER_HOUR); // the two mails above made this hour's row
+  const before = everything();
+  for (const to of [ANN, BOB]) await requestJoin(to, LIST, ASK); // known addresses under a used-up ceiling
+  expect(everything()).toBe(before);
+  await requestJoin("late@example.com", LIST, ASK);
+  expect(rows("select * from subscriber where email = 'late@example.com'")).toHaveLength(0);
+});
+
+it("a failed send for an existing subscriber never deletes it, and a failed undo does not replace the send error", async () => {
+  await requestJoin(ANN, LIST, ASK);
+  await confirm(linkToken());
+  await unsubscribe(tokenOf(ANN), "all", "link");
+  age(ANN, RESEND_MS + 1000);
+  mail.send.mockRejectedValueOnce(new Error("mail down"));
+  await expect(requestJoin(ANN, LIST, ASK)).rejects.toThrow("mail down");
+  expect(rows("select * from subscriber")).toHaveLength(1);
+  expect(consentOf(ANN)).toMatchObject({ state: "unsubscribed" });
+  // the undo itself fails (the database refuses the update): the caller still gets the send error, and the failed undo is logged
+  age(ANN, RESEND_MS + 1000);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  mail.send.mockImplementationOnce(async () => {
+    // the claim went through; now break the undo, then fail the send
+    sqlite.exec("create trigger no_restore before update on consent begin select raise(abort, 'disk on fire'); end");
+    throw new Error("mail down");
+  });
+  await expect(requestJoin(ANN, LIST, ASK)).rejects.toThrow("mail down");
+  sqlite.exec("drop trigger if exists no_restore");
+  expect(error).toHaveBeenCalledWith(expect.stringContaining("could not give back"), expect.stringContaining("disk on fire"));
+  error.mockRestore();
 });
 
 it("a failed send gives the hourly slot back, along with the address's slot", async () => {

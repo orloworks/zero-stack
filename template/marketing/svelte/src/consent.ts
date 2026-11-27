@@ -46,14 +46,21 @@ async function request(email: string, list: ListDecl, ask: Ask): Promise<void> {
   const now = new Date();
   const since = new Date(now.getTime() - RESEND_MS);
   const hour = hourOf(now);
-  await db.insert(subscriber).values({ id: crypto.randomUUID(), email, unsubscribeToken: randomToken(), createdAt: now, lastMailAt: null }).onConflictDoNothing();
+  // The row is made first because the address's slot lives on it and two first-time requests must meet at one row (the insert is one conditional write: the loser's does
+  // nothing). An address is not kept unless it is mailed: whichever request made the row takes it away again, in one conditional delete, when no mail goes out.
+  const created = (await db.insert(subscriber).values({ id: crypto.randomUUID(), email, unsubscribeToken: randomToken(), createdAt: now, lastMailAt: null }).onConflictDoNothing().returning({ id: subscriber.id })).length === 1;
   const sub = (await db.select().from(subscriber).where(eq(subscriber.email, email)).limit(1))[0]!;
   const row = (await db.select().from(consent).where(and(eq(consent.subscriberId, sub.id), eq(consent.list, list.name))).limit(1))[0];
   const sent = (await db.select({ sent: mailCeiling.sent }).from(mailCeiling).where(eq(mailCeiling.hour, hour)).limit(1))[0]?.sent ?? 0;
   const mailedRecently = !!sub.lastMailAt && sub.lastMailAt > since;
+  // Only a row this request made, still unmailed and with no consent, goes: one that has a mail slot taken or any consent is never deleted here.
+  const dropIfUnused = async () => {
+    if (created) await db.delete(subscriber).where(and(eq(subscriber.id, sub.id), isNull(subscriber.lastMailAt), sql`not exists (select 1 from consent where subscriber_id = ${sub.id})`));
+  };
   const next = nextConsent((row?.state as ConsentState | undefined) ?? null, { kind: "request" }, { mailedRecently, ceilingHit: sent >= CEILING_PER_HOUR });
   if (!next.mail) {
     if (sent >= CEILING_PER_HOUR && !mailedRecently && row?.state !== "confirmed") logCeiling();
+    await dropIfUnused();
     return;
   }
   // 1. The address's slot: one mail per address per ten minutes, whichever list it is for.
@@ -62,7 +69,7 @@ async function request(email: string, list: ListDecl, ask: Ask): Promise<void> {
     .set({ lastMailAt: now })
     .where(and(eq(subscriber.id, sub.id), or(isNull(subscriber.lastMailAt), lt(subscriber.lastMailAt, since))))
     .returning({ id: subscriber.id });
-  if (!slot.length) return;
+  if (!slot.length) return await dropIfUnused();
   const freeSlot = () => db.update(subscriber).set({ lastMailAt: sub.lastMailAt }).where(and(eq(subscriber.id, sub.id), eq(subscriber.lastMailAt, now)));
   // 2. A slot under the hourly ceiling: the counter row is created at 1 or raised by 1, and only while it is under the ceiling.
   const ceiling = await db
@@ -73,7 +80,7 @@ async function request(email: string, list: ListDecl, ask: Ask): Promise<void> {
   if (!ceiling.length) {
     logCeiling();
     await freeSlot();
-    return;
+    return await dropIfUnused();
   }
   const freeCeiling = () => db.update(mailCeiling).set({ sent: sql`${mailCeiling.sent} - 1` }).where(and(eq(mailCeiling.hour, hour), sql`${mailCeiling.sent} > 0`));
   // 3. The consent row.
@@ -89,19 +96,25 @@ async function request(email: string, list: ListDecl, ask: Ask): Promise<void> {
   if (!claimed.length) {
     await freeCeiling(); // confirmed meanwhile, or another request wrote the row first
     await freeSlot();
-    return;
+    return await dropIfUnused();
   }
   try {
     await send(email, "Confirm your subscription", `${ask.origin}/confirm?token=${token}`, `Confirm that you want ${list.label} (${list.description}) at this address. Open this link, then press Confirm:`);
   } catch (e) {
     const mine = and(eq(consent.subscriberId, sub.id), eq(consent.list, list.name), eq(consent.confirmToken, token));
-    if (row) {
-      // a mail that never went out frees every slot and puts the row back
-      const { state, source, page, wording, requestedAt, confirmedAt, withdrawnAt, withdrawnHow, confirmToken } = row;
-      await db.update(consent).set({ state, source, page, wording, requestedAt, confirmedAt, withdrawnAt, withdrawnHow, confirmToken }).where(mine);
-    } else await db.delete(consent).where(mine);
-    await freeCeiling();
-    await freeSlot();
+    try {
+      if (row) {
+        // a mail that never went out frees every slot and puts the row back
+        const { state, source, page, wording, requestedAt, confirmedAt, withdrawnAt, withdrawnHow, confirmToken } = row;
+        await db.update(consent).set({ state, source, page, wording, requestedAt, confirmedAt, withdrawnAt, withdrawnHow, confirmToken }).where(mine);
+      } else await db.delete(consent).where(mine);
+      await freeCeiling();
+      await freeSlot();
+      await dropIfUnused();
+    } catch (undoError) {
+      // the send error is the one the caller needs; the failed undo is logged beside it, never in its place
+      console.error("marketing: could not give back a confirmation mail's slots after the send failed", undoError instanceof Error ? undoError.message : "unknown error");
+    }
     throw e;
   }
 }
