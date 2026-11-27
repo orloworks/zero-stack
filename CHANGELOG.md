@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Generated tests (svelte, `--auth`, #132):** `tests/signed-in.ts` exports `signedIn({ admin?, email? })`, a verified signed-in user for tests that call the running dev server (set `DEV_URL`), with or without `--turnstile` and with no mail or captcha. It uses Better Auth's `testUtils` on the dev server's local database, in a test file only: nothing of it is in a deployed Worker, and the gate checks the build output. `tests/signed-in.test.ts` is the example; `AGENTS.md` documents it.
+- **`AGENTS.md` (svelte, #133):** a "Dev server exits right after ready" note for the miniflare `#handleLoopback` assertion (a stray WebSocket from another tab): close the tab or run on another port with `--strictPort`; no `BETTER_AUTH_URL` change is needed. The default port stays 5173.
+- **`AGENTS.md` (svelte, #143):** a "Keep SQL Postgres-ready" section: guidance for writing D1 code that is easier to move to Postgres (Neon) later. No code change.
 - **Billing notices (`--payments`, #112):** the setup guide's human-only Stripe production step now lists the Stripe emails to switch on (receipts, renewal reminders, payment-confirmation links, failed payment, expiring card and trial-ending emails, the cancellation-confirmation automation, your own email domain) and says a Stripe sandbox sends none. Stripe sends these; the app sends no billing mail and no command can check the toggles. Apps without `--payments`, and react, vue and solid output, are unchanged.
 
 ## v0.6.0 (2026-11-25)

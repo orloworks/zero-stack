@@ -179,3 +179,39 @@ test("production route under dash: a carriage return is still refused and a good
   const good = await route({ FAKE_EXPORT: "A_KEY='secret'\nVITE_X='y'\n", SHELL_BIN: "/bin/dash" });
   expect([good.code, good.synced]).toEqual([0, "A_KEY='secret'\n"]);
 });
+
+test("svelte AGENTS.md says what to do when the dev server exits on the miniflare assertion; react, vue and solid get nothing new (#133)", async () => {
+  const text = async (framework: "svelte" | "react" | "vue" | "solid") => {
+    const dir = join(tmp(), "app");
+    await scaffold({ name: "app", framework, tailwind: false, shadcn: false, zodRpc: false, auth: false }, dir, fake(dir));
+    return readFileSync(join(dir, "AGENTS.md"), "utf8");
+  };
+  const svelte = await text("svelte");
+  for (const s of ["## Dev server exits right after ready", "#handleLoopback", "--strictPort", "BETTER_AUTH_URL"]) expect(svelte).toContain(s);
+  for (const f of ["react", "vue", "solid"] as const) expect(await text(f)).not.toContain("Dev server exits");
+  expect(svelte).toContain("checked by hand on Void 1.11.0");
+});
+
+test("svelte AGENTS.md gets the Keep SQL Postgres-ready section; react, vue and solid do not (#143)", async () => {
+  const text = async (framework: "svelte" | "react" | "vue" | "solid") => {
+    const dir = join(tmp(), "app");
+    await scaffold({ name: "app", framework, tailwind: false, shadcn: false, zodRpc: false, auth: false }, dir, fake(dir));
+    return readFileSync(join(dir, "AGENTS.md"), "utf8");
+  };
+  const svelte = await text("svelte");
+  for (const s of ["## Keep SQL Postgres-ready", "lower(col)", "COLLATE NOCASE", "db.batch", "void/schema-pg", "void db connect --provider neon"]) expect(svelte).toContain(s);
+  for (const f of ["react", "vue", "solid"] as const) expect(await text(f)).not.toContain("Postgres-ready");
+});
+
+test("a svelte app with auth documents signedIn(); one without auth does not (#132)", async () => {
+  const { writeAgentFiles } = await import("../../src/agent-files");
+  const text = async (auth: boolean) => {
+    const dir = tmp();
+    writeFileSync(join(dir, "AGENTS.md"), "# Void\n");
+    writeAgentFiles(dir, { name: "app", framework: "svelte", tailwind: false, shadcn: false, zodRpc: false, auth });
+    return readFileSync(join(dir, "AGENTS.md"), "utf8");
+  };
+  const on = await text(true);
+  for (const s of ["## Tests that need a signed-in user", "tests/signed-in.ts", "signedIn(", "DEV_URL", "Never add `testUtils`", "needs network", "{ headers, cookie, cookies, user }", "skips the app's own sign-in checks"]) expect(on).toContain(s);
+  expect(await text(false)).not.toContain("signed-in");
+});

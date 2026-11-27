@@ -3,7 +3,7 @@ export const CREATE_VOID = "1.11.0";
 export const NODE_RANGE = "^24.22 || >=26.12";
 export const TAILWIND = "4.3.5"; // tailwindcss and @tailwindcss/vite share a version
 export const ZOD = "4.6.7"; // Void's own dev pin; zod is an optional peer of void
-// The --admin and --payments tests import these directly; same ranges as void@1.11.0 so one copy installs.
+// The --admin and --payments tests and the svelte --auth signed-in test helper import these directly; same ranges as void@1.11.0 so one copy installs.
 export const ADMIN_TEST_DEV_DEPS = { "better-sqlite3": "^13.2.0", "drizzle-orm": "^0.45.4" };
 // --payments: Better Auth's Stripe plugin and the stripe SDK (inside the plugin's peer range). better-auth is pinned to the version void's
 // own range (^1.7.25) resolves, which the plugin peers (^1.7.28), so exactly one copy installs; the gate asserts it. Bump all three together.
