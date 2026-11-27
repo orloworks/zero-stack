@@ -39,7 +39,8 @@ export function parseFeature(f: Feature, raw: string | boolean | undefined): boo
 }
 
 // Add-on keys are optional so hand-built configs (test fixtures) need not list them; validateFlags always sets every key.
-type AddOnKey = Extract<(typeof FEATURES)[number], { requires: "auth" | "email" | readonly ["admin", "turnstile"] }>["key"];
+// Every feature that implies another, except shadcn (which implies Tailwind and stays required), however many keys its `requires` lists.
+type AddOnKey = (typeof FEATURES)[number] extends infer R ? (R extends { key: infer K; requires: infer Q } ? ([Q] extends ["tailwind"] ? never : K) : never) : never;
 export type Config = { name: string; framework: Framework } & Record<Exclude<FeatureKey, AddOnKey>, boolean> & Partial<Record<AddOnKey, boolean>>;
 export type FlagInput = Partial<Omit<Config, "framework">> & { name: string; framework?: string };
 

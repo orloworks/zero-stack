@@ -452,9 +452,9 @@ page and posting the form from another site are later tickets.
 - **Lists** are declared in `src/app/lists.ts` (app-owned, data only; type-only imports): `LISTS`, each `{ name, label, description }`, shipping `newsletter`. `src/consent.ts` (scaffold-owned) imports and
   re-exports it. The declarations test checks the file (unique, lower-case names; a label and a description). Rows for an undeclared list are ignored.
 - **Records** (`db/schema/marketing.ts`, re-exported from `db/schema.ts`; migration from `void db generate`). `subscriber`: one row per address, lower case, unique, a random 256-bit
-  unsubscribe token (unique, never expires, not signed), created time; no user id. `consent`: one row per subscriber and list (primary key), the current state only (`pending`, `confirmed`,
+  unsubscribe token (unique, never expires, not signed), created time, and the time the last confirmation mail to it was requested (the per-address throttle); no user id. `mail_ceiling`: one row per clock hour with the count of confirmation mails sent in it. `consent`: one row per subscriber and list (primary key), the current state only (`pending`, `confirmed`,
   `unsubscribed`), source, page, the exact wording shown (`label: description`), requested, confirmed and withdrawn times, how it was withdrawn (`link` or `one-click`), a random confirm
-  token (unique, valid seven days from the request, cleared on withdrawal), and the time the last confirmation mail was requested. Asking again overwrites the row.
+  token (unique, valid seven days from the request, cleared on withdrawal). Asking again overwrites the row.
 - **The consent module** (`src/consent.ts`; pages and routes call its named entry points, never the tables): `requestJoin` (the form), `requestAgain` ("Subscribe again", found by
   unsubscribe token), `readConfirmation` (a read that never writes), `confirm` (the Confirm press), `unsubscribe` (one list or everything), `removeSubscriber` (throws on failure).
   The rules are pure, with no database or clock, in `src/lib/consent-core.ts`: `nextConsent(state, event, facts)` and `mayReceive(state)`. Only a Confirm press with a valid token, or a
@@ -462,16 +462,18 @@ page and posting the form from another site are later tickets.
   receive. Invariant, in the module and tested: every way of adding an address needs a confirmation from that inbox before any marketing mail goes to it.
 - **Joining.** `pages/subscribe.svelte` posts to `POST /api/lists/subscribe` (a route handler, same origin required: a missing or foreign Origin is 403; the other-site form is a later
   ticket). The server checks the Turnstile token itself (`src/turnstile-verify.ts`: header `x-captcha-response` or the form field `cf-turnstile-response`; an empty token is refused before Cloudflare is
-  called, because the test secret passes anything; no secret, a network error or anything but `success: true` fails closed). The answer is always 200 "Check your inbox to confirm" for any address
-  (400 for a bad address, an unknown list or a failed check; 502 when the mail fails). One mail per address and list per ten minutes, claimed with a conditional write before mailing and freed if
-  the mail fails (the invites pattern), and an app-wide ceiling of 100 an hour counted over `last_mail_at`, logged when hit. The link opens `/confirm?token=`: the GET changes nothing, the
+  called, because the test secret passes anything; no secret, a network error or anything but `success: true` fails closed). After the Turnstile and input checks the answer is always an immediate 200 "Check your inbox to confirm"
+  for any address (400 for a bad address, an unknown list or a failed check); the claim and the mail run after the response (`waitUntil`, through `src/lib/after-response.ts`), so neither the status nor the timing depends on who is
+  subscribed, and a send failure is logged, not answered. The address (lower-cased; no `<>,;"`) gets one mail per ten minutes whichever list it is for, and the app at most 100 an hour. Both are claimed with conditional
+  writes before mailing, in this order: `subscriber.last_mail_at`, then a slot in `mail_ceiling` (a counter per clock hour, so the ceiling counts real sends, and a hit is logged), then the consent row; a claim that fails gives back
+  the ones before it, and a mail that fails gives back all three (the invites pattern). The link opens `/confirm?token=`: the GET changes nothing, the
   Confirm button posts to `POST /api/lists/confirm` (same origin), a link older than seven days says to ask again.
 - **Leaving.** `/unsubscribe?token=&list=` shows "Unsubscribe from <list>" and "Unsubscribe from everything" and reads nothing from the database. `POST /api/lists/unsubscribe?token=&list=` is the one-click route
   (RFC 8058; the `List-Unsubscribe` header of a later marketing mail points here): no sign-in, cookie or Origin, JSON, form or multipart body (`scope=all` for everything), 200 with no redirect,
   repeatable, the same answer for an unknown token. **Its exemption is scoped to this one route**: Void applies no origin check to route handlers (page actions get one, Better Auth's covers
   `/api/auth`), so every other route under `/api/lists/` and every `/api/admin/` route calls `requireSameOrigin`, and this one does not and never reads a session or cookie, acting only on the
   secret token in its address. "Subscribe again" (`POST /api/lists/resubscribe`, same origin) is a new request: it mails a confirmation and confirms nothing by itself.
-- **Account deletion.** The subscriber and consent rows for the user's email are removed first, ahead of the subscription cancel and the file purge, on both paths: in `deleteUser.beforeDelete`
+- **Account deletion.** For a **verified** account, the subscriber and consent rows for the user's email are removed first (an unverified account does not own its address: sign-up does not wait for verification, so deleting a squatter's account must not wipe the real owner's subscription, and it leaves them alone), ahead of the subscription cancel and the file purge, on both paths: in `deleteUser.beforeDelete`
   (`--account-deletion`) and as the admin guard's `removeSubscriber` option (the remove-user before-hook), both through `removeSubscriberOrRefuse` (`src/subscriber-removal.ts`). A failed removal
   refuses the deletion with 500 `SUBSCRIBER_REMOVAL_FAILED` ("Couldn't remove the account's email subscriptions, so the account was not deleted. Try again."), which the Account page and the
   admin user page already show. No record is kept: the same address subscribing again is pending until confirmed.
@@ -483,7 +485,7 @@ page and posting the form from another site are later tickets.
   seven-day expiry are tested by backdating rows), none for a confirmed address; the confirm GET changes nothing, an expired or unknown link and a press with no Origin do not confirm, the press does;
   the unsubscribe GET changes nothing and the POST with no cookie and no Origin unsubscribes from urlencoded, multipart and JSON bodies, never redirects, repeats and answers an unknown token the
   same; this list leaves the other alone and everything covers all; "Subscribe again" mails and does not confirm; both deletion paths remove the subscriber and consent rows, and with an aborting
-  trigger on `subscriber` (added and dropped by the gate) the account is not deleted. With `--payments` the payments checks also prove that failing removal leaves the subscription uncancelled and the
+  trigger on `subscriber` (added and dropped by the gate) the account is not deleted; an unverified account's deletion leaves the address's confirmed subscription alone. With `--payments` the payments checks also prove that failing removal leaves the subscription uncancelled and the
   files intact. `svelte-upgrade-marketing` edits the lists file and upgrades with no conflict.
 - `AGENTS.md` gets a Marketing mail section: where lists are declared, the confirmation invariant, and no marketing mail through the transactional sender.
 

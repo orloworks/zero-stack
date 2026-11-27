@@ -11,7 +11,7 @@ export { LISTS };
 
 export const CHECK_INBOX = "Check your inbox to confirm";
 export const CONFIRM_TTL_MS = 7 * 24 * 60 * 60 * 1000; // a confirmation link is good for seven days
-export const RESEND_MS = 10 * 60 * 1000; // at most one confirmation mail per address and list in ten minutes
+export const RESEND_MS = 10 * 60 * 1000; // at most one confirmation mail per address in ten minutes, whichever list it is for
 export const CEILING_PER_HOUR = 100; // and at most this many in an hour, app-wide
 // What the Account page and the admin delete show when removing the subscriber fails: the deletion is refused.
 export const SUBSCRIBER_REMOVAL_FAILED = {
@@ -27,56 +27,90 @@ const wordingOf = (l: ListDecl) => `${l.label}: ${l.description}`;
 
 export function normalizeEmail(raw: unknown): string | null {
   const e = typeof raw === "string" ? raw.trim().toLowerCase() : "";
-  return e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : null;
+  // No markup, list separators or quotes: an address like that is not worth a mail.
+  return e.length <= 254 && /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/.test(e) ? e : null;
 }
 const tokenOf = (raw: unknown): string | null => (typeof raw === "string" && raw.length > 0 && raw.length <= 200 ? raw : null);
 const randomToken = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 
 type Ask = { origin: string; page: string }; // the app's own origin (for the link) and the page the person was asked on
 
-// The one way a confirmation mail is requested. Claim-then-mail-then-free, as the invites module does: the claim is one conditional write, so two requests at once
-// mail once; a mail that fails frees the slot, so the next request can try again.
+const logCeiling = () => console.warn(`marketing: the hourly ceiling of ${CEILING_PER_HOUR} confirmation mails is reached; a request was not mailed`);
+const hourOf = (d: Date) => Math.floor(d.getTime() / (60 * 60 * 1000));
+
+// The one way a confirmation mail is requested. Claim-then-mail-then-free, as the invites module does. Three claims, each one conditional write, taken in this order:
+// the address's ten-minute slot (subscriber.last_mail_at), then a slot under the app-wide hourly ceiling (mail_ceiling, a counter per clock hour), then the consent row.
+// A claim that fails gives back the ones before it and sends nothing, so two requests at once mail once and the ceiling counts real sends; a mail that fails gives all of them back.
 async function request(email: string, list: ListDecl, ask: Ask): Promise<void> {
-  const { db, eq, and, or, ne, isNull, lt, gt, count, subscriber, consent } = await store();
+  const { db, eq, and, or, ne, isNull, lt, sql, subscriber, consent, mailCeiling } = await store();
   const now = new Date();
   const since = new Date(now.getTime() - RESEND_MS);
-  const sub = (await db.select().from(subscriber).where(eq(subscriber.email, email)).limit(1))[0];
-  const row = sub && (await db.select().from(consent).where(and(eq(consent.subscriberId, sub.id), eq(consent.list, list.name))).limit(1))[0];
-  // shortcut: counts rows mailed in the last hour, so one address mailed twice in the hour counts once; make it a counter if an app needs the exact number.
-  const [{ n }] = await db.select({ n: count() }).from(consent).where(gt(consent.lastMailAt, new Date(now.getTime() - 60 * 60 * 1000)));
-  const mailedRecently = !!row?.lastMailAt && row.lastMailAt > since;
-  const ceilingHit = n >= CEILING_PER_HOUR;
-  const next = nextConsent((row?.state as ConsentState | undefined) ?? null, { kind: "request" }, { mailedRecently, ceilingHit });
+  const hour = hourOf(now);
+  await db.insert(subscriber).values({ id: crypto.randomUUID(), email, unsubscribeToken: randomToken(), createdAt: now, lastMailAt: null }).onConflictDoNothing();
+  const sub = (await db.select().from(subscriber).where(eq(subscriber.email, email)).limit(1))[0]!;
+  const row = (await db.select().from(consent).where(and(eq(consent.subscriberId, sub.id), eq(consent.list, list.name))).limit(1))[0];
+  const sent = (await db.select({ sent: mailCeiling.sent }).from(mailCeiling).where(eq(mailCeiling.hour, hour)).limit(1))[0]?.sent ?? 0;
+  const mailedRecently = !!sub.lastMailAt && sub.lastMailAt > since;
+  const next = nextConsent((row?.state as ConsentState | undefined) ?? null, { kind: "request" }, { mailedRecently, ceilingHit: sent >= CEILING_PER_HOUR });
   if (!next.mail) {
-    if (ceilingHit && !mailedRecently && row?.state !== "confirmed") console.warn(`marketing: the hourly ceiling of ${CEILING_PER_HOUR} confirmation mails is reached; a request was not mailed`);
+    if (sent >= CEILING_PER_HOUR && !mailedRecently && row?.state !== "confirmed") logCeiling();
     return;
   }
-  let subscriberId = sub?.id;
-  if (!subscriberId) {
-    await db.insert(subscriber).values({ id: crypto.randomUUID(), email, unsubscribeToken: randomToken(), createdAt: now }).onConflictDoNothing();
-    subscriberId = (await db.select({ id: subscriber.id }).from(subscriber).where(eq(subscriber.email, email)).limit(1))[0]!.id;
+  // 1. The address's slot: one mail per address per ten minutes, whichever list it is for.
+  const slot = await db
+    .update(subscriber)
+    .set({ lastMailAt: now })
+    .where(and(eq(subscriber.id, sub.id), or(isNull(subscriber.lastMailAt), lt(subscriber.lastMailAt, since))))
+    .returning({ id: subscriber.id });
+  if (!slot.length) return;
+  const freeSlot = () => db.update(subscriber).set({ lastMailAt: sub.lastMailAt }).where(and(eq(subscriber.id, sub.id), eq(subscriber.lastMailAt, now)));
+  // 2. A slot under the hourly ceiling: the counter row is created at 1 or raised by 1, and only while it is under the ceiling.
+  const ceiling = await db
+    .insert(mailCeiling)
+    .values({ hour, sent: 1 })
+    .onConflictDoUpdate({ target: mailCeiling.hour, set: { sent: sql`${mailCeiling.sent} + 1` }, setWhere: lt(mailCeiling.sent, CEILING_PER_HOUR) })
+    .returning({ hour: mailCeiling.hour });
+  if (!ceiling.length) {
+    logCeiling();
+    await freeSlot();
+    return;
   }
+  const freeCeiling = () => db.update(mailCeiling).set({ sent: sql`${mailCeiling.sent} - 1` }).where(and(eq(mailCeiling.hour, hour), sql`${mailCeiling.sent} > 0`));
+  // 3. The consent row.
   const token = randomToken();
-  const fresh = { state: "pending", source: "form", page: ask.page, wording: wordingOf(list), requestedAt: now, confirmedAt: null, withdrawnAt: null, withdrawnHow: null, confirmToken: token, lastMailAt: now };
+  const fresh = { state: "pending", source: "form", page: ask.page, wording: wordingOf(list), requestedAt: now, confirmedAt: null, withdrawnAt: null, withdrawnHow: null, confirmToken: token };
   const claimed = row
     ? await db
         .update(consent)
         .set(fresh)
-        .where(and(eq(consent.subscriberId, subscriberId), eq(consent.list, list.name), ne(consent.state, "confirmed"), or(isNull(consent.lastMailAt), lt(consent.lastMailAt, since))))
+        .where(and(eq(consent.subscriberId, sub.id), eq(consent.list, list.name), ne(consent.state, "confirmed")))
         .returning({ id: consent.subscriberId })
-    : await db.insert(consent).values({ subscriberId, list: list.name, ...fresh }).onConflictDoNothing().returning({ id: consent.subscriberId });
-  if (!claimed.length) return; // another request got the slot, or the address is confirmed now
+    : await db.insert(consent).values({ subscriberId: sub.id, list: list.name, ...fresh }).onConflictDoNothing().returning({ id: consent.subscriberId });
+  if (!claimed.length) {
+    await freeCeiling(); // confirmed meanwhile, or another request wrote the row first
+    await freeSlot();
+    return;
+  }
   try {
     await send(email, "Confirm your subscription", `${ask.origin}/confirm?token=${token}`, `Confirm that you want ${list.label} (${list.description}) at this address. Open this link, then press Confirm:`);
   } catch (e) {
-    const mine = and(eq(consent.subscriberId, subscriberId), eq(consent.list, list.name), eq(consent.confirmToken, token));
+    const mine = and(eq(consent.subscriberId, sub.id), eq(consent.list, list.name), eq(consent.confirmToken, token));
     if (row) {
-      // a mail that never went out frees the slot and puts the row back
-      const { state, source, page, wording, requestedAt, confirmedAt, withdrawnAt, withdrawnHow, confirmToken, lastMailAt } = row;
-      await db.update(consent).set({ state, source, page, wording, requestedAt, confirmedAt, withdrawnAt, withdrawnHow, confirmToken, lastMailAt }).where(mine);
+      // a mail that never went out frees every slot and puts the row back
+      const { state, source, page, wording, requestedAt, confirmedAt, withdrawnAt, withdrawnHow, confirmToken } = row;
+      await db.update(consent).set({ state, source, page, wording, requestedAt, confirmedAt, withdrawnAt, withdrawnHow, confirmToken }).where(mine);
     } else await db.delete(consent).where(mine);
+    await freeCeiling();
+    await freeSlot();
     throw e;
   }
+}
+
+// What a route checks before it answers, so the answer does not wait for the work: the address and the list, or why they are refused.
+export function parseJoin(rawEmail: unknown, listName: unknown): { email: string; list: ListDecl } | "bad-email" | "bad-list" {
+  const email = normalizeEmail(rawEmail);
+  const list = findList(listName);
+  return !email ? "bad-email" : !list ? "bad-list" : { email, list };
 }
 
 // The subscribe form. Returns nothing that depends on the address (a refused address or list is a refusal of the input, not of who is subscribed).

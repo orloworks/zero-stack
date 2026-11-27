@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { expect, it, vi } from "vite-plus/test";
+import { afterResponse } from "../src/lib/after-response";
 import { fields } from "../src/lib/fields";
 import { verifyTurnstile } from "../src/turnstile-verify";
 
@@ -40,6 +41,18 @@ it("passes only on success true, and posts the secret and token to siteverify", 
   expect(await verifyTurnstile("token", "secret", answer({ success: false }))).toBe(false);
   expect(await verifyTurnstile("token", "secret", answer({ success: "true" }))).toBe(false);
   expect(await verifyTurnstile("token", "secret", answer({}))).toBe(false);
+});
+
+it("afterResponse hands the work to waitUntil, logs a failure instead of throwing, and copes with no execution context", async () => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const held: Promise<unknown>[] = [];
+  afterResponse({ executionCtx: { waitUntil: (p) => void held.push(p) } }, Promise.reject(new Error("mail down")), "a send");
+  expect(held).toHaveLength(1);
+  await held[0];
+  expect(error).toHaveBeenCalledWith("a send failed", "mail down");
+  const none = { get executionCtx(): never { throw new Error("no execution context"); } };
+  afterResponse(none, Promise.resolve(), "nothing"); // runs on its own; no throw
+  error.mockRestore();
 });
 
 it("fails closed on a non-2xx answer, a body that is not JSON and a network error", async () => {

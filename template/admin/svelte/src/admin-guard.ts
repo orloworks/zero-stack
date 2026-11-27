@@ -27,7 +27,7 @@ export type GuardOptions = {
   purge?: (userId: string) => Promise<void>;
   // Removes the user's marketing subscriber and consent; given only with --marketing. It throws the 500 itself, and runs ahead of the billing cancel and the purge,
   // so a failed removal leaves the billing and the files too.
-  removeSubscriber?: (user: { id: string; email: string }) => Promise<void>;
+  removeSubscriber?: (user: { id: string; email: string; emailVerified?: boolean | null }) => Promise<void>;
   // Cancels the user's Stripe subscriptions; given only with --payments. It throws the 500 itself, and runs ahead of the purge so a failure leaves the files too.
   cancelBilling?: (userId: string) => Promise<void>;
 };

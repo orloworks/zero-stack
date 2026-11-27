@@ -55,7 +55,11 @@ export async function marketingChecks(ctx: Ctx): Promise<void> {
     const q = <T,>(sql: string, ...args: (string | number)[]) => h.withDb("consent", (d) => d.query(sql).all(...args) as T[], { readonly: true });
     const consent = (email: string) => q<Record<string, any>>("SELECT c.* FROM consent c JOIN subscriber s ON s.id = c.subscriber_id WHERE s.email = ? ORDER BY c.list", email.toLowerCase());
     const unsubToken = (email: string) => q<{ t: string }>("SELECT unsubscribe_token AS t FROM subscriber WHERE email = ?", email.toLowerCase())[0]!.t;
-    const age = (email: string, ms: number) => h.withDb("consent", (d) => d.run("UPDATE consent SET last_mail_at = last_mail_at - ?1, requested_at = requested_at - ?1 WHERE subscriber_id = (SELECT id FROM subscriber WHERE email = ?2)", [ms, email.toLowerCase()]));
+    // Moves the address's times back: its last confirmation mail (the ten-minute throttle) and its consent requests (the seven-day expiry).
+    const age = (email: string, ms: number) => h.withDb("consent", (d) => {
+      d.run("UPDATE subscriber SET last_mail_at = last_mail_at - ?1 WHERE email = ?2", [ms, email.toLowerCase()]);
+      d.run("UPDATE consent SET requested_at = requested_at - ?1 WHERE subscriber_id = (SELECT id FROM subscriber WHERE email = ?2)", [ms, email.toLowerCase()]);
+    });
     const mails = (email: string) => h.mailUrls(SUBJECT, email, b, "/confirm");
     const settled = async (email: string, n: number, what: string) => { // `n` mails have arrived and no more do
       check((await h.waitMails(SUBJECT, email, n, b, "/confirm")).length === n, `${what}: expected ${n} confirmation mail(s) for ${email}`);
@@ -199,8 +203,24 @@ export async function marketingChecks(ctx: Ctx): Promise<void> {
       check(!h.hasUser(mail) && left.subscribers === 0 && left.consents === 0, `${how} left the user or the subscriber rows (${JSON.stringify(left)})`);
       // Nothing of the old consent is kept: the same address subscribing again starts pending and needs its own confirmation.
       check((await subscribe(mail)).status === 200, `${how}: subscribing the deleted address again failed`);
+      await settled(mail, 1, `${how}: the deleted address subscribing again`);
       check(consent(mail).length === 1 && consent(mail)[0]!.state === "pending" && consent(mail)[0]!.confirmed_at === null, `${how}: the address subscribing again is not pending (${JSON.stringify(consent(mail))})`);
       console.log(`gate: marketing: ${how} stops with 500 SUBSCRIBER_REMOVAL_FAILED while the removal fails (account, subscriber and consent untouched), then removes the subscriber and consent rows with the account; the address subscribing again is pending`);
+    }
+
+    // 8. An UNVERIFIED account does not own its address: sign-up does not wait for verification, so a visitor can register someone else's address. Deleting that account,
+    // by an admin or (where an unverified user can sign in) by itself, deletes the account and leaves the real owner's confirmed subscription alone.
+    for (const how of config.accountDeletion && !config.inviteOnly ? (["self-service deletion", "admin removal"] as const) : (["admin removal"] as const)) {
+      const squat = addr(how === "admin removal" ? "squatter-admin" : "squatter-self");
+      seedSubscriber(h, squat, "confirmed", ["newsletter"]); // the real owner's confirmed subscription
+      const cookie = await h.makeUser(squat, { password: GATE_PW, base: b, inviteLink: false, markVerified: false });
+      const uid = h.idOf(squat);
+      check(h.hasUser(squat) && !(await h.withDb("user", (d) => (d.query("SELECT emailVerified AS v FROM user WHERE id = ?").get(uid) as { v: number }).v, { readonly: true })), `${how}: the squatter's account is verified`);
+      const gone = await (how === "admin removal" ? h.request("/api/auth/admin/remove-user", { body: { userId: uid }, cookie: bossCookie }) : h.authPost("/api/auth/delete-user", { password: GATE_PW }, b, cookie));
+      check(gone.ok, `${how} of an unverified account -> ${gone.status}`);
+      const kept = subscriberCounts(h, squat);
+      check(!h.hasUser(squat) && kept.subscribers === 1 && kept.consents === 1 && consent(squat)[0]!.state === "confirmed", `${how} of an unverified account removed or changed the address's subscription (${JSON.stringify(kept)})`);
+      console.log(`gate: marketing: ${how} of an unverified account deletes it and leaves the address's confirmed subscription alone`);
     }
   } finally {
     writeFileSync(envFile, original);

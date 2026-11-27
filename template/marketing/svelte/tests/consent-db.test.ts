@@ -4,14 +4,17 @@ import { beforeEach, expect, it, vi } from "vite-plus/test";
 // D1 runs a batch as one transaction; the stand-in does the same, so a removal that fails half way leaves both tables as they were.
 const mail = vi.hoisted(() => ({ send: vi.fn(async (..._a: unknown[]) => {}) }));
 vi.mock("../src/mail", () => mail);
+// Two lists, so the per-address throttle can be tested; the app's own file is checked by the declarations test.
+vi.mock("../src/app/lists", () => ({ LISTS: [{ name: "first", label: "First list", description: "The first." }, { name: "second", label: "Second list", description: "The second." }] }));
 vi.mock("void/db", async () => {
   const { default: Database } = await import("better-sqlite3");
   const { drizzle } = await import("drizzle-orm/better-sqlite3");
   const orm = await import("drizzle-orm");
   const sqlite = new Database(":memory:");
   sqlite.exec(`
-    create table subscriber (id text primary key, email text not null unique, unsubscribe_token text not null unique, created_at integer not null);
-    create table consent (subscriber_id text not null references subscriber(id) on delete cascade, list text not null, state text not null, source text not null, page text not null, wording text not null, requested_at integer not null, confirmed_at integer, withdrawn_at integer, withdrawn_how text, confirm_token text unique, last_mail_at integer, primary key (subscriber_id, list));`);
+    create table subscriber (id text primary key, email text not null unique, unsubscribe_token text not null unique, created_at integer not null, last_mail_at integer);
+    create table mail_ceiling (hour integer primary key, sent integer not null);
+    create table consent (subscriber_id text not null references subscriber(id) on delete cascade, list text not null, state text not null, source text not null, page text not null, wording text not null, requested_at integer not null, confirmed_at integer, withdrawn_at integer, withdrawn_how text, confirm_token text unique, primary key (subscriber_id, list));`);
   const db = drizzle(sqlite);
   const exec = (q: { all(): unknown; run(): unknown }) => {
     try {
@@ -39,10 +42,14 @@ const consentOf = (email: string) => rows("select c.* from consent c join subscr
 const tokenOf = (email: string) => (rows("select unsubscribe_token t from subscriber where email = ?", email)[0] as { t: string }).t;
 const linkToken = (n = -1) => new URL(String(mail.send.mock.calls.at(n)![2])).searchParams.get("token")!;
 const everything = () => JSON.stringify([rows("select * from subscriber order by email"), rows("select * from consent order by confirm_token")]);
-const age = (email: string, ms: number) => sqlite.prepare("update consent set last_mail_at = last_mail_at - ?, requested_at = requested_at - ? where subscriber_id = (select id from subscriber where email = ?)").run(ms, ms, email);
+// Moves the address's times back: its last confirmation mail (the throttle) and its consent requests (the seven-day expiry).
+const age = (email: string, ms: number) => {
+  sqlite.prepare("update subscriber set last_mail_at = last_mail_at - ? where email = ?").run(ms, email);
+  sqlite.prepare("update consent set requested_at = requested_at - ? where subscriber_id = (select id from subscriber where email = ?)").run(ms, email);
+};
 
 beforeEach(() => {
-  sqlite.exec("delete from consent; delete from subscriber; drop trigger if exists no_delete");
+  sqlite.exec("delete from consent; delete from subscriber; delete from mail_ceiling; drop trigger if exists no_delete");
   mail.send.mockReset();
   mail.send.mockImplementation(async () => {});
 });
@@ -93,16 +100,53 @@ it("a second request inside ten minutes mails nothing; after ten minutes it mail
   expect((await readConfirmation(first)).status).toBe("unknown"); // the old link was replaced
 });
 
-it("the hourly ceiling stops further mail and is logged when hit", async () => {
+it("the hourly ceiling counts real sends: 100 mails to a few addresses, then no more, and the hit is logged", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const now = Date.now();
-  sqlite.prepare("insert into subscriber values ('s0', 'x@example.com', 't0', ?)").run(now);
-  for (let i = 0; i < CEILING_PER_HOUR; i++) sqlite.prepare("insert into consent values ('s0', ?, 'pending', 'form', '/', 'w', ?, null, null, null, ?, ?)").run(`l${i}`, now, `c${i}`, now);
+  const addresses = ["a@example.com", "b@example.com", "c@example.com"];
+  for (let i = 0; i < CEILING_PER_HOUR; i++) {
+    const to = addresses[i % 3]!;
+    await requestJoin(to, LIST, ASK);
+    age(to, RESEND_MS + 1000); // the ten minutes pass, the hour does not
+  }
+  expect(mail.send).toHaveBeenCalledTimes(CEILING_PER_HOUR);
+  expect(rows("select sent from mail_ceiling")).toEqual([{ sent: CEILING_PER_HOUR }]);
   await requestJoin("new@example.com", LIST, ASK);
-  expect(mail.send).not.toHaveBeenCalled();
-  expect(rows("select * from subscriber where email = 'new@example.com'")).toHaveLength(0);
+  await requestJoin(addresses[0]!, LIST, ASK);
+  expect(mail.send).toHaveBeenCalledTimes(CEILING_PER_HOUR);
+  expect(rows("select sent from mail_ceiling")).toEqual([{ sent: CEILING_PER_HOUR }]);
   expect(warn).toHaveBeenCalledWith(expect.stringContaining("hourly ceiling"));
+  expect(consentOf("new@example.com")).toBeUndefined(); // no mail, no pending row
+  expect(rows("select last_mail_at from subscriber where email = 'new@example.com'")).toEqual([{ last_mail_at: null }]); // and its ten-minute slot was given back
   warn.mockRestore();
+});
+
+it("a failed send gives the hourly slot back, along with the address's slot", async () => {
+  await requestJoin(ANN, LIST, ASK);
+  expect(rows("select sent from mail_ceiling")).toEqual([{ sent: 1 }]);
+  age(ANN, RESEND_MS + 1000);
+  mail.send.mockRejectedValueOnce(new Error("mail down"));
+  await expect(requestJoin(ANN, LIST, ASK)).rejects.toThrow("mail down");
+  expect(rows("select sent from mail_ceiling")).toEqual([{ sent: 1 }]);
+  await requestJoin(ANN, LIST, ASK); // the slot is free again
+  expect(rows("select sent from mail_ceiling")).toEqual([{ sent: 2 }]);
+});
+
+it("the ten-minute throttle is per address: the same address asking for two lists gets one mail", async () => {
+  const [one, two] = LISTS.map((l) => l.name);
+  expect(two).toBeDefined();
+  await requestJoin(ANN, one, ASK);
+  await requestJoin(ANN, two, ASK);
+  expect(mail.send).toHaveBeenCalledTimes(1);
+  expect(rows("select list from consent")).toEqual([{ list: one }]); // the refused request wrote nothing
+  age(ANN, RESEND_MS + 1000);
+  await requestJoin(ANN, two, ASK);
+  expect(mail.send).toHaveBeenCalledTimes(2);
+  expect(rows("select list from consent order by list").length).toBe(2);
+});
+
+it("addresses with markup, separators or quotes are refused", async () => {
+  for (const bad of ["a<b>@example.com", "a@exa>mple.com", "a,b@example.com", "a@example.com,b@example.com", "a;b@example.com", 'a"b@example.com']) expect(await requestJoin(bad, LIST, ASK)).toBe("bad-email");
+  expect(mail.send).not.toHaveBeenCalled();
 });
 
 it("a request for a confirmed address changes and mails nothing", async () => {
@@ -154,7 +198,7 @@ it("unsubscribe from this list or everything takes effect at once, is repeatable
   await requestJoin(ANN, LIST, ASK);
   const link = linkToken();
   await confirm(link);
-  sqlite.prepare("insert into consent select subscriber_id, 'other', 'confirmed', source, page, wording, requested_at, confirmed_at, null, null, 'tok-other', null from consent").run();
+  sqlite.prepare("insert into consent select subscriber_id, 'other', 'confirmed', source, page, wording, requested_at, confirmed_at, null, null, 'tok-other' from consent").run();
   const unsub = tokenOf(ANN);
   await unsubscribe(unsub, { list: LIST }, "one-click");
   expect(rows("select list, state, withdrawn_how from consent order by list")).toEqual([
@@ -206,12 +250,23 @@ it("the deletion hooks' removal refuses with its own code and message when remov
   await requestJoin(ANN, LIST, ASK);
   sqlite.exec("create trigger no_delete before delete on subscriber begin select raise(abort, 'disk on fire'); end");
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
-  const refused = await removeSubscriberOrRefuse({ id: "u1", email: ANN }).then(() => null, (e) => e as { statusCode: number; body: { code: string; message: string } });
+  const refused = await removeSubscriberOrRefuse({ id: "u1", email: ANN, emailVerified: true }).then(() => null, (e) => e as { statusCode: number; body: { code: string; message: string } });
   error.mockRestore();
   expect(refused?.statusCode).toBe(500);
   expect(refused?.body).toEqual({ code: "SUBSCRIBER_REMOVAL_FAILED", message: "Couldn't remove the account's email subscriptions, so the account was not deleted. Try again." });
   expect(rows("select * from subscriber")).toHaveLength(1);
   sqlite.exec("drop trigger no_delete");
-  await removeSubscriberOrRefuse({ id: "u1", email: ANN });
+  await removeSubscriberOrRefuse({ id: "u1", email: ANN, emailVerified: true });
   expect(rows("select * from subscriber")).toHaveLength(0);
+});
+
+it("an unverified account's deletion leaves the address's subscription alone, a verified one's removes it", async () => {
+  await requestJoin(ANN, LIST, ASK);
+  await confirm(linkToken());
+  const before = everything();
+  for (const emailVerified of [false, null, undefined]) await removeSubscriberOrRefuse({ id: "squatter", email: ANN, emailVerified });
+  expect(everything()).toBe(before);
+  await removeSubscriberOrRefuse({ id: "owner", email: ANN, emailVerified: true });
+  expect(rows("select * from subscriber")).toHaveLength(0);
+  expect(rows("select * from consent")).toHaveLength(0);
 });

@@ -239,6 +239,7 @@ export async function paymentsChecks(ctx: Ctx, { port }: { port: number }): Prom
       // --marketing (#113): the subscriber is removed before the cancel and the purge, so a removal made to fail stops the deletion with the user, the subscription (still
       // open in Stripe, nothing cancelled), the files and the subscriber all as they were.
       if (config.marketing) {
+        onUser(mail, "UPDATE user SET emailVerified = 1 WHERE id = ?"); // only a verified account's deletion removes the address's subscription
         seedSubscriber(h, mail, "confirmed", ["newsletter"]);
         const calls = fake.calls.length;
         const stopped = await failRemoval(h, () => remove(d));
