@@ -375,6 +375,7 @@ const NOTICE_LINES = [
   "Send emails about expiring cards",
   "Send a reminder email 7 days before a free trial ends",
   "Subscription is canceled",
+  "Send a Stripe-hosted link for customers to confirm their payments when required",
   "Customer emails",
   "sends no customer emails by default",
 ];
