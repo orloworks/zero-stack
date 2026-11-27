@@ -48,11 +48,11 @@ test("the matrix has svelte-secrets, with the argv() form of the valued flag", (
     expect(MATRIX.find((p) => p.name === `${fw}-all`)!.args.join(" ")).toContain("--secrets infisical");
 });
 
-test("hash is stable and tracks gate.ts and the routing doc", () => {
+test("hash is stable and tracks gate.ts, every file under scripts/gate/, and the routing doc", () => {
   const repo = join(import.meta.dir, "../..");
   const tmp = mkTmp("zs-hash-");
-  for (const d of ["src", "template", "docs", "scripts"]) mkdirSync(join(tmp, d), { recursive: true });
-  for (const f of ["src/a.ts", "template/b.txt", "docs/cloudflare-routing.md", "scripts/gate.ts", "package.json", "bun.lock"])
+  for (const d of ["src", "template", "docs", "scripts", "scripts/gate"]) mkdirSync(join(tmp, d), { recursive: true });
+  for (const f of ["src/a.ts", "template/b.txt", "docs/cloudflare-routing.md", "scripts/gate.ts", "scripts/gate/harness.ts", "package.json", "bun.lock"])
     writeFileSync(join(tmp, f), f);
   const h0 = hash(tmp, ["--auth"], "v1");
   expect(hash(tmp, ["--auth"], "v1")).toBe(h0);
@@ -60,7 +60,13 @@ test("hash is stable and tracks gate.ts and the routing doc", () => {
   const h1 = hash(tmp, ["--auth"], "v1");
   expect(h1).not.toBe(h0);
   writeFileSync(join(tmp, "docs/cloudflare-routing.md"), "changed");
-  expect(hash(tmp, ["--auth"], "v1")).not.toBe(h1);
+  const h2 = hash(tmp, ["--auth"], "v1");
+  expect(h2).not.toBe(h1);
+  writeFileSync(join(tmp, "scripts/gate/harness.ts"), "changed");
+  const h3 = hash(tmp, ["--auth"], "v1");
+  expect(h3).not.toBe(h2);
+  writeFileSync(join(tmp, "scripts/gate/new-file.ts"), "added"); // a file added to the folder counts too
+  expect(hash(tmp, ["--auth"], "v1")).not.toBe(h3);
   expect(hash(repo, [], "v1")).toMatch(/^[0-9a-f]{64}$/); // real repo has every input file
 });
 

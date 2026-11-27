@@ -1,6 +1,6 @@
 // Scaffold into a temp dir, then vp check/build/test, verify, db:reset, GET / against vp dev.
 // Optional args choose the permutation: bun scripts/gate.ts [--framework vue] [--<feature flag from src/flags.ts>...] [--name x]
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,9 @@ import { killChildren, onTerminate, spawnTracked } from "../src/children";
 import { preflight, run, scaffold } from "../src/pipeline";
 import { stepsFor } from "../src/setup";
 import { CREATE_VOID, TRUSTED_DEPENDENCIES, UPGRADE_BASELINE } from "../src/versions";
+import { startFakeStripe, type Obj } from "./gate/fake-stripe";
+import { cookieOf, createHarness, hasTable, openDb, SET_PASSWORD_SUBJECT, sqliteFiles } from "./gate/harness";
+import { signWebhook } from "./gate/webhook";
 
 const root = mkdtempSync(join(tmpdir(), "zs-gate-"));
 const argv = process.argv.slice(2);
@@ -20,32 +23,14 @@ const hasSeq = (seq: string[]) => argv.includes(seq.join("=")) || argv.some((_, 
 const name = arg("--name") ?? "gate-app";
 const app = join(root, name);
 const vp = join(app, "node_modules/.bin/vp");
-let dev: ReturnType<typeof Bun.spawn> | undefined;
 
 // SIGINT/SIGTERM: every child (steps, dev server) is killed and awaited, then the temp dir goes; exit 130/143.
 onTerminate(() => rmSync(root, { recursive: true, force: true }), 10_000);
 
-// Request cookie header from a response's Set-Cookie headers.
-const cookieOf = (r: Response) => r.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
 const step = (args: string[]) => run([vp, ...args], app);
-// The dev server recreates its local D1 file on a restart; opening it in that window fails with "unable to open database file".
-// Retry only that error, for up to 3s (seen in ci:full under load); anything else throws at once.
-const openDb = (file: string, opts?: { readonly?: boolean }): Database => {
-  for (let i = 0; ; i++) {
-    try {
-      return new Database(file, opts);
-    } catch (e) {
-      if (i >= 15 || !String((e as Error).message).includes("unable to open database file")) throw e;
-      Bun.sleepSync(200);
-    }
-  }
-};
-const sqliteFiles = (dir: string): string[] =>
-  readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-    e.isDirectory() ? sqliteFiles(join(dir, e.name)) : e.name.endsWith(".sqlite") ? [join(dir, e.name)] : []);
 
 // The upgrade honesty test (#101, entry `svelte-upgrade`): an app that edits only its declaration file upgrades with no conflict and a green verify.
-// It lives here, not in a script of its own, because the ci:full cache hashes only gate.ts and src/.
+// It lives here, not in a script of its own, because the ci:full cache hashes only gate.ts, every file under scripts/gate/, and src/.
 async function upgradeGate(config: Config): Promise<void> {
   const sh = (cmd: string[]) => Bun.spawnSync(cmd, { cwd: app, stdout: "pipe", stderr: "pipe" });
   const commit = (msg: string) => {
@@ -195,6 +180,8 @@ try {
     ...Object.fromEntries(FEATURE_LIST.map((f) => [f.key, hasSeq(featureArgv(f)) || undefined])),
   };
   const { config } = validateFlags(input);
+  const h = createHarness({ app, vp, turnstile: !!config.turnstile, inviteOnly: !!config.inviteOnly });
+  const { onUser, idOf } = h;
   // Not re-indented, to keep this diff small: the labeled block lets the baseline run leave through the shared finally below.
   gate: {
   if (hasSeq(["--baseline"])) { // gate-only flag (matrix entry svelte-upgrade-baseline): the baseline is scaffolded by its own code, not this tree's
@@ -431,36 +418,7 @@ export const GET = defineHandler((c) => {
     console.log("gate: zod-rpc client type reflects the schema");
   }
 
-  // Each run needs its own vite port and Cloudflare inspector port (default 9229 collides across runs).
-  const freePort = () => {
-    const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
-    const p = probe.port;
-    probe.stop(true);
-    return p;
-  };
-  // One retry with fresh ports when vp dev dies at start (another run took a port between freePort() and listen).
-  const startDev = () => startDevOnce().catch((e: Error) => {
-    if (e.message !== "vp dev exited early") throw e;
-    console.error("gate: vp dev exited early, retrying once with fresh ports");
-    return startDevOnce();
-  });
-  const startDevOnce = async () => {
-    const port = freePort();
-    dev = spawnTracked([vp, "dev", "--port", String(port), "--strictPort"], {
-      cwd: app, stdio: ["ignore", "inherit", "inherit"],
-      env: { ...process.env, VOID_INSPECTOR_PORT: String(freePort()) },
-    });
-    let status = 0;
-    // 3 min: a cold `vp dev` under parallel ci:full on a loaded machine (load avg 200+) missed 60s; a dead server still fails fast via exitCode.
-    for (let i = 0; i < 360 && status !== 200; i++) {
-      await Bun.sleep(500);
-      if (dev.exitCode !== null) throw new Error("vp dev exited early");
-      status = await fetch(`http://localhost:${port}/`).then((r) => r.status, () => 0);
-    }
-    if (status !== 200) throw new Error(`GET / returned ${status}`);
-    return { port, status };
-  };
-  const { port, status } = await startDev();
+  const { port, status } = await h.start();
   if (config.shadcn) {
     const html = await fetch(`http://localhost:${port}/`).then((r) => r.text());
     if (!html.includes('data-slot="button"')) throw new Error("shadcn Button not rendered on /");
@@ -480,90 +438,26 @@ export const GET = defineHandler((c) => {
   const kept = `kept-${Date.now()}@example.com`, pending = `pending-${Date.now()}@example.com`;
   let pendingLink: URL | undefined;
   const gatePw = "gate-password-123";
-  const authPost = (b: string, path: string, body: object) =>
-    fetch(b + path, {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: b, ...(config.turnstile && { "x-captcha-response": "XXXX.DUMMY.TOKEN.XXXX" }) },
-      body: JSON.stringify(body),
-    });
-  // Dev inbox: list rows carry subject, recipient and a detail link; the detail page shows the text body escaped. The token is read fresh (a restart may change it).
-  const mailUrls = async (b: string, subject: string, to: string) => {
-    const token = readFileSync(join(app, ".void/dev-trigger-token"), "utf8").trim();
-    const inbox = (path: string) => fetch(`${b}/__void/inbox${path}`, { headers: { "x-void-dev-trigger": token } }).then((r) => r.text());
-    const ids = (await inbox("")).split("<tr>").filter((r) => r.includes(`>${subject}</a>`) && r.toLowerCase().includes(to.toLowerCase()))
-      .flatMap((r) => r.match(/href="\/__void\/inbox\/([^/?"]+)\?/)?.[1] ?? []);
-    const urls: URL[] = [];
-    for (const id of ids) {
-      const url = (await inbox(`/${id}`)).match(/https?:\/\/[^\s<]+/)?.[0]?.replaceAll("&amp;", "&");
-      if (url) urls.push(new URL(url));
-    }
-    return urls;
-  };
-  const mailUrl = async (b: string, subject: string, to: string) => (await mailUrls(b, subject, to))[0] ?? null;
-  // Mail can be sent in the background of the request, so poll until `n` have arrived (or time out and return what is there).
-  const waitMails = async (b: string, subject: string, to: string, n: number) => {
-    let urls: URL[] = [];
-    for (let i = 0; i < 40 && urls.length < n; i++) {
-      urls = await mailUrls(b, subject, to);
-      if (urls.length < n) await Bun.sleep(250);
-    }
-    return urls;
-  };
-  const follow = (b: string, u: URL) => fetch(b + u.pathname + u.search, { redirect: "manual" });
+  const authPost = (b: string, path: string, body: object) => h.authPost(path, body, b);
+  const mailUrls = (b: string, subject: string, to: string) => h.mailUrls(subject, to, b);
+  const mailUrl = (b: string, subject: string, to: string) => h.mailUrl(subject, to, b);
+  const waitMails = (b: string, subject: string, to: string, n: number) => h.waitMails(subject, to, n, b);
   // --invite-only: the inbox owner picks the password. Every mail to an unverified user is a set-password link; following it lands on /reset-password?token=.
-  const SET_PW = "Set your password";
-  const setPassword = async (b: string, link: URL, newPassword: string) => {
-    const landed = new URL((await follow(b, link)).headers.get("location") ?? "", b);
-    const token = landed.searchParams.get("token");
-    if (landed.pathname !== "/reset-password" || !token) throw new Error(`set-password link landed on ${landed}`);
-    return authPost(b, "/api/auth/reset-password", { newPassword, token });
-  };
+  const SET_PW = SET_PASSWORD_SUBJECT;
+  const setPassword = (b: string, link: URL, newPassword: string) => h.setPassword(link, newPassword, b);
   const signInStatus = async (b: string, address: string, password: string) => (await authPost(b, "/api/auth/sign-in/email", { email: address, password })).status;
-  const userRow = (address: string) =>
-    sqliteFiles(join(app, ".void")).some((f) => {
-      const d = openDb(f, { readonly: true });
-      try {
-        return !!d.query("SELECT 1 FROM sqlite_master WHERE name = 'user'").get() && !!d.query("SELECT 1 FROM user WHERE lower(email) = ?").get(address.toLowerCase());
-      } finally { d.close(); }
-    });
-  // Runs `sql` with the user's id against the auth database (the one with a user row for the address).
-  const onUser = (address: string, sql: string) => {
-    for (const f of sqliteFiles(join(app, ".void"))) {
-      const d = openDb(f);
-      try {
-        if (!d.query("SELECT 1 FROM sqlite_master WHERE name = 'user'").get()) continue;
-        const u = d.query("SELECT id, emailVerified FROM user WHERE lower(email) = ?").get(address.toLowerCase()) as { id: string; emailVerified: number } | null;
-        if (!u) continue;
-        d.run(sql, [u.id]);
-        return u;
-      } finally { d.close(); }
-    }
-    throw new Error(`no user row for ${address}`);
-  };
   const isVerified = (address: string) => !!onUser(address, "SELECT ?").emailVerified;
   // Stands in for the link expiring: removes the user's set-password rows, so the next accepted request may mail again.
   const dropLinks = (address: string) => onUser(address, "DELETE FROM verification WHERE value = ? AND identifier LIKE 'reset-password:%'");
   // Invited: the sign-up (as the page sends it, with no password) succeeds with no session cookie and mails one set-password link and no verify link;
   // setting the password through it verifies the email, and that password then signs in.
-  const signUpVerified = async (b: string, address: string, password = gatePw) => {
-    const up = await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: address, password: "" });
-    if (!up.ok) throw new Error(`invited sign-up for ${address} -> ${up.status}`);
-    if (cookieOf(up)) throw new Error(`sign-up for ${address} set a cookie before the email was verified`);
-    const [link] = await waitMails(b, SET_PW, address, 1);
-    if (!link) throw new Error(`no set-password mail for ${address} in the dev inbox`);
-    if (await mailUrl(b, "Verify your email", address)) throw new Error(`${address} got a plain verify link`);
-    const set = await setPassword(b, link, password);
-    if (!set.ok) throw new Error(`set-password for ${address} -> ${set.status}`);
-    const inn = await authPost(b, "/api/auth/sign-in/email", { email: address, password });
-    if (!inn.ok || !/session_token=/.test(cookieOf(inn))) throw new Error(`sign-in after set-password for ${address} -> ${inn.status}`);
-    return cookieOf(inn);
-  };
+  const signUpVerified = (b: string, address: string, password = gatePw) => h.makeUser(address, { password, base: b });
   // Refused: no session, no user row, no mail. Status: a 200 (with verification on, Better Auth answers a refused sign-up with a placeholder user) or a 4xx (a malformed address is rejected before the hook).
   const inviteRefused = async (b: string, address: string) => {
     const r = await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: address, password: gatePw });
     if (r.status !== 200 && (r.status < 400 || r.status >= 500)) throw new Error(`refused sign-up for ${address} -> ${r.status}`);
     if (cookieOf(r)) throw new Error(`refused sign-up for ${address} set a cookie`);
-    if (userRow(address)) throw new Error(`${address} was refused but has a user row`);
+    if (h.hasUser(address)) throw new Error(`${address} was refused but has a user row`);
     for (const subject of [SET_PW, "Verify your email"]) if (await mailUrl(b, subject, address)) throw new Error(`${address} was refused but got a "${subject}" mail`);
     if ((await authPost(b, "/api/auth/sign-in/email", { email: address, password: gatePw })).ok) throw new Error(`${address} was refused but can sign in`);
   };
@@ -571,29 +465,20 @@ export const GET = defineHandler((c) => {
   // Only the sqlite files with an _mf_objects table are R2's; any read error on one of them fails the gate.
   const r2Keys = () => {
     let found = false;
-    const keys = sqliteFiles(join(app, ".void")).flatMap((f) => {
-      const d = openDb(f, { readonly: true });
+    const keys = h.eachDb((d, f) => {
       try {
-        if (!d.query("SELECT 1 FROM sqlite_master WHERE name = '_mf_objects'").get()) return [];
+        if (!hasTable(d, "_mf_objects")) return [];
         found = true;
         return (d.query("SELECT key FROM _mf_objects").all() as { key: string }[]).map((r) => r.key);
-      } catch (e) { throw new Error(`cannot read R2 keys from ${f}: ${(e as Error).message}`); } finally { d.close(); }
-    });
+      } catch (e) { throw new Error(`cannot read R2 keys from ${f}: ${(e as Error).message}`); }
+    }, { readonly: true }).flat();
     if (!found) throw new Error("no local R2 database (_mf_objects) found under .void");
     return keys;
   };
   if (config.auth) {
     const base = `http://localhost:${port}`;
-    // The always-pass test secret accepts Cloudflare's documented dummy token; without the header the captcha plugin must refuse.
-    const DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX";
-    const post = (path: string, body: object, cookie?: string) =>
-      fetch(base + path, {
-        method: "POST",
-        headers: { "content-type": "application/json", origin: base, ...(cookie && { cookie }), ...(config.turnstile && { "x-captcha-response": DUMMY_TOKEN }) },
-        body: JSON.stringify(body),
-      });
-    const bare = (path: string, body: object) =>
-      fetch(base + path, { method: "POST", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify(body) });
+    const post = (path: string, body: object, cookie?: string) => h.authPost(path, body, base, cookie);
+    const bare = (path: string, body: object) => h.request(path, { base, method: "POST", body });
     const email = `gate-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`;
     const password = "gate-password-123";
     if (config.turnstile) {
@@ -626,12 +511,7 @@ export const GET = defineHandler((c) => {
       const hookedBody = (await hooked.json().catch(() => null)) as { code?: string } | null;
       if (hooked.status !== 400 || hookedBody?.code !== "GATE_APP_HOOK") throw new Error(`the app plugin's before hook did not run: sign-up -> ${hooked.status} ${JSON.stringify(hookedBody)}`);
       if (session.user.image !== "gate-app-db-hook") throw new Error("the app plugin's init database hook did not run for a new user");
-      const from = (origin: string) =>
-        fetch(`${base}/api/auth/sign-in/email`, {
-          method: "POST",
-          headers: { "content-type": "application/json", origin, cookie, ...(config.turnstile && { "x-captcha-response": DUMMY_TOKEN }) },
-          body: JSON.stringify({ email, password }),
-        });
+      const from = (origin: string) => h.request("/api/auth/sign-in/email", { base, method: "POST", body: { email, password }, origin: { foreign: origin }, cookie, captcha: !!config.turnstile });
       const [trusted, foreign] = [await from(GATE_ORIGIN), await from("https://evil.example")];
       if (!trusted.ok || foreign.status !== 403) throw new Error(`trusted origins: the app's origin -> ${trusted.status} (want 200), a foreign origin -> ${foreign.status} (want 403)`);
       console.log("gate: auth extension: the app plugin's hook and database hook run, its trusted origin is trusted, a foreign origin is refused");
@@ -731,8 +611,7 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
       for (let i = 0; i < 5; i++) if ((await signInStatus(base, amp, `wrong-password-${i}`)) !== 401) throw new Error("a wrong-password sign-in was not 401");
       await ampMails(1, "5 wrong-password sign-ins while the link is unexpired");
       dropLinks(amp);
-      const raw = (path: string, body: object, origin: string) =>
-        fetch(base + path, { method: "POST", headers: { "content-type": "application/json", origin, ...(config.turnstile && { "x-captcha-response": DUMMY_TOKEN }) }, body: JSON.stringify(body) });
+      const raw = (path: string, body: object, origin: string) => h.request(path, { base, method: "POST", body, origin: { foreign: origin }, captcha: !!config.turnstile });
       const rejected = [
         await raw("/api/auth/sign-in/email", { email: amp, password: "wrong-password-x" }, "https://evil.test"),
         await raw("/api/auth/sign-up/email", { name: "Amp", email: amp, password: "" }, "https://evil.test"),
@@ -836,12 +715,9 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
         if (!request.ok) throw new Error(`request-password-reset -> ${request.status}`);
         const link = await mailLink("Reset your password");
         // The link redirects to /reset-password?token=...; a bad token redirects to ?error=INVALID_TOKEN.
-        const follow = (u: URL) => fetch(base + u.pathname + u.search, { redirect: "manual" }).then((r) => new URL(r.headers.get("location") ?? "", base));
-        const bad = await follow(new URL(link.pathname.replace(/[^/]+$/, "not-a-token") + link.search, base));
+        const bad = await h.landing(new URL(link.pathname.replace(/[^/]+$/, "not-a-token") + link.search, base), base);
         if (bad.pathname !== "/reset-password" || bad.searchParams.get("error") !== "INVALID_TOKEN") throw new Error(`bad reset token landed on ${bad}`);
-        const good = await follow(link);
-        const resetToken = good.searchParams.get("token");
-        if (good.pathname !== "/reset-password" || !resetToken) throw new Error(`reset link landed on ${good}`);
+        const resetToken = await h.resetToken(link, "reset", base);
         const reset = await fetch(`${base}/reset-password`).then((r) => r.text());
         if (!reset.includes("Loading…") || !reset.includes('name="referrer"')) throw new Error("/reset-password lacks the loading state or no-referrer meta");
         const before = cookieOf(await post("/api/auth/sign-in/email", { email, password: next }));
@@ -902,15 +778,10 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
   if (config.inviteOnly) {
     // The list is read at startup: restart the dev server on a changed .env. Exact entries, then a list with no entries (fail closed).
     const envFile = join(app, ".env"), original = readFileSync(envFile, "utf8");
-    const withList = async (list: string) => {
-      await killChildren();
-      writeFileSync(envFile, original.replace(/^SIGNUP_ALLOWLIST=.*$/m, `SIGNUP_ALLOWLIST=${list}`));
-      return startDev();
-    };
+    const withList = (list: string) => h.restart(original, { SIGNUP_ALLOWLIST: list });
     try {
       const exact = `exact-${Date.now()}@partner.test`;
-      let { port: p } = await withList(`${exact.toUpperCase()},other@partner.test`);
-      let b = `http://localhost:${p}`;
+      let b = await withList(`${exact.toUpperCase()},other@partner.test`);
       await signUpVerified(b, exact); // an exact list entry admits its email (any case)
       await inviteRefused(b, `other2-${Date.now()}@partner.test`); // a different address on the same domain is not a domain entry
       await inviteRefused(b, `nobody-${Date.now()}@example.com`); // the list no longer holds @example.com
@@ -942,8 +813,7 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
       if (!(await authPost(b, "/api/auth/sign-in/email", { email: kept, password: gatePw + "-2" })).ok) throw new Error("a verified, de-listed user could not sign in after a reset");
       console.log("gate: invite-only re-checks the list when the inbox is proven: a de-listed pending user's set-password and forgot-password links are refused and do not verify, its sign-in mails nothing; a verified, de-listed user still resets and signs in");
       // A truly empty value fails Void's required-env check (every request is a 500, so nothing is admitted); a list of only separators is the empty list the matcher sees.
-      ({ port: p } = await withList(","));
-      b = `http://localhost:${p}`;
+      b = await withList(",");
       await inviteRefused(b, `nobody-${Date.now()}@example.com`);
       await inviteRefused(b, `nobody-${Date.now()}@partner.test`);
       if (!(await authPost(b, "/api/auth/sign-in/email", { email: kept, password: gatePw + "-2" })).ok) throw new Error("an existing user could not sign in with an empty list");
@@ -956,42 +826,18 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
     // --admin: /admin and /api/auth/admin/* answer to ADMIN_EMAILS (verified, live) and nobody else. The list is read at startup, so each list change restarts the dev server.
     const envFile = join(app, ".env"), original = readFileSync(envFile, "utf8");
     // `signup`: leave the scaffold's SIGNUP_ALLOWLIST (undefined), set it, or remove the key (null; only with --invite-only, where it is optional).
-    const withAdmins = async (list: string, signup?: string | null) => {
-      await killChildren();
-      let text = original.replace(/^ADMIN_EMAILS=.*$/m, `ADMIN_EMAILS=${list}`);
-      if (signup !== undefined) text = signup === null ? text.replace(/^SIGNUP_ALLOWLIST=.*\n/m, "") : text.replace(/^SIGNUP_ALLOWLIST=.*$/m, `SIGNUP_ALLOWLIST=${signup}`);
-      writeFileSync(envFile, text);
-      return `http://localhost:${(await startDev()).port}`;
-    };
+    const withAdmins = (list: string, signup?: string | null) => h.restart(original, { ADMIN_EMAILS: list, ...(signup !== undefined && { SIGNUP_ALLOWLIST: signup }) });
     // Rows in the app database (user, audit_entry, ...): the one sqlite file that has `table`.
-    const rows = (table: string, sql: string, ...args: (string | number)[]) => {
-      for (const f of sqliteFiles(join(app, ".void"))) {
-        const d = openDb(f, { readonly: true });
-        try {
-          if (d.query("SELECT 1 FROM sqlite_master WHERE name = ?").get(table)) return d.query(sql).all(...args) as any[];
-        } finally { d.close(); }
-      }
-      throw new Error(`no database with a ${table} table`);
-    };
+    const rows = (table: string, sql: string, ...args: (string | number)[]) => h.withDb(table, (d) => d.query(sql).all(...args) as any[], { readonly: true });
     const ts = Date.now();
     const addr = (n: string) => `${n}-${ts}@example.com`;
     const [boss, plain, owner2, victim, other] = [addr("boss"), addr("plain"), addr("owner2"), addr("victim"), addr("other")];
-    const idOf = (a: string) => onUser(a, "SELECT ?").id;
-    const call = (b: string, method: string, path: string, cookie = "", body?: object) =>
-      fetch(b + path, { method, redirect: "manual", headers: { origin: b, ...(body && { "content-type": "application/json" }), ...(cookie && { cookie }) }, body: body && JSON.stringify(body) });
+    const call = (b: string, method: string, path: string, cookie = "", body?: object) => h.request(path, { base: b, method, redirect: "manual", cookie, body });
     const html = (b: string, path: string, cookie = "") => call(b, "GET", path, cookie).then(async (r) => ({ status: r.status, text: await r.text(), location: r.headers.get("location") }));
     const sessionUser = (b: string, cookie: string) => fetch(`${b}/api/auth/get-session`, { headers: { cookie } }).then((r) => r.json() as Promise<any>).then((j) => j?.user ?? null);
     // A user with a session: a verified one signs in (in an invite-only app the set-password link verifies and sets the password); an unverified one only exists in an app that lets sign-in wait on mail.
     const mk = async (b: string, address: string, verified = true) => {
-      let cookie = "";
-      if (config.inviteOnly) {
-        if (verified) cookie = await signUpVerified(b, address);
-        else if (!(await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: address, password: "" })).ok) throw new Error(`sign-up for ${address} failed`);
-      } else {
-        if (!(await authPost(b, "/api/auth/sign-up/email", { name: "Gate", email: address, password: gatePw })).ok) throw new Error(`sign-up for ${address} failed`);
-        if (verified) onUser(address, "UPDATE user SET emailVerified = 1 WHERE id = ?");
-        cookie = cookieOf(await authPost(b, "/api/auth/sign-in/email", { email: address, password: gatePw }));
-      }
+      const cookie = await h.makeUser(address, { password: gatePw, base: b, inviteLink: verified, markVerified: verified });
       return { id: idOf(address), cookie };
     };
     const upload = (b: string, cookie: string, name: string, body: string) => fetch(`${b}/api/files/${name}`, { method: "PUT", body, headers: { cookie, "content-type": "text/plain" } }).then((r) => r.status);
@@ -1057,11 +903,11 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
       const wild = await html(b, "/admin?q=%25", bossU.cookie);
       if (!wild.text.includes("No account for %.")) throw new Error("a % in the search was treated as a wildcard");
       // Paging: 50 a page, newest first, with the Showing line.
-      const db = sqliteFiles(join(app, ".void")).map((f) => openDb(f)).find((d) => d.query("SELECT 1 FROM sqlite_master WHERE name = 'user'").get())!;
       const now = Date.now();
-      for (let i = 0; i < 52; i++) db.run("INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)", [`page-${ts}-${i}`, `Page ${i}`, `page-${i}-${ts}@fixture.test`, now - 86_400_000 - i * 1000, now]);
-      const total = (db.query("SELECT count(*) AS n FROM user").get() as { n: number }).n;
-      db.close();
+      const total = h.withDb("user", (db) => {
+        for (let i = 0; i < 52; i++) db.run("INSERT INTO user (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)", [`page-${ts}-${i}`, `Page ${i}`, `page-${i}-${ts}@fixture.test`, now - 86_400_000 - i * 1000, now]);
+        return (db.query("SELECT count(*) AS n FROM user").get() as { n: number }).n;
+      });
       const p1 = await html(b, "/admin", bossU.cookie), p2 = await html(b, "/admin?page=2", bossU.cookie);
       if (!p1.text.includes(`Showing 1–50 of ${total}`) || !p1.text.includes("Older") || p1.text.includes("Newer")) throw new Error("page 1 lacks the Showing line and an Older link");
       if (!p2.text.includes(`Showing 51–${total} of ${total}`) || !p2.text.includes("Newer")) throw new Error("page 2 lacks the Showing line and a Newer link");
@@ -1109,7 +955,7 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
       if (before.some((s) => victimPage.text.includes(s.token))) throw new Error("the User detail page ships a raw session token");
       const revokeUrl = (id: string, sid: string) => `/api/admin/users/${id}/sessions/${sid}/revoke`;
       // A foreign or missing Origin is refused with no side effects; so is a session id that is not this user's.
-      const post = (path: string, origin?: string) => fetch(b + path, { method: "POST", headers: { cookie: bossU.cookie, ...(origin && { origin }) } });
+      const post = (path: string, origin?: string) => h.request(path, { base: b, method: "POST", cookie: bossU.cookie, origin: origin ? { foreign: origin } : "none" });
       const audited = auditRows().length;
       const refusals = [await post(revokeUrl(victimU.id, before[0]!.id)), await post(revokeUrl(victimU.id, before[0]!.id), "https://evil.test"), await post(`/api/admin/users/${victimU.id}/send-link`), await post(`/api/admin/users/${victimU.id}/send-link`, "https://evil.test")];
       // No Origin: our 403. A foreign Origin: Void drops the session before our route runs (404, as the review saw); our 403 is the backstop. Either way nothing happens.
@@ -1136,9 +982,7 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
       if (sent.status !== 200 || ((await sent.json()) as any).kind !== "reset") throw new Error(`send-link -> ${sent.status}`);
       const [resetLink] = await waitMails(b, "Reset your password", victim, 1);
       if (!resetLink) throw new Error("no reset mail in the dev inbox");
-      const landed = new URL((await follow(b, resetLink)).headers.get("location") ?? "", b);
-      const token = landed.searchParams.get("token");
-      if (landed.pathname !== "/reset-password" || !token) throw new Error(`reset link landed on ${landed}`);
+      const token = await h.resetToken(resetLink, "reset", b);
       const NEW_PW = "admin-sent-password-1";
       if (!(await authPost(b, "/api/auth/reset-password", { newPassword: NEW_PW, token })).ok || !(await signIn(b, victim, NEW_PW)).ok) throw new Error("the sent link did not set a new password");
       if (!auditRows().some((r) => r.verb === "send-link" && r.target_email === victim)) throw new Error("no audit entry for the link");
@@ -1174,7 +1018,7 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
       // Before-hooks run ahead of the endpoint's own checks: a cross-origin delete with the admin's cookie must be refused before the guard purges anything.
       const keep = await mk(b, addr("keep"));
       if (config.storage && (await upload(b, keep.cookie, "keep.txt", "keep")) !== 201) throw new Error("the kept user's upload failed");
-      const evil = await fetch(`${b}/api/auth/admin/remove-user`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.test", cookie: bossU.cookie }, body: JSON.stringify({ userId: keep.id }) });
+      const evil = await h.request("/api/auth/admin/remove-user", { base: b, method: "POST", body: { userId: keep.id }, origin: { foreign: "https://evil.test" }, cookie: bossU.cookie });
       if (evil.status !== 403) throw new Error(`a cross-origin remove-user -> ${evil.status}, expected 403`);
       if (!rows("user", "SELECT 1 FROM user WHERE id = ?", keep.id).length || (config.storage && !r2Keys().includes(`users/${keep.id}/keep.txt`))) throw new Error("a refused cross-origin remove-user purged files or deleted the user");
       if (auditRows().some((r) => r.verb === "delete-user")) throw new Error("a refused cross-origin remove-user was audited");
@@ -1307,8 +1151,8 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
           [`non-admin global: ${(await call(b, "POST", `/api/admin/features/${F}`, plainU.cookie, { state: "off" })).status}`, 404],
           [`non-admin override: ${(await call(b, "POST", `/api/admin/users/${featU.id}/features/${F}`, plainU.cookie, { state: "off" })).status}`, 404],
           [`signed out: ${(await call(b, "POST", `/api/admin/features/${F}`, "", { state: "off" })).status}`, 404],
-          [`foreign Origin: ${(await fetch(`${b}/api/admin/features/${F}`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.test", cookie: bossU.cookie }, body: JSON.stringify({ state: "off" }) })).status}`, 403],
-          [`no Origin: ${(await fetch(`${b}/api/admin/features/${F}`, { method: "POST", headers: { "content-type": "application/json", cookie: bossU.cookie }, body: JSON.stringify({ state: "off" }) })).status}`, 403],
+          [`foreign Origin: ${(await h.request(`/api/admin/features/${F}`, { base: b, method: "POST", body: { state: "off" }, origin: { foreign: "https://evil.test" }, cookie: bossU.cookie })).status}`, 403],
+          [`no Origin: ${(await h.request(`/api/admin/features/${F}`, { base: b, method: "POST", body: { state: "off" }, origin: "none", cookie: bossU.cookie })).status}`, 403],
         ];
         // A foreign Origin is 403 or 404 (Better Auth ignores the session cookie on it, so the admin looks signed out); either way nothing runs.
         for (const [what, want] of refused) if (Number(what.split(": ")[1]) !== want && !(what.startsWith("foreign Origin") && what.endsWith("404"))) throw new Error(`features: ${what}, expected ${want}`);
@@ -1360,7 +1204,7 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
         console.log("gate: settings: the getters return the declared defaults, a save of each type is read back, shown with its reset, and audited with the old and new value");
         // Refusals: out of range 400 (both ends), a wrong type, an undeclared key, a missing user's rights, no or a foreign Origin. Nothing is written and the value stands.
         const before = auditRows().length;
-        const fetchOrigin = (method: string, key: string, origin?: string) => fetch(`${b}/api/admin/settings/${key}`, { method, headers: { ...(origin && { origin }), "content-type": "application/json", cookie: bossU.cookie }, body: method === "POST" ? JSON.stringify({ value: 30 }) : undefined });
+        const fetchOrigin = (method: string, key: string, origin?: string) => h.request(`/api/admin/settings/${key}`, { base: b, method, origin: origin ? { foreign: origin } : "none", cookie: bossU.cookie, body: method === "POST" ? { value: 30 } : undefined, headers: { "content-type": "application/json" } });
         const refused: [string, number, number | number[]][] = [
           ["number over the max", (await set(N, 101)).status, 400],
           ["number under the min", (await set(N, 0)).status, 400],
@@ -1432,9 +1276,9 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
         for (const [who, cookie] of [["signed out", ""], ["non-admin", plainU.cookie]] as const)
           for (const [method, path] of [["GET", "/admin/invites"], ["POST", "/api/admin/invites"], ["POST", `/api/admin/invites/${inviteId(invitedMail)}/revoke`], ["POST", `/api/admin/invites/${inviteId(invitedMail)}/send`]] as const)
             if ((await api(method, path, cookie, method === "POST" ? { kind: "email", value: addr("x") } : undefined)).status !== 404) throw new Error(`${who}: ${method} ${path} was not 404`);
-        const evilOrigin = await fetch(`${b}/api/admin/invites`, { method: "POST", headers: { "content-type": "application/json", origin: "https://evil.test", cookie: bossU.cookie }, body: JSON.stringify({ kind: "email", value: addr("evil") }) });
+        const evilOrigin = await h.request("/api/admin/invites", { base: b, method: "POST", body: { kind: "email", value: addr("evil") }, origin: { foreign: "https://evil.test" }, cookie: bossU.cookie });
         // No Origin: our 403. A foreign Origin: Void drops the session before our route runs (404); our 403 is the backstop. Either way nothing is added.
-        const noOrigin = await fetch(`${b}/api/admin/invites`, { method: "POST", headers: { "content-type": "application/json", cookie: bossU.cookie }, body: JSON.stringify({ kind: "email", value: addr("evil") }) });
+        const noOrigin = await h.request("/api/admin/invites", { base: b, method: "POST", body: { kind: "email", value: addr("evil") }, origin: "none", cookie: bossU.cookie });
         if (noOrigin.status !== 403 || ![403, 404].includes(evilOrigin.status) || rows("invite", "SELECT 1 FROM invite WHERE entry LIKE 'evil-%'").length) throw new Error(`add invite with no Origin -> ${noOrigin.status}, a foreign one -> ${evilOrigin.status}`);
         console.log("gate: admin invites with no SIGNUP_ALLOWLIST: an exact and a domain invite admit at once without a restart, a lookalike and no source are refused, bad input 400, duplicate 409, non-admin 404, no or foreign Origin refused");
 
@@ -1550,87 +1394,16 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
   const paymentsGate = async () => {
     const envFile = join(app, ".env"), original = readFileSync(envFile, "utf8");
     const check = (ok: unknown, what: string) => { if (!ok) throw new Error(`payments: ${what}`); };
-    // The fake answers exactly what the app and the plugin call; every request is recorded.
-    type Obj = Record<string, any>;
-    const fake = { customers: new Map<string, Obj>(), prices: new Map<string, Obj>(), sessions: new Map<string, Obj>(), subs: new Map<string, Obj>(), portals: 0, calls: [] as string[], n: 0, down: "" as "" | "all" | "cancel" };
-    const id = (p: string) => `${p}_gate${++fake.n}`;
-    // Stripe's form encoding (`metadata[userId]=…`, `line_items[0][price]=…`) read into nested objects.
-    const form = (text: string): Obj => {
-      const out: Obj = {};
-      for (const [k, v] of new URLSearchParams(text)) {
-        const path = k.replace(/\]/g, "").split("[");
-        let o = out;
-        path.slice(0, -1).forEach((p) => (o = o[p] ??= {}));
-        o[path.at(-1)!] = v;
-      }
-      return out;
-    };
-    const missing = () => Response.json({ error: { type: "invalid_request_error", code: "resource_missing", message: "No such object" } }, { status: 404 });
-    const list = (data: Obj[]) => Response.json({ object: "list", data, has_more: false, url: "/v1/x" });
-    const server = Bun.serve({
-      hostname: "127.0.0.1", port: 0,
-      async fetch(req) {
-        const url = new URL(req.url), p = url.pathname, m = req.method;
-        fake.calls.push(`${m} ${p}`);
-        // An outage: every call fails ("all"), or only cancelling a subscription does ("cancel").
-        if (fake.down === "all" || (fake.down === "cancel" && m === "DELETE")) return Response.json({ error: { type: "api_error", message: "fake Stripe is down" } }, { status: 500 });
-        const body = m === "POST" ? form(await req.text()) : {};
-        let r: RegExpMatchArray | null;
-        if (m === "GET" && p === "/v1/customers/search") return Response.json({ object: "search_result", data: [], has_more: false, url: p });
-        if (m === "POST" && p === "/v1/customers") { const c = { id: id("cus"), object: "customer", email: body.email, name: body.name, metadata: body.metadata ?? {} }; fake.customers.set(c.id, c); return Response.json(c); }
-        if ((r = p.match(/^\/v1\/customers\/([^/]+)$/))) { const c = fake.customers.get(r[1]!); if (!c) return missing(); if (m === "POST") Object.assign(c, body); return Response.json(c); }
-        if (m === "GET" && p === "/v1/prices") { const keys = [...url.searchParams].filter(([k]) => k.startsWith("lookup_keys")).map(([, v]) => v); return list([...fake.prices.values()].filter((x) => keys.includes(x.lookup_key))); }
-        if (m === "POST" && p === "/v1/prices") {
-          const x = { id: id("price"), object: "price", active: true, currency: body.currency, unit_amount: Number(body.unit_amount), lookup_key: body.lookup_key, product: body.product ?? id("prod"), recurring: { interval: body.recurring?.interval, usage_type: "licensed" } };
-          fake.prices.set(x.id, x);
-          return Response.json(x);
-        }
-        if (m === "GET" && p === "/v1/subscriptions") return list([...fake.subs.values()].filter((s) => s.customer === url.searchParams.get("customer")));
-        if ((r = p.match(/^\/v1\/subscriptions\/([^/]+)$/))) { const s = fake.subs.get(r[1]!); if (!s) return missing(); if (m === "DELETE") s.status = "canceled"; return Response.json(s); }
-        if (m === "POST" && p === "/v1/checkout/sessions") { const s = { id: id("cs"), object: "checkout.session", url: "https://checkout.stripe.test/pay", subscription: null, payment_status: "unpaid", status: "open", ...body }; fake.sessions.set(s.id, s); return Response.json(s); }
-        if (m === "GET" && p === "/v1/checkout/sessions") return list([...fake.sessions.values()].filter((x) => x.customer === url.searchParams.get("customer") && x.status === url.searchParams.get("status")));
-        if (m === "POST" && (r = p.match(/^\/v1\/checkout\/sessions\/([^/]+)\/expire$/))) { const x = fake.sessions.get(r[1]!); if (!x) return missing(); x.status = "expired"; return Response.json(x); }
-        if ((r = p.match(/^\/v1\/checkout\/sessions\/([^/]+)$/))) { const s = fake.sessions.get(r[1]!); return s ? Response.json(s) : missing(); }
-        if (m === "POST" && p === "/v1/billing_portal/sessions") { fake.portals++; return Response.json({ id: id("bps"), object: "billing_portal.session", url: "https://billing.stripe.test/session", customer: body.customer, return_url: body.return_url }); }
-        return Response.json({ error: { type: "invalid_request_error", message: `fake Stripe has no ${m} ${p}` } }, { status: 404 });
-      },
-    });
+    const { fake, id, server } = startFakeStripe();
     const SECRET = "whsec_gate_" + crypto.randomUUID().replaceAll("-", "");
-    const sign = async (payload: string, secret = SECRET) => {
-      const t = Math.floor(Date.now() / 1000);
-      const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-      const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${t}.${payload}`)));
-      return `t=${t},v1=${[...mac].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
-    };
+    const sign = (payload: string, secret = SECRET) => signWebhook(payload, secret);
     // The app database: the sqlite file that has the subscription table.
-    const db = <T,>(fn: (d: Database) => T): T => {
-      for (const f of sqliteFiles(join(app, ".void"))) {
-        const d = openDb(f);
-        try {
-          if (d.query("SELECT 1 FROM sqlite_master WHERE name = 'subscription'").get()) return fn(d);
-        } finally { d.close(); }
-      }
-      throw new Error("payments: no database with a subscription table");
-    };
+    const db = <T,>(fn: (d: Database) => T): T => h.withDb("subscription", fn, { missing: "payments: no database with a subscription table" });
     const subRows = (userId: string) => db((d) => d.query("SELECT * FROM subscription WHERE referenceId = ? ORDER BY id").all(userId) as Obj[]);
     const allSubs = () => db((d) => JSON.stringify(d.query("SELECT id, status, plan, referenceId, stripeSubscriptionId FROM subscription ORDER BY id").all()));
-    const restart = async (vars: Record<string, string | null>) => {
-      await killChildren();
-      let text = original;
-      for (const [k, v] of Object.entries(vars)) text = text.replace(new RegExp(`^${k}=.*\\n`, "m"), "") + (v === null ? "" : `${k}=${v}\n`);
-      writeFileSync(envFile, text);
-      return `http://localhost:${(await startDev()).port}`;
-    };
-    const user = async (b: string, address: string) => {
-      if (config.inviteOnly) return signUpVerified(b, address);
-      if (!(await authPost(b, "/api/auth/sign-up/email", { name: "Payer", email: address, password: gatePw })).ok) throw new Error(`payments: sign-up for ${address} failed`);
-      const inn = await authPost(b, "/api/auth/sign-in/email", { email: address, password: gatePw });
-      check(inn.ok, `sign-in for ${address} -> ${inn.status}`);
-      return cookieOf(inn);
-    };
-    const idOf = (address: string) => onUser(address, "SELECT ?").id;
-    const call = (b: string, path: string, cookie = "", body?: object, origin = b) =>
-      fetch(b + path, { method: body ? "POST" : "GET", redirect: "manual", headers: { origin, ...(cookie && { cookie }), ...(body && { "content-type": "application/json" }) }, body: body && JSON.stringify(body) });
+    const restart = (vars: Record<string, string | null>) => h.restart(original, vars);
+    const user = (b: string, address: string) => h.makeUser(address, { password: gatePw, base: b, name: "Payer", markVerified: false, prefix: "payments: ", requireSignIn: true });
+    const call = (b: string, path: string, cookie = "", body?: object, origin = b) => h.request(path, { base: b, redirect: "manual", cookie, body, origin: { foreign: origin } });
     const page = (b: string, cookie = "") => call(b, "/billing", cookie).then((r) => r.text());
     const UPGRADE = { plan: "pro", successUrl: "/billing", cancelUrl: "/billing" };
     const webhook = async (b: string, ev: Obj, sig?: string, secret = SECRET) => {
@@ -1847,7 +1620,7 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
         const refused = await remove(d), why = (await refused.json()) as Obj;
         fake.down = "";
         check(refused.status === 500 && why.code === "BILLING_CANCEL_FAILED" && why.message === "Couldn't cancel the subscription in Stripe, so the account was not deleted. Try again.", `${how} with Stripe down (${outage}) -> ${refused.status} ${JSON.stringify(why)}`);
-        check(userRow(mail) && subRows(uid).length === 1 && statuses() === "past_due,active,canceled,incomplete_expired" && checkout.status === (outage === "all" ? "open" : "expired"), `${how} with Stripe down deleted the user or their rows, or cancelled something`);
+        check(h.hasUser(mail) && subRows(uid).length === 1 && statuses() === "past_due,active,canceled,incomplete_expired" && checkout.status === (outage === "all" ? "open" : "expired"), `${how} with Stripe down deleted the user or their rows, or cancelled something`);
         check(!config.storage || r2Keys().includes(file), `${how} with Stripe down purged the user's files`);
         // Stripe is back: every subscription that hadn't ended is cancelled (past_due included, the ended ones left alone), then the user, rows and files go.
         const mark = fake.calls.length;
@@ -1856,7 +1629,7 @@ ${config.admin ? `it("with --admin, only the admin helper user gets /admin", asy
         const cancelled = fake.calls.slice(mark).filter((c) => c.startsWith("DELETE "));
         check(statuses() === "canceled,canceled,canceled,incomplete_expired" && cancelled.join() === [subs[0]!, subs[1]!].map((x) => `DELETE /v1/subscriptions/${x.id}`).join(), `${how}: Stripe has ${statuses()} after ${cancelled.join(", ") || "no cancel"}`);
         check(checkout.status === "expired", `${how} left the user's Checkout session ${checkout.status}`);
-        check(!userRow(mail) && subRows(uid).length === 0, `${how} left the user or their subscription rows`);
+        check(!h.hasUser(mail) && subRows(uid).length === 0, `${how} left the user or their subscription rows`);
         check(!config.storage || !r2Keys().some((k) => k.startsWith(`users/${uid}/`)), `${how} left the user's files`);
         // Stripe's event for the cancellation arrives after the user is gone: 200, so Stripe doesn't retry. It is on a declared price, so the
         // sync does not skip it as someone else's: it gets as far as finding that no user holds the customer.
