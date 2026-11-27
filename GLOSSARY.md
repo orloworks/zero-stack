@@ -42,6 +42,48 @@ _Avoid_: feature flag
 A value that the app declares with a type and a default, and that an admin can change while the app runs. It is never a secret.
 _Avoid_: config, option, env var
 
+## Email
+
+**Transactional mail**:
+Mail a person gets because of something they did or something that happened to their account: a password reset, an invite, a confirmation. Nobody can unsubscribe from it.
+_Avoid_: system mail, notification
+
+**Billing notice**:
+Transactional mail about a payment: a receipt, a renewal reminder, a failed payment, an expiring card, a trial about to end, a cancellation. Stripe sends these, not the app.
+_Avoid_: billing email, dunning mail
+
+**Marketing mail**:
+Mail that promotes the product, sent only to subscribers with consent for a list. Every one carries a way to unsubscribe and the owner's postal address.
+_Avoid_: newsletter (that is one list), bulk mail, blast
+
+**List**:
+A named kind of marketing mail that the app declares and that people join and leave separately.
+_Avoid_: audience, segment, topic
+
+**Subscriber**:
+An email address that asked for marketing mail. It may or may not belong to a user; one address is one subscriber.
+_Avoid_: contact, lead, recipient
+
+**Consent**:
+The record that a subscriber agreed to receive one list: how and where they were asked, what they were told, and when. It is pending until confirmed and ends when they unsubscribe.
+_Avoid_: subscription (that is billing), opt-in, membership
+
+**Confirmation**:
+The step that proves the inbox owner wants the mail: they press Confirm on the page a mailed link opens, or they choose the list on the Account page as a user whose email is verified.
+_Avoid_: double opt-in, verification (that is for accounts)
+
+**Unsubscribe**:
+A subscriber withdrawing consent for one list or for all, from a link in the mail, from their mail app's own button, or from the Account page. It takes effect at once and needs no sign-in.
+_Avoid_: opt-out, remove
+
+**Email template**:
+An app-owned file that renders one marketing mail's content as HTML and as plain text.
+_Avoid_: layout (that is the shared frame around a template), design
+
+**Campaign**:
+One marketing mail sent once to one list: a subject, a list and an email template, declared by the app. A subscriber gets a campaign at most once.
+_Avoid_: broadcast, send, newsletter issue
+
 ## Upgrades
 
 **Upgrade**:
@@ -57,7 +99,7 @@ A file in a generated app that belongs to the app after the first scaffold: its 
 _Avoid_: user file, custom file
 
 **Declaration file**:
-An app-owned file that holds only one of the app's lists: its features, settings, onboarding steps or plans.
+An app-owned file that holds only one of the app's declarations: its features, settings, onboarding steps, plans, mailing lists or campaigns.
 _Avoid_: config file, registry
 
 **Auth extension**:
