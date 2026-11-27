@@ -376,7 +376,7 @@ const NOTICE_LINES = [
   "Send a reminder email 7 days before a free trial ends",
   "Subscription is canceled",
   "Customer emails",
-  "sandbox",
+  "sends no customer emails by default",
 ];
 
 test("payments: the Stripe production step lists Stripe's billing notice settings in all three composers, still human-only", () => {
@@ -388,7 +388,7 @@ test("payments: the Stripe production step lists Stripe's billing notice setting
   for (const out of [composeSetupDoc(c), composeWizard(c)!, composeSetupSection(c)])
     for (const l of NOTICE_LINES) expect(out, l).toContain(l);
   expect(step.why).toContain("sends no billing mail");
-  expect(step.why).toContain("no command can check");
+  expect(step.why).toContain("`bun run doctor` cannot check them");
   expect(Bun.spawnSync(["bash", "-n"], { stdin: new TextEncoder().encode(composeWizard(c)!) }).exitCode).toBe(0);
 });
 
