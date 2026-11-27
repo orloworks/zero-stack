@@ -66,7 +66,12 @@ test("hash is stable and tracks gate.ts, every file under scripts/gate/, and the
   const h3 = hash(tmp, ["--auth"], "v1");
   expect(h3).not.toBe(h2);
   writeFileSync(join(tmp, "scripts/gate/new-file.ts"), "added"); // a file added to the folder counts too
-  expect(hash(tmp, ["--auth"], "v1")).not.toBe(h3);
+  const h4 = hash(tmp, ["--auth"], "v1");
+  expect(h4).not.toBe(h3);
+  mkdirSync(join(tmp, "scripts/gate/checks"));
+  writeFileSync(join(tmp, "scripts/gate/checks/auth.ts"), "nested"); // and one in a folder below it
+  expect(hash(tmp, ["--auth"], "v1")).not.toBe(h4);
+  expect(() => hash(mkTmp("zs-hash-empty-"), [], "v1")).toThrow(); // a missing input folder is an error, never a silent skip
   expect(hash(repo, [], "v1")).toMatch(/^[0-9a-f]{64}$/); // real repo has every input file
 });
 

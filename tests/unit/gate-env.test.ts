@@ -25,3 +25,7 @@ test("editEnv writes an empty value and keeps a key that only starts like anothe
 test("editEnv writes a value literally (no $ replacement patterns) and handles several keys, each once", () => {
   expect(editEnv("A=1\nB=2\n", { A: "$&-$1", B: null, C: "3" })).toBe("A=$&-$1\nC=3\n");
 });
+
+test("editEnv matches the key literally, not as a pattern", () => {
+  expect(editEnv("AXB=1\n", { "A.B": "2" })).toBe("AXB=1\nA.B=2\n");
+});
