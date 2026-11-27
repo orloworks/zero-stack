@@ -366,3 +366,35 @@ test("doctor: a step for a flag that is off has no row, and the script parses wi
     expect(s.replace("<your host>", "")).not.toMatch(/<[A-Za-z][^<>]*>/);
   }
 });
+
+// #112: Stripe sends billing notices; the human-only Stripe step lists the dashboard settings that turn them on.
+const NOTICE_LINES = [
+  "Successful payments",
+  "Send emails about upcoming renewals",
+  "Send emails when card payments fail",
+  "Send emails about expiring cards",
+  "Send a reminder email 7 days before a free trial ends",
+  "Subscription is canceled",
+  "Customer emails",
+  "sandbox",
+];
+
+test("payments: the Stripe production step lists Stripe's billing notice settings in all three composers, still human-only", () => {
+  const c = cfg({ payments: true });
+  const step = stepsFor(c).find((s) => s.id === "stripe-live-key")!;
+  expect(step.who).toBe("human");
+  expect(step.capture).toBe("STRIPE_SECRET_KEY");
+  expect(step.covers).toEqual(["STRIPE_SECRET_KEY"]);
+  for (const out of [composeSetupDoc(c), composeWizard(c)!, composeSetupSection(c)])
+    for (const l of NOTICE_LINES) expect(out, l).toContain(l);
+  expect(step.why).toContain("sends no billing mail");
+  expect(step.why).toContain("no command can check");
+  expect(Bun.spawnSync(["bash", "-n"], { stdin: new TextEncoder().encode(composeWizard(c)!) }).exitCode).toBe(0);
+});
+
+test("payments: the billing notice lines never appear without --payments", () => {
+  for (const c of [cfg(), cfg({ auth: true }), cfg({ admin: true }), cfg({ framework: "react" })]) {
+    const out = composeSetupDoc(c) + (composeWizard(c) ?? "") + composeSetupSection(c);
+    expect(out).not.toContain("Send emails about upcoming renewals");
+  }
+});

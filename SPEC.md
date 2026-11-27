@@ -339,6 +339,11 @@ in `AGENTS.md`.
     "No Stripe customer yet" when there is none. No refund or plan-change buttons and no audit rows for plan changes (they happen in Stripe). Without `--payments`
     none of this exists. Test: `tests/plan-features.test.ts`; the gate covers the plan-only feature (off without the plan, on with it, off under the kill
     switch, on for a comped user) and the Billing section.
+  - Billing notices (#112, spec #109): Stripe sends them and the app sends none, so nothing is ever sent twice. The human-only Stripe production step (`stripe-live-key`) lists the
+    dashboard settings to switch on: successful-payment receipts, upcoming-renewal reminders, trial-ending reminders, failed card payment emails, expiring-card emails, the
+    Billing automation for a canceled subscription (cancellation confirmation), and Stripe's custom email domain, and says a Stripe sandbox sends no customer emails. Settings are named,
+    not their dashboard paths, where Stripe documents two paths. No flag, no webhook events, no app mail, no new wizard stage, and the step's secret and doctor row are unchanged.
+    The step's why says no command can check these toggles (no API for them was found), so the doctor cannot report them. Appears in `docs/setup.md`, the `AGENTS.md` setup table and the wizard stage only with `--payments`.
 
 Void imports `void/email` and `void/storage` lazily in generated helpers: its plugin loads
 `auth.ts` at startup and at build time, where a top-level import fails under `vp test`.
@@ -415,7 +420,7 @@ or `env.ts` that no step covers. A fourth composer writes `scripts/doctor.sh` (`
 migrations (`void db status`, fail closed on unrecognised output), each step's verify with the guide's number and title (`<app-host>` and `<app-name>`
 become `APP_HOST`, which must be set or the Deploy row FAILs, and `APP_NAME`, default the scaffolded name), then `void env check --remote`. Each prints PASS, FAIL
 (one fix line) or NOT CHECKED (every row after a failed sign-in step, the steps with an interactive `exec`); output is discarded, stdin closed,
-a time limit applies; exit 0 only when every row passed. The gate runs it under an isolated HOME and asserts each row. The gate checks the steps against the flags and runs `bash -n` on the wizard. Commands are the pinned Void's, `cf` and `infisical` only, never wrangler; Void-side browser driving stays in the agent's harness, not in the app.
+a time limit applies; exit 0 only when every row passed. The gate runs it under an isolated HOME and asserts each row. With `--payments`, the human-only production Stripe step also lists the Stripe emails to switch on (Stripe sends billing notices, the app sends none; the toggles cannot be checked by any command, so no doctor row covers them). The gate checks the steps against the flags and runs `bash -n` on the wizard. Commands are the pinned Void's, `cf` and `infisical` only, never wrangler; Void-side browser driving stays in the agent's harness, not in the app.
 
 ## Routing docs
 

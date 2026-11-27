@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Billing notices (`--payments`, #112):** the setup guide's human-only Stripe production step now lists the Stripe emails to switch on (receipts, renewal reminders, failed payment, expiring card and trial-ending emails, the cancellation-confirmation automation, your own email domain) and says a Stripe sandbox sends none. Stripe sends these; the app sends no billing mail and no command can check the toggles. Apps without `--payments`, and react, vue and solid output, are unchanged.
+
 ## v0.6.0 (2026-11-25)
 
 Run it with `bunx github:orloworks/zero-stack#v0.6.0 <dir>`. An app made with v0.5.0 or older needs the one-time port in `docs/upgrading.md` before `upgrade` works on it.
