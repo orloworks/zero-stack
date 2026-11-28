@@ -97,8 +97,8 @@ export async function scaffold(config: Config, targetDir: string, exec: Run = ru
     if (config.zodRpc) installZodRpc(targetDir);
     if (config.shadcn) installShadcn(targetDir);
     if (config.auth) installAuth(targetDir, config);
-    if (config.storage) installStorage(targetDir);
-    if (config.admin) installAdmin(targetDir, config); // after storage: it edits the upload route
+    if (config.storage) installStorage(targetDir, config);
+    if (config.admin) installAdmin(targetDir, config); // after storage
     if (config.payments) installPayments(targetDir, config);
     if (config.marketing) installMarketing(targetDir); // after admin: it edits the admin schema line and declarations test
     addAppScripts(targetDir, config);

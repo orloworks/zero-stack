@@ -530,6 +530,26 @@ test("svelte --storage --account-deletion purges before and after deletion and m
   expect(existsSync(join(off.dir, "src/storage.ts"))).toBe(false);
 });
 
+test("--storage checks the user row after an upload with --account-deletion (--admin is covered below); --storage alone and react/vue/solid keep the plain route", async () => {
+  const plain = readFileSync(join(import.meta.dir, "../../template/storage/routes/api/files/[name].ts"), "utf8");
+  const guarded = ['import { discardIfUserGone, userExists } from "../../../src/upload-guard"', "const user = requireAuth(c);", "discardIfUserGone(key, () => userExists(user.id), storage)"];
+  {
+    const app = storageApp({ framework: "svelte", auth: true, storage: true, accountDeletion: true });
+    await app.run();
+    const route = readFileSync(join(app.dir, "routes/api/files/[name].ts"), "utf8");
+    for (const t of guarded) expect(route).toContain(t);
+    for (const f of ["src/upload-guard.ts", "tests/upload-guard.test.ts"]) expect(existsSync(join(app.dir, f))).toBe(true);
+  }
+  for (const config of [{ framework: "svelte" }, { framework: "react" }, { framework: "vue" }, { framework: "solid" }]) {
+    const app = storageApp({ auth: true, storage: true, ...config });
+    await app.run();
+    const route = readFileSync(join(app.dir, "routes/api/files/[name].ts"), "utf8");
+    expect(route).not.toContain("upload-guard");
+    if (config.framework !== "svelte") expect(route).toBe(plain); // svelte's copy carries the scaffold-owned notice
+    expect(existsSync(join(app.dir, "src/upload-guard.ts"))).toBe(false);
+  }
+});
+
 // create-void's tsconfig.json (svelte): `include` lists directories, not scripts/.
 const REAL_TSCONFIG = JSON.stringify({ extends: "./.void/tsconfig.json", compilerOptions: { strict: true }, include: ["src", "pages", "routes", "middleware", "crons", "queues", "db"] }, null, 2);
 const withTsconfig = (s: ReturnType<typeof seeded>, body = REAL_TSCONFIG) => async (cmd: string[]) => {
@@ -600,7 +620,7 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
   expect(existsSync(join(dir, "src/admin-takeover.ts"))).toBe(true);
   expect(read("pages/settings.server.ts")).toContain("admin: adminAccess(user)");
   const agents = read("AGENTS.md");
-  for (const t of ["## Admin area", "ADMIN_EMAILS", "sign in with an email on `ADMIN_EMAILS` and verify it", "audit_entry", "refused with a 404 on purpose", "set role"]) expect(agents).toContain(t);
+  for (const t of ["## Admin area", "ADMIN_EMAILS", "sign up with an email on `ADMIN_EMAILS` and prove it from the inbox", "src/admin-takeover.ts", "audit_entry", "refused with a 404 on purpose", "set role"]) expect(agents).toContain(t);
   expect(agents).not.toContain("${");
   expect(agents).toContain("Every admin change writes exactly one audit entry");
   expect(agents).toContain("self-delete. The deleted user's email");
@@ -635,7 +655,7 @@ test("svelte --admin --storage checks the user row after an upload; --admin --in
   const on = adminApp({ storage: true, inviteOnly: true });
   await on.run();
   const route = readFileSync(join(on.dir, "routes/api/files/[name].ts"), "utf8");
-  for (const t of ['import { discardIfUserGone } from "../../../src/upload-guard"', "const user = requireAuth(c);", "discardIfUserGone(key, () => userExists(user.id), storage)"]) expect(route).toContain(t);
+  for (const t of ['import { discardIfUserGone, userExists } from "../../../src/upload-guard"', "const user = requireAuth(c);", "discardIfUserGone(key, () => userExists(user.id), storage)"]) expect(route).toContain(t);
   for (const f of ["src/upload-guard.ts", "tests/upload-guard.test.ts"]) expect(existsSync(join(on.dir, f))).toBe(true);
   expect(readFileSync(join(on.dir, "src/admin.ts"), "utf8")).toContain("export const INVITE_ONLY = true;");
   expect(readFileSync(join(on.dir, "src/signup-allowlist.ts"), "utf8")).toContain("export function signupAllowed"); // invite-only's copy, not a second one

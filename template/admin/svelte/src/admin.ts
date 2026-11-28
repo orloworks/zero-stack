@@ -109,8 +109,6 @@ export async function listUsers(q: string, page: number) {
   return { rows, total: n };
 }
 
-export const userExists = async (id: string): Promise<boolean> => (await findUser(id)) !== null;
-
 export async function findUser(id: string) {
   const { db, eq, userTable } = await store();
   return (await db.select().from(userTable).where(eq(userTable.id, id)).limit(1))[0] ?? null;
