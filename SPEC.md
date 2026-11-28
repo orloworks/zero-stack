@@ -331,7 +331,7 @@ in `AGENTS.md`.
   key (monthly price, optional trial days); `src/stripe.ts` builds the client and refuses `STRIPE_API_URL` off localhost;
   `src/billing.ts` holds `requirePlan` / `currentPlan` (active, trialing or past_due; read from the app's copy, never Stripe), `billingPlugins(env)`
   (the plugin plus the guard, spread into `auth.ts`), `billingGuard` (on upgrade, billing-portal, cancel and restore: 503 `STRIPE_NOT_CONFIGURED`
-  while `.env` has the placeholder key, 400 `SUBSCRIPTION_NEEDS_CARD` on upgrade while a past_due or unpaid row exists; the webhook answers 400
+  while `.env` has the placeholder key, 400 `SUBSCRIPTION_NEEDS_CARD` on upgrade while a past_due, unpaid or paused row exists; before every other upgrade it creates the user's Stripe customer itself (idempotency key from the user id, `metadata.userId`) and expires the customer's open Checkout sessions, 500 `BILLING_PREPARE_FAILED` when Stripe fails; the webhook answers 400
   `STRIPE_WEBHOOK_NOT_CONFIGURED` while the secret is the placeholder) and `syncStripeEvent`, the plugin's `onEvent`: for a subscription event on
   a declared price whose customer a user holds, `created` throws (a retried 400) when the row is missing (only for an event under an hour old; an older one is logged and answers 200), and `updated` / `deleted` read the live
   subscription from Stripe and write its plan (from the lookup key of the live item that is a declared plan, wherever it sits in the list), status, cancel-at-period-end, cancel-at and period when the row
