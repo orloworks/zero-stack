@@ -11,6 +11,7 @@ vi.mock("void/db", async () => {
   const { drizzle } = await import("drizzle-orm/better-sqlite3");
   const orm = await import("drizzle-orm");
   const sqlite = new Database(":memory:");
+  sqlite.pragma("foreign_keys = ON"); // D1 enforces foreign keys; without this the stand-in hides a consent insert for a deleted subscriber
   sqlite.exec(`
     create table subscriber (id text primary key, email text not null unique, unsubscribe_token text not null unique, created_at integer not null, last_mail_at integer);
     create table mail_ceiling (hour integer primary key, sent integer not null);
@@ -26,9 +27,12 @@ vi.mock("void/db", async () => {
   };
   return { db: Object.assign(db, { batch: async (qs: never[]) => sqlite.transaction(() => qs.map(exec))() }), sqlite, ...orm };
 });
+vi.mock("void", () => ({ defineHandler: (h: unknown) => h })); // the route file only wraps its handler
 vi.mock("@schema", async () => await import("../db/schema/marketing"));
 
 const { CEILING_PER_HOUR, LISTS, CONFIRM_TTL_MS, confirm, readConfirmation, removeSubscriber, requestAgain, requestJoin, RESEND_MS, unsubscribe } = await import("../src/consent");
+const { POST: unsubscribeRoute } = (await import("../routes/api/lists/unsubscribe")) as unknown as { POST: (c: never) => Promise<Response> };
+const { Hono } = await import("hono");
 const { removeSubscriberOrRefuse } = await import("../src/subscriber-removal");
 const { sqlite } = (await import("void/db")) as unknown as { sqlite: import("better-sqlite3").Database };
 
@@ -49,7 +53,7 @@ const age = (email: string, ms: number) => {
 };
 
 beforeEach(() => {
-  sqlite.exec("delete from consent; delete from subscriber; delete from mail_ceiling; drop trigger if exists no_delete; drop trigger if exists no_restore");
+  sqlite.exec("delete from consent; delete from subscriber; delete from mail_ceiling; drop trigger if exists no_delete; drop trigger if exists no_restore; drop trigger if exists race_insert; drop trigger if exists race_ceiling");
   mail.send.mockReset();
   mail.send.mockImplementation(async () => {});
 });
@@ -312,5 +316,43 @@ it("an unverified account's deletion leaves the address's subscription alone, a 
   expect(everything()).toBe(before);
   await removeSubscriberOrRefuse({ id: "owner", email: ANN, emailVerified: true });
   expect(rows("select * from subscriber")).toHaveLength(0);
+  expect(rows("select * from consent")).toHaveLength(0);
+});
+
+it("the one-click POST with a token and no list or scope withdraws every list (RFC 8058 form body)", async () => {
+  await requestJoin(ANN, LIST, ASK);
+  await confirm(linkToken());
+  sqlite.prepare("insert into consent select subscriber_id, 'other', 'confirmed', source, page, wording, requested_at, confirmed_at, null, null, 'tok-other' from consent").run();
+  const app = new Hono().post("/api/lists/unsubscribe", unsubscribeRoute as never);
+  const res = await app.request(`/api/lists/unsubscribe?token=${tokenOf(ANN)}`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "List-Unsubscribe=One-Click" });
+  expect(res.status).toBe(200);
+  expect(rows("select state, withdrawn_how from consent")).toEqual([{ state: "unsubscribed", withdrawn_how: "one-click" }, { state: "unsubscribed", withdrawn_how: "one-click" }]);
+});
+
+it("the next subscribe purges a subscriber whose consent is all pending and older than seven days, and keeps confirmed, younger and unmailed rows", async () => {
+  const STALE = "stale@example.com", FRESH = "fresh@example.com", KEPT = "kept@example.com", MIXED = "mixed@example.com";
+  for (const to of [STALE, FRESH, KEPT]) await requestJoin(to, LIST, ASK);
+  await confirm(linkToken(2)); // kept
+  await requestJoin(MIXED, LIST, ASK);
+  await confirm(linkToken());
+  sqlite.prepare("insert into consent select subscriber_id, 'other', 'pending', source, page, wording, requested_at, null, null, null, 'tok-mixed' from consent where list = ? and subscriber_id = (select id from subscriber where email = ?)").run(LIST, MIXED);
+  for (const to of [STALE, KEPT, MIXED]) age(to, CONFIRM_TTL_MS + 1000);
+  await requestJoin("new@example.com", LIST, ASK);
+  expect(rows("select email from subscriber order by email").map((r) => r.email)).toEqual([FRESH, KEPT, MIXED, "new@example.com"]);
+  expect(rows("select * from consent c where not exists (select 1 from subscriber s where s.id = c.subscriber_id)")).toHaveLength(0);
+});
+
+it("a subscriber deleted between the insert and the select is answered like any address, and mails nothing", async () => {
+  sqlite.exec("create trigger race_insert after insert on subscriber begin delete from subscriber where id = new.id; end");
+  expect(await requestJoin(ANN, LIST, ASK)).toBe("ok");
+  expect(mail.send).not.toHaveBeenCalled();
+  expect(rows("select * from mail_ceiling")).toEqual([]);
+});
+
+it("a subscriber deleted after the ceiling claim frees the ceiling slot and answers normally (foreign keys on)", async () => {
+  sqlite.exec("create trigger race_ceiling after insert on mail_ceiling begin delete from subscriber; end");
+  expect(await requestJoin(ANN, LIST, ASK)).toBe("ok");
+  expect(mail.send).not.toHaveBeenCalled();
+  expect(rows("select sent from mail_ceiling")).toEqual([{ sent: 0 }]);
   expect(rows("select * from consent")).toHaveLength(0);
 });

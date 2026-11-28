@@ -12,6 +12,7 @@ export const POST = defineHandler(async (c) => {
   const f = await fields(c);
   const token = c.req.query("token") ?? f.token;
   const list = c.req.query("list") ?? f.list ?? "";
-  await unsubscribe(token, f.scope === "all" ? "all" : { list }, f["List-Unsubscribe"] === "One-Click" ? "one-click" : "link");
+  // No list means every list: the standard one-click POST to a URL without `&list=` must never be dropped.
+  await unsubscribe(token, f.scope === "all" || !list ? "all" : { list },f["List-Unsubscribe"] === "One-Click" ? "one-click" : "link");
   return c.json({ message: "You are unsubscribed." });
 });
