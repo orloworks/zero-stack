@@ -595,7 +595,9 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
   expect(read("env.ts")).toContain('ADMIN_EMAILS: string().default(""),');
   expect(read(".env")).toContain("\nADMIN_EMAILS=@example.com\n");
   const account = read("pages/settings.svelte");
-  for (const t of ["let { user, admin }: Props", 'href="/admin"', "Your email is on the admin list but isn't verified yet.", "Send verification link"]) expect(account).toContain(t);
+  for (const t of ["let { user, admin }: Props", 'href="/admin"']) expect(account).toContain(t);
+  for (const t of ["admin list", "verified yet", "sendVerification"]) expect(account).not.toContain(t); // never tells an unverified user their address is listed (#153)
+  expect(existsSync(join(dir, "src/admin-takeover.ts"))).toBe(true);
   expect(read("pages/settings.server.ts")).toContain("admin: adminAccess(user)");
   const agents = read("AGENTS.md");
   for (const t of ["## Admin area", "ADMIN_EMAILS", "sign in with an email on `ADMIN_EMAILS` and verify it", "audit_entry", "refused with a 404 on purpose", "set role"]) expect(agents).toContain(t);

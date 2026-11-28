@@ -263,8 +263,11 @@ in `AGENTS.md`.
   - **Pages** (`pages/admin/`, one `admin.css`, no framework): Users (search by email or name through one read-only
     `void/db` query, the U2 departure; 50 a page, newest first, "Showing 51–100 of 128"), User detail (status line from
     `userStatus`, the fixing action, sessions with "This device", ban with an optional admin-only reason, delete with a typed
-    email, "View audit log"), Audit log (`?user=` filter). The Account page gets an Admin link for admins and, for a listed
-    but unverified user, "Your email is on the admin list but isn't verified yet." with a verification link. Success copy says
+    email, "View audit log"), Audit log (`?user=` filter). The Account page gets an Admin link for admins and shows nobody
+    anything about the list. Without `--invite-only`, when `/verify-email` verifies a listed address (`src/admin-takeover.ts`, the
+    `databaseHooks.user.update.after` hook) every session of that user ends, the password becomes a random one, and the address is mailed a
+    reset link, so whoever signed up with the owner's address first cannot become admin (#153); a failed mail is logged and Forgot password
+    still works. Success copy says
     "requested", never "sent". Every form uses `runAction` (`src/lib/admin-action.ts`: pending, done, done-unaudited, error).
   - **Send link**: `POST /api/admin/users/:id/send-link` calls `requestPasswordReset` on the server (no Turnstile token
     needed) and audits it, and refuses a missing or foreign `Origin` with 403; with `--invite-only` an unverified user's link is mailed as "Set your password".

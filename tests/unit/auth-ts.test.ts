@@ -171,3 +171,11 @@ test("with marketing, payments, storage, account deletion and admin: the subscri
   expect(g.every((i) => i >= 0)).toBe(true);
   expect(g).toEqual([...g].sort((a, b) => a - b));
 });
+
+test("--admin without --invite-only revokes a listed address's sessions and password when it is verified; --invite-only and no --admin do not", () => {
+  const src = compose({ admin: true });
+  expect(src).toContain('import { revokeUnprovenSessions } from "./src/admin-takeover";');
+  expect(src).toContain("update: {\n        after: revokeUnprovenSessions((user) => isAdmin(env.ADMIN_EMAILS, user)),");
+  expect(src.match(/databaseHooks:/g)).toHaveLength(1);
+  for (const o of [{ admin: true, inviteOnly: true }, { inviteOnly: true }, {}]) expect(compose(o)).not.toContain("revokeUnprovenSessions");
+});

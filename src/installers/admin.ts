@@ -45,38 +45,16 @@ export function installAdmin(dir: string, config: Config): void {
   editFile(dir, "db/schema.ts", (s) => replaceAnchor(s, 'import { integer, sqliteTable, text } from "void/schema-d1";\n', 'import { integer, sqliteTable, text } from "void/schema-d1";\n\nexport * from "./schema/admin";\n', "db/schema.ts"));
   if (config.inviteOnly) installInvites(dir); // after the schema edit it extends
 
-  // Account page: an Admin link for admins, a verify hint for a listed owner whose email is not verified yet (D9).
+  // Account page: an Admin link for admins and nothing for anyone else; it never says whether an unverified address is on the admin list (#153).
   editFile(dir, ACCOUNT_SERVER, (s) => {
     s = replaceAnchor(s, 'import { getUser } from "void/auth";\n', 'import { getUser } from "void/auth";\nimport { adminAccess } from "../src/admin";\n', ACCOUNT_SERVER);
     return replaceAnchor(s, "defineHandler(() => ({ user: getUser() }));", "defineHandler(() => {\n  const user = getUser();\n  return { user, admin: adminAccess(user) };\n});", ACCOUNT_SERVER);
   });
   editFile(dir, ACCOUNT, (s) => {
-    s = replaceAnchor(s, "  let { user }: Props = $props();\n", `  let { user, admin }: Props = $props();
-
-  let verifying = $state(false);
-  let verifyState = $state<"" | "requested" | "error">("");
-  async function sendVerification() {
-    if (!user) return;
-    verifying = true;
-    verifyState = "";
-    try {
-      const res = await auth.sendVerificationEmail({ email: user.email, callbackURL: "/settings" });
-      verifyState = res.error ? "error" : "requested";
-    } catch {
-      verifyState = "error";
-    } finally {
-      verifying = false;
-    }
-  }
-`, ACCOUNT);
+    s = replaceAnchor(s, "  let { user }: Props = $props();\n", "  let { user, admin }: Props = $props();\n", ACCOUNT);
     return replaceAnchor(s, "    <p>Signed in as {user.email}</p>\n", `    <p>Signed in as {user.email}</p>
     {#if admin === "admin"}
       <p><a href="/admin">Admin</a></p>
-    {:else if admin === "unverified"}
-      <p>Your email is on the admin list but isn't verified yet.</p>
-      <button type="button" onclick={sendVerification} disabled={verifying}>{verifying ? "Sending…" : "Send verification link"}</button>
-      {#if verifyState === "requested"}<p role="status">Verification link requested for {user.email}.</p>{/if}
-      {#if verifyState === "error"}<p role="alert">Couldn't request the link. Try again.</p>{/if}
     {/if}
 `, ACCOUNT);
   });
