@@ -253,11 +253,28 @@ export async function adminChecks(ctx: Ctx): Promise<void> {
         console.log("gate: admin without --payments: no billing section on user detail, no plan text on Features");
       }
 
-      // The Account page: an Admin link for an admin; a verify hint for a listed, unverified user (never a different 404); nothing for anyone else.
+      // The Account page: an Admin link for an admin and nothing about the list for anyone else, an unverified listed user included (#153).
       const acct = (cookie: string) => html(b, "/settings", cookie).then((r) => r.text);
       if (!(await acct(bossU.cookie)).includes('href="/admin"')) throw new Error("an admin's Account page lacks the Admin link");
       if ((await acct(plainU.cookie)).includes('href="/admin"') || (await acct(plainU.cookie)).includes("admin list")) throw new Error("a non-admin's Account page mentions admin");
-      if (ownerU && !(await acct(ownerU.cookie)).includes("Your email is on the admin list but isn't verified yet.")) throw new Error("a listed, unverified user's Account page lacks the hint");
+      if (ownerU) {
+        if ((await acct(ownerU.cookie)).includes("admin list")) throw new Error("a listed, unverified user's Account page mentions the admin list");
+        // Takeover (#153): the squatter signed up as the owner's address (session, own password); the owner's click on the real verify mail must end that session and
+        // password, mail a reset link, and leave only the owner able to sign in, as admin.
+        const [verifyLink] = await waitMails(b, "Verify your email", owner2, 1);
+        if (!verifyLink) throw new Error("no verify mail for a listed sign-up in the dev inbox");
+        await h.follow(verifyLink, b);
+        if (!isVerified(owner2)) throw new Error("the owner's verify link did not verify the address");
+        if (await sessionUser(b, ownerU.cookie)) throw new Error("the squatter's session survived the owner's verification");
+        if ((await signIn(b, owner2)).ok) throw new Error("the squatter's password still signs in after the owner's verification");
+        const [ownerLink] = await waitMails(b, "Reset your password", owner2, 1);
+        if (!ownerLink) throw new Error("no reset mail after a listed address was verified");
+        const OWNER_PW = "owner-chose-this-1";
+        if (!(await authPost(b, "/api/auth/reset-password", { newPassword: OWNER_PW, token: await h.resetToken(ownerLink, "owner reset", b) })).ok) throw new Error("the owner's reset link did not set a password");
+        const own = await signIn(b, owner2, OWNER_PW);
+        if (!own.ok || (await call(b, "GET", "/admin", cookieOf(own))).status !== 200) throw new Error("the owner cannot sign in and open /admin after setting a password");
+        console.log("gate: admin takeover: verifying a listed address ends the squatter's session and password; only the owner's reset link gets in");
+      }
 
       // Onboarding (E14): "signed up" and "email verified" come from the user row, declared steps from onboarding_step; the list shows "n of m" and user detail the steps.
       const steps = 3; // signed up, email verified, and the scaffold's one declared step

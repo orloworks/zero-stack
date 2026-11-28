@@ -38,9 +38,9 @@ it("requireAdmin answers 404 for signed out, signed in and listed-but-unverified
   expect(notFound().status).toBe(404);
 });
 
-it("adminAccess tells the Account page who to greet and who to hint (D9)", () => {
+it("adminAccess tells the Account page who gets the Admin link, and never hints at the list to anyone else (#153)", () => {
   expect(adminAccess({ email: "boss@example.com", emailVerified: true })).toBe("admin");
-  expect(adminAccess({ email: "boss@example.com", emailVerified: false })).toBe("unverified");
+  expect(adminAccess({ email: "boss@example.com", emailVerified: false })).toBeNull();
   expect(adminAccess({ email: "someone@example.com", emailVerified: false })).toBeNull();
   expect(adminAccess({ email: "someone@example.com", emailVerified: true })).toBeNull();
   expect(adminAccess(null)).toBeNull();

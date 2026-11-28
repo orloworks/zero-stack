@@ -73,6 +73,11 @@ const ADMIN_SESSION_CREATE = `      create: {
           await ctx?.context.internalAdapter.updateUser(session.userId, { lastSignInAt: new Date() });
         },
       },`;
+// --admin without --invite-only: a listed address that /verify-email verifies loses every session and its password and is mailed a set-password link (src/admin-takeover.ts),
+// so whoever signed up with the owner's address first cannot become admin when the owner clicks the link.
+const ADMIN_VERIFY_UPDATE = `      update: {
+        after: revokeUnprovenSessions((user) => isAdmin(env.ADMIN_EMAILS, user)),
+      },`;
 // After any user is deleted (self-delete or the admin plugin's remove-user). --admin: sweep the files once more (an upload that raced the delete), then clear
 // the user's email from the audit log. --payments: delete the Stripe plugin's subscription rows, which have no foreign key to cascade (it logs its own failure).
 const userDelete = (config: Config) => `      delete: {
@@ -223,7 +228,7 @@ export function composeAuthTs(config: Config): string {
     // svelte: the one plugins and trustedOrigins keys come from the auth extension (below); react, vue and solid keep their file byte for byte.
     ...(svelte ? ["  plugins: app.plugins,", "  trustedOrigins: app.trustedOrigins,"] : zeroPlugins.length ? [`  plugins: [${zeroPlugins.join(", ")}],`] : []),
     ...databaseHooks({
-      user: [...(config.inviteOnly ? [inviteOnlyUserCreate(!!config.admin)] : []), ...(config.admin || (config.payments && config.accountDeletion) ? [userDelete(config)] : [])],
+      user: [...(config.inviteOnly ? [inviteOnlyUserCreate(!!config.admin)] : []), ...(config.admin && !config.inviteOnly ? [ADMIN_VERIFY_UPDATE] : []), ...(config.admin || (config.payments && config.accountDeletion) ? [userDelete(config)] : [])],
       session: config.admin ? [ADMIN_SESSION_CREATE] : [],
     }),
     ...userOption(config),
@@ -233,7 +238,7 @@ export function composeAuthTs(config: Config): string {
   const del = (config.accountDeletion || config.admin) && config.storage;
   const ba = config.accountDeletion || config.inviteOnly ? `import { APIError, createAuthMiddleware${config.inviteOnly ? ", isAPIError" : ""} } from "better-auth/api";\n` : "";
   return `import { defineAuth } from "void/auth";
-${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.marketing ? 'import { removeSubscriberOrRefuse } from "./src/subscriber-removal";\n' : ""}${config.payments ? paymentsImports(!!(config.accountDeletion || config.admin)) : ""}${svelte ? EXTENSION_IMPORTS : ""}
+${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.admin && !config.inviteOnly ? 'import { revokeUnprovenSessions } from "./src/admin-takeover";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.marketing ? 'import { removeSubscriberOrRefuse } from "./src/subscriber-removal";\n' : ""}${config.payments ? paymentsImports(!!(config.accountDeletion || config.admin)) : ""}${svelte ? EXTENSION_IMPORTS : ""}
 export default defineAuth(({ defaults${svelte || zeroPlugins.length ? ", env" : ""} }) => ${svelte ? `{
   const app = extendAuth([${zeroPlugins.join(", ")}], authExtension(env), defaults.trustedOrigins);
   return {` : "({"}
