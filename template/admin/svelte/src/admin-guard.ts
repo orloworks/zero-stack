@@ -6,7 +6,7 @@ import type { AuditInput, Verb } from "./admin";
 // would keep working until the session expires), so this runs first and decides from ADMIN_EMAILS, live, on every call.
 //   before: 404 unless the path is allowlisted and the signed-in user passes isAdmin now; then it is the only writer of user.role, so the plugin's
 //           own check (which reads the user fresh from the database) agrees; on remove-user, refuse self, then cancel billing and purge the user's files first (U1).
-//   after:  one audit entry for each successful change; a failed write answers 500 AUDIT_WRITE_FAILED (the change stands; the page shows a warning).
+//   after:  a ban deletes the user's sessions once more (a racing sign-in); one audit entry for each successful change; a failed write answers 500 AUDIT_WRITE_FAILED (the change stands; the page shows a warning).
 // Not on the list, so refused with a 404 even for an admin: list-user-sessions (it returns raw session tokens; the pages read sessions server-side),
 // set-role, create-user, update-user, set-user-password, impersonate-user,
 // stop-impersonating, has-permission, and any endpoint a later Better Auth adds. Fail closed.
@@ -119,6 +119,8 @@ export function adminGuard(opts: GuardOptions) {
             const p = pending.get(ctx.context);
             if (!p || isAPIError(ctx.context.returned)) return;
             pending.delete(ctx.context);
+            // A sign-in that read the user before the ban can insert its session after the plugin's own deletion; sweep again so none outlives the ban.
+            if (p.verb === "ban" && p.target?.id) await ctx.context.internalAdapter.deleteUserSessions(p.target.id);
             try {
               await opts.audit(p);
             } catch (e) {

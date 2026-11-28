@@ -112,9 +112,12 @@ function databaseHooks(parts: DatabaseHookParts): string[] {
 //   so Better Auth never mints a plain verify link (/send-verification-email answers 400). Nothing is deleted, so a repeat sign-up cannot lock the owner out.
 //   Mail goes only for a request Better Auth accepted (sign-in: only the wrong-password refusal), only while the address is on the list, and only when the user
 //   has no unexpired set-password or reset link, so a new one goes out after the last expires or is used.
-// - reset-password: a valid token proves the inbox, so it marks an unverified user verified, if the list still holds the address; if not, the reset is refused
-//   with Better Auth's invalid-token error. Verified users reset as usual. The reset then replaces the random password.
-const invitePlugin = (db: boolean) => `{
+// - reset-password: a valid token proves the inbox, so the reset marks an unverified user verified once Better Auth accepted the new password (after-hook), if the
+//   list still holds the address; if not, the reset is refused with Better Auth's invalid-token error (before-hook). Verified users reset as usual. The reset then replaces the random password.
+const invitePlugin = (db: boolean) => `(() => {
+  // The user a valid set-password token belongs to, from the before-hook to the after-hook of the same request (both see one context object).
+  const proven = new WeakMap(); // context -> user id
+  return {
       id: "invite-only",
       hooks: {
         before: [
@@ -131,11 +134,19 @@ const invitePlugin = (db: boolean) => `{
               const user = await ctx.context.internalAdapter.findUserById(found.value);
               if (!user || user.emailVerified) return;
               if (!${allowed(db, "user.email")}) throw new APIError("BAD_REQUEST", { code: "INVALID_TOKEN", message: "Invalid token" });
-              await ctx.context.internalAdapter.updateUser(user.id, { emailVerified: true });
+              proven.set(ctx.context, user.id);
             }),
           },
         ],
         after: [
+          {
+            matcher: (ctx) => ctx.path === "/reset-password",
+            handler: createAuthMiddleware(async (ctx) => {
+              const id = proven.get(ctx.context);
+              if (!id || isAPIError(ctx.context.returned)) return; // a rejected reset (a too-short password) proves nothing
+              await ctx.context.internalAdapter.updateUser(id, { emailVerified: true });
+            }),
+          },
           {
             matcher: (ctx) => ctx.path === "/sign-up/email" || ctx.path === "/sign-in/email",
             handler: createAuthMiddleware(async (ctx) => {
@@ -172,7 +183,8 @@ const invitePlugin = (db: boolean) => `{
           },
         ],
       },
-    }`;
+    };
+})()`;
 export const INVITE_ONLY_PLUGIN = invitePlugin(false);
 
 // --payments (src/plans.ts, src/stripe.ts, src/billing.ts). Better Auth's Stripe plugin owns checkout, the portal, the webhook and the subscription table;
