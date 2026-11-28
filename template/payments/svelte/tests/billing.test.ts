@@ -39,7 +39,7 @@ vi.mock("../src/app/plans", () => ({
   ],
 }));
 
-const { cancelSubscriptions, currentPlan, deleteSubscriptionRows, requirePlan, syncStripeEvent } = await import("../src/billing");
+const { cancelSubscriptions, currentPlan, deleteSubscriptionRows, NEEDS_CARD, prepareUpgrade, requirePlan, syncStripeEvent } = await import("../src/billing");
 const sqlite = ((await import("void/db")) as unknown as { sqlite: { exec: (s: string) => void } }).sqlite;
 const setRows = (...rows: string[]) => sqlite.exec(`delete from subscription; ${rows.map((r) => `insert into subscription (id, plan, referenceId, stripeCustomerId, stripeSubscriptionId, status) values ${r};`).join(" ")}`);
 const c = () => ({ req: { raw: new Request("http://localhost/") } }) as never;
@@ -62,10 +62,79 @@ it("billingView: what the Billing page shows for each status", () => {
     [[row({ status: "trialing", trialEnd: new Date("2026-12-01T00:00:00Z") })], { state: "trialing", date: "Dec 1, 2026", canSubscribe: false }],
     [[row({}), row({ status: "past_due" })], { state: "past_due", canSubscribe: false, canManage: true }],
     [[row({ status: "unpaid" })], { state: "unpaid", canSubscribe: false, canManage: true }],
+    [[row({ status: "paused" })], { state: "unpaid", canSubscribe: false, canManage: true }],
     [[row({ status: "canceled" })], { state: "canceled", canSubscribe: true, canManage: true }],
     [[row({ status: "canceled" }), row({ status: "active" })], { state: "active" }],
   ];
   for (const [rows, want] of cases) expect([rows.map((r) => r.status), billingView(rows)]).toEqual([rows.map((r) => r.status), expect.objectContaining(want)]);
+});
+
+it("a paused subscription reads as unpaid, needs a card before another Checkout, and is no plan", async () => {
+  expect(billingView([row({ status: "paused" })])).toEqual(billingView([row({ status: "unpaid" })]));
+  expect(NEEDS_CARD).toEqual(["past_due", "unpaid", "paused"]);
+  session.user = { id: "u1" };
+  setRows(`('s1', 'pro', 'u1', 'cus_1', 'sub_1', 'paused')`);
+  expect(await status(requirePlan(c()))).toBe(403);
+});
+
+// A fake Stripe for the upgrade guard: customers.create honours the idempotency key as Stripe does; sessions are listed, then expired.
+function guardClient(o: { sessions?: string[]; expireFails?: boolean; createFails?: boolean } = {}) {
+  const made = new Map<string, { id: string; metadata: Record<string, string> }>(), keys: string[] = [], calls: string[] = [];
+  const client = {
+    customers: {
+      create: async (p: { metadata: Record<string, string> }, opts: { idempotencyKey: string }) => {
+        calls.push("create");
+        await Promise.resolve(); // both concurrent callers are in flight before either is answered
+        if (o.createFails) throw new Error("stripe down");
+        keys.push(opts.idempotencyKey);
+        if (!made.has(opts.idempotencyKey)) made.set(opts.idempotencyKey, { id: `cus_${made.size + 1}`, metadata: p.metadata });
+        return made.get(opts.idempotencyKey)!;
+      },
+    },
+    checkout: {
+      sessions: {
+        list: (p: { customer: string; status: string }) => {
+          calls.push(`list ${p.customer} ${p.status}`);
+          return (async function* () { for (const id of o.sessions ?? []) yield { id }; })();
+        },
+        expire: async (id: string) => {
+          if (o.expireFails) throw new Error("stripe refused");
+          calls.push(`expire ${id}`);
+        },
+      },
+    },
+  };
+  return { client, made, keys, calls };
+}
+const guardUser = (extra: object = {}) => ({ id: "u9", email: "u9@example.com", name: "U9", ...extra });
+const prepareCode = (p: Promise<unknown>) => p.then(() => "ok", (e) => (e as { body?: { code?: string } }).body?.code);
+
+it("prepareUpgrade: two first upgrades at once make one customer (one idempotency key, with metadata.userId) and store the same id", async () => {
+  const { client, made, keys } = guardClient();
+  const saved: string[] = [], [a, b] = [guardUser(), guardUser()];
+  await Promise.all([a, b].map((u) => prepareUpgrade(client, u, async (id) => void saved.push(id))));
+  expect(new Set(keys)).toEqual(new Set(["zero-stack-customer-u9"]));
+  expect(keys).toHaveLength(2);
+  expect([...made.values()]).toEqual([{ id: "cus_1", metadata: { userId: "u9", customerType: "user" } }]);
+  expect(saved).toEqual(["cus_1", "cus_1"]);
+  expect([a.stripeCustomerId, b.stripeCustomerId]).toEqual(["cus_1", "cus_1"]); // what the plugin reads next
+});
+
+it("prepareUpgrade: a user with a customer creates nothing, and every open Checkout session is expired before it returns", async () => {
+  const { client, calls } = guardClient({ sessions: ["cs_1", "cs_2"] });
+  await prepareUpgrade(client, guardUser({ stripeCustomerId: "cus_7" }), async () => { throw new Error("must not save"); });
+  expect(calls).toEqual(["list cus_7 open", "expire cs_1", "expire cs_2"]);
+});
+
+it("prepareUpgrade: a Stripe failure fails the request with BILLING_PREPARE_FAILED, creates nothing and stores nothing", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const expire = guardClient({ sessions: ["cs_1"], expireFails: true });
+  expect(await prepareCode(prepareUpgrade(expire.client, guardUser({ stripeCustomerId: "cus_7" }), async () => {}))).toBe("BILLING_PREPARE_FAILED");
+  expect(expire.calls).not.toContain("create");
+  const create = guardClient({ createFails: true });
+  const saved: string[] = [];
+  expect(await prepareCode(prepareUpgrade(create.client, guardUser(), async (id) => void saved.push(id)))).toBe("BILLING_PREPARE_FAILED");
+  expect([saved, create.calls]).toEqual([[], ["create"]]); // no customer stored, no session listed
 });
 
 it("requirePlan: 401 signed out, 403 without an active plan, the user with one (past_due still counts), 500 when the database is down", async () => {

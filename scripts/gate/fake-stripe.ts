@@ -3,7 +3,7 @@ export type Obj = Record<string, any>;
 
 // The fake answers exactly what the app and the plugin call; every request is recorded.
 export function startFakeStripe() {
-  const fake = { customers: new Map<string, Obj>(), prices: new Map<string, Obj>(), sessions: new Map<string, Obj>(), subs: new Map<string, Obj>(), portals: 0, calls: [] as string[], n: 0, down: "" as "" | "all" | "cancel" };
+  const fake = { customers: new Map<string, Obj>(), prices: new Map<string, Obj>(), sessions: new Map<string, Obj>(), idempotent: new Map<string, Obj>(), subs: new Map<string, Obj>(), portals: 0, calls: [] as string[], n: 0, down: "" as "" | "all" | "cancel" };
   const id = (p: string) => `${p}_gate${++fake.n}`;
   // Stripe's form encoding (`metadata[userId]=…`, `line_items[0][price]=…`) read into nested objects.
   const form = (text: string): Obj => {
@@ -28,7 +28,16 @@ export function startFakeStripe() {
       const body = m === "POST" ? form(await req.text()) : {};
       let r: RegExpMatchArray | null;
       if (m === "GET" && p === "/v1/customers/search") return Response.json({ object: "search_result", data: [], has_more: false, url: p });
-      if (m === "POST" && p === "/v1/customers") { const c = { id: id("cus"), object: "customer", email: body.email, name: body.name, metadata: body.metadata ?? {} }; fake.customers.set(c.id, c); return Response.json(c); }
+      if (m === "POST" && p === "/v1/customers") {
+        // An idempotency key answers with the customer its first call made, as Stripe does.
+        const key = req.headers.get("idempotency-key");
+        const known = key && fake.idempotent.get(key);
+        if (known) return Response.json(known);
+        const c = { id: id("cus"), object: "customer", email: body.email, name: body.name, metadata: body.metadata ?? {} };
+        fake.customers.set(c.id, c);
+        if (key) fake.idempotent.set(key, c);
+        return Response.json(c);
+      }
       if ((r = p.match(/^\/v1\/customers\/([^/]+)$/))) { const c = fake.customers.get(r[1]!); if (!c) return missing(); if (m === "POST") Object.assign(c, body); return Response.json(c); }
       if (m === "GET" && p === "/v1/prices") { const keys = [...url.searchParams].filter(([k]) => k.startsWith("lookup_keys")).map(([, v]) => v); return list([...fake.prices.values()].filter((x) => keys.includes(x.lookup_key))); }
       if (m === "POST" && p === "/v1/prices") {
