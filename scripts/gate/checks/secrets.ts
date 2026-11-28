@@ -72,7 +72,10 @@ export async function secretsChecks(ctx: Ctx): Promise<void> {
     checkPush(readFileSync(log, "utf8").trim() === "secrets set --file .env --env=dev --silent", `push ran infisical with ${readFileSync(log, "utf8")}`);
     // A .env key must not reach the infisical child's environment (an INFISICAL_* key would redirect the CLI): --no-env-file.
     writeFileSync(envFile, Buffer.concat([pushed, Buffer.from("INFISICAL_ZS_PROBE='x'\n")]));
+    rmSync(log, { force: true }); // so the log below holds only these two runs
     for (const cmd of ["secrets:push", "secrets:pull"]) runScript({ FAKE_EXPORT: pushed.toString() + "INFISICAL_ZS_PROBE='x'\n" }, ["run", cmd]);
+    const probeLog = existsSync(log) ? readFileSync(log, "utf8") : "";
+    checkPush(/^secrets set /m.test(probeLog) && /^export /m.test(probeLog), `the .env-leak probe ran push and pull but the fake infisical was not called for both: ${JSON.stringify(probeLog)}`);
     checkPush(!existsSync(log + ".probe"), "passed a .env key into the infisical child's environment");
     writeFileSync(envFile, pushed);
     rmSync(log);

@@ -15,7 +15,7 @@ type Ctx = Parameters<typeof requireAuth>[0];
 // A plan counts while Stripe is still trying to collect (past_due); Stripe cancels the subscription when its retries run out.
 export const ACTIVE = ["active", "trialing", "past_due"] as const;
 // While one of these exists the user must fix their card in the portal, not start a second subscription.
-export const NEEDS_CARD = ["past_due", "unpaid"] as const;
+export const NEEDS_CARD = ["past_due", "unpaid", "paused"] as const;
 
 // void/db and the generated auth schema are imported on use: Void's plugin loads auth.ts (and so this file) at startup, where bindings are not available.
 const store = async () => ({ ...(await import("void/db")), ...(await import("../.void/better-auth-schema")) });
@@ -58,8 +58,10 @@ const ACTIONS = ["/subscription/upgrade", "/subscription/billing-portal", "/subs
 
 // Runs before the Stripe plugin's endpoints. Until real keys are set (.env ships placeholders) every subscription action answers "Stripe isn't set up yet."
 // instead of a 500 from Stripe, and the webhook refuses every event (400): the placeholder secret is public, so anyone could sign with it.
-// A user with a past_due or unpaid subscription can't start another Checkout (the plugin's own check ignores past_due).
-export function billingGuard(opts: { configured: boolean; webhookConfigured: boolean }) {
+// A user with a past_due, unpaid or paused subscription can't start another Checkout (the plugin's own check ignores past_due).
+// Before the plugin handles an upgrade the guard makes the user's Stripe customer itself (the plugin's lookup-then-create has no lock, so two requests
+// at once made two customers) and expires the customer's open Checkout sessions (two paid sessions would be two subscriptions).
+export function billingGuard(opts: { configured: boolean; webhookConfigured: boolean; client: GuardClient }) {
   return {
     id: "billing-guard",
     hooks: {
@@ -86,6 +88,9 @@ export function billingGuard(opts: { configured: boolean; webhookConfigured: boo
             });
             if (blocked)
               throw new APIError("BAD_REQUEST", { code: "SUBSCRIPTION_NEEDS_CARD", message: "Your last payment failed. Update your card in Manage billing first." });
+            await prepareUpgrade(opts.client, user, (id) =>
+              ctx.context.adapter.update({ model: "user", update: { stripeCustomerId: id }, where: [{ field: "id", value: user.id }] }),
+            );
           }),
         },
       ],
@@ -99,7 +104,7 @@ export function billingPlugins(env: BillingEnv) {
   const secret = typeof env.STRIPE_WEBHOOK_SECRET === "string" ? env.STRIPE_WEBHOOK_SECRET : "";
   return [
     stripe({ stripeClient: client, stripeWebhookSecret: secret, subscription: { enabled: true, plans: stripePlans() }, onEvent: syncStripeEvent(client) }),
-    billingGuard({ configured: stripeConfigured(env.STRIPE_SECRET_KEY), webhookConfigured: !!secret && secret !== PLACEHOLDER_WEBHOOK_SECRET }),
+    billingGuard({ configured: stripeConfigured(env.STRIPE_SECRET_KEY), webhookConfigured: !!secret && secret !== PLACEHOLDER_WEBHOOK_SECRET, client }),
   ];
 }
 
@@ -108,6 +113,42 @@ type CancelSource = {
   subscriptions: { list: (p: { customer: string; status: "all"; limit: number }) => AsyncIterable<{ id: string; status: string }>; cancel: (id: string) => Promise<unknown> };
   checkout: { sessions: { list: (p: { customer: string; status: "open"; limit: number }) => AsyncIterable<{ id: string }>; expire: (id: string) => Promise<unknown> } };
 };
+
+type GuardClient = Pick<CancelSource, "checkout"> & {
+  customers: {
+    create: (p: { metadata: Record<string, string> }, o: { idempotencyKey: string }) => Promise<{ id: string }>;
+    update: (id: string, p: { email: string; name: string }) => Promise<unknown>;
+  };
+};
+type GuardUser = { id: string; email: string; name: string; stripeCustomerId?: string | null };
+
+const expireOpenSessions = async (client: Pick<CancelSource, "checkout">, customer: string) => {
+  for await (const open of client.checkout.sessions.list({ customer, status: "open", limit: 100 })) await client.checkout.sessions.expire(open.id);
+};
+
+// The guard's work before /subscription/upgrade (the save callback stores the customer id on the user). The customer is created as the plugin would
+// (metadata.userId, customerType user) but under an idempotency key from the user id, so concurrent or retried first upgrades get one customer. Only the
+// fixed metadata is created under the key (Stripe rejects a reused key with other parameters, which a name change after a failed save would be); email and
+// name are set by a separate update, which the plugin does not need at create time. The id is also set on the session user, which the plugin reads next. Then every open Checkout session of the customer is expired. Fails closed
+// (500 BILLING_PREPARE_FAILED): a failed customer create or expire never lets the plugin go on to a second customer or a second open Checkout.
+// shortcut: two upgrades racing past this point can still leave two open sessions, upgrade when Stripe offers a lock or the app takes a database one.
+export async function prepareUpgrade(client: GuardClient, user: GuardUser, save: (customerId: string) => Promise<unknown>): Promise<void> {
+  try {
+    if (!user.stripeCustomerId) {
+      const created = await client.customers.create(
+        { metadata: { userId: user.id, customerType: "user" } },
+        { idempotencyKey: `zero-stack-customer-${user.id}` },
+      );
+      await client.customers.update(created.id, { email: user.email, name: user.name });
+      await save(created.id);
+      user.stripeCustomerId = created.id;
+    }
+    await expireOpenSessions(client, user.stripeCustomerId);
+  } catch (e) {
+    console.error(`upgrade preparation failed for ${user.id}`, e);
+    throw new APIError("INTERNAL_SERVER_ERROR", { code: "BILLING_PREPARE_FAILED", message: "Couldn't reach Stripe to start the checkout. Try again." });
+  }
+}
 
 // Runs before a user is deleted, on both paths and ahead of the storage purge: auth.ts's deleteUser.beforeDelete and the admin guard's remove-user hook.
 // It expires the customer's open Checkout sessions first (one paid after the deletion would start a subscription nobody owns), then asks Stripe,
@@ -120,7 +161,7 @@ export async function cancelSubscriptions(env: BillingEnv, userId: string, clien
     const { db, eq, userTable } = await store();
     const [user] = await db.select({ customer: userTable.stripeCustomerId }).from(userTable).where(eq(userTable.id, userId)).limit(1);
     if (!user?.customer) return;
-    for await (const open of client.checkout.sessions.list({ customer: user.customer, status: "open", limit: 100 })) await client.checkout.sessions.expire(open.id);
+    await expireOpenSessions(client, user.customer);
     for await (const sub of client.subscriptions.list({ customer: user.customer, status: "all", limit: 100 }))
       if (sub.status !== "canceled" && sub.status !== "incomplete_expired") await client.subscriptions.cancel(sub.id);
   } catch (e) {

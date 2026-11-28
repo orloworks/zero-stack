@@ -17,11 +17,12 @@ const day = (d: Date | null) => (d ? new Date(d).toLocaleDateString("en-US", { d
 // are a Checkout that never finished and count as no plan. Subscribe shows only with no live or failed plan.
 export function billingView(rows: SubscriptionRow[], label: (plan: string) => string = (p) => p): BillingView {
   const find = (...statuses: string[]) => rows.find((r) => statuses.includes(r.status));
-  const row = find("past_due", "unpaid") ?? find("active", "trialing") ?? find("canceled");
+  const row = find("past_due", "unpaid", "paused") ?? find("active", "trialing") ?? find("canceled");
   if (!row) return { state: "none", plan: null, date: null, canSubscribe: true, canManage: false };
   const plan = label(row.plan);
   const base = { plan, canSubscribe: false, canManage: true };
-  if (row.status === "past_due" || row.status === "unpaid") return { ...base, state: row.status, date: null };
+  if (row.status === "past_due") return { ...base, state: "past_due", date: null };
+  if (row.status === "unpaid" || row.status === "paused") return { ...base, state: "unpaid", date: null }; // a paused subscription reads as unpaid: fix the card
   if (row.status === "canceled") return { ...base, state: "canceled", date: null, canSubscribe: true };
   if (row.cancelAtPeriodEnd || row.cancelAt) return { ...base, state: "cancelling", date: day(row.cancelAt ?? row.periodEnd) };
   if (row.status === "trialing") return { ...base, state: "trialing", date: day(row.trialEnd ?? row.periodEnd) };

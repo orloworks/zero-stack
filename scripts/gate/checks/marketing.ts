@@ -61,10 +61,15 @@ export async function marketingChecks(ctx: Ctx): Promise<void> {
       d.run("UPDATE consent SET requested_at = requested_at - ?1 WHERE subscriber_id = (SELECT id FROM subscriber WHERE email = ?2)", [ms, email.toLowerCase()]);
     });
     const mails = (email: string) => h.mailUrls(SUBJECT, email, b, "/confirm");
-    const settled = async (email: string, n: number, what: string) => { // `n` mails have arrived and no more do
+    // A send writes last_mail_at and the consent's confirm_token before it mails, so a late wrong send shows there even if its mail has not landed yet.
+    const sendState = (email: string) => h.withDb("consent", (d) => JSON.stringify(d.query("SELECT s.last_mail_at, (SELECT group_concat(c.confirm_token) FROM consent c WHERE c.subscriber_id = s.id) AS tokens FROM subscriber s WHERE s.email = ?").get(email.toLowerCase())), { readonly: true });
+    // `n` mails have arrived and no more do. `before` is sendState taken BEFORE a request that must not send: the wait compares against it, so a wrong send that
+    // writes both fields within milliseconds is caught. Without it (a request that must send once) the state is taken after the mail lands, which catches a second send.
+    const settled = async (email: string, n: number, what: string, before?: string) => {
       check((await h.waitMails(SUBJECT, email, n, b, "/confirm")).length === n, `${what}: expected ${n} confirmation mail(s) for ${email}`);
+      const sent = before ?? sendState(email);
       await Bun.sleep(750);
-      check((await mails(email)).length === n, `${what}: more than ${n} confirmation mail(s) for ${email}`);
+      check((await mails(email)).length === n && sendState(email) === sent, `${what}: more than ${n} confirmation mail(s) for ${email}, or a send changed last_mail_at or the confirm token`);
     };
 
     // 1. The three pages are public and say what they should; a GET of each changes nothing (the rows are compared at the end of each step below).
@@ -91,8 +96,9 @@ export async function marketingChecks(ctx: Ctx): Promise<void> {
     check(first.status === 200 && firstAnswer.includes(CHECK_INBOX), `subscribe -> ${firstAnswer}`);
     await settled(ann, 1, "a new address");
     check(consent(ann).length === 1 && consent(ann)[0]!.state === "pending" && consent(ann)[0]!.confirmed_at === null, "a new address is not pending");
+    const pendingState = sendState(ann);
     check((await same(await subscribe(ann))) === firstAnswer, "a pending address got a different answer");
-    await settled(ann, 1, "a second request inside ten minutes");
+    await settled(ann, 1, "a second request inside ten minutes", pendingState);
     const [raw] = await h.rawMails(SUBJECT, ann, b);
     check(raw && /^subject:\s*Confirm your subscription/im.test(raw) && /content-type:\s*text\/plain/i.test(raw) && !/content-type:\s*text\/html/i.test(raw) && /\/confirm\?token=/.test(raw), "the confirmation is not one plain-text mail with the confirm link");
     // Past ten minutes a request mails again, with a new link that replaces the old one.
@@ -110,7 +116,7 @@ export async function marketingChecks(ctx: Ctx): Promise<void> {
     const before = stateOf(ann);
     const get = await h.request(link!.pathname + link!.search, { origin: "none" });
     const getText = await get.text();
-    check(get.status === 200 && /Confirm/.test(getText) && !/older than seven days/.test(getText) && stateOf(ann) === before, `GET of the confirm link -> ${get.status}, or it changed the row`);
+    check(get.status === 200 && /Press Confirm to get/.test(getText) && /<button/.test(getText) && !/older than seven days/.test(getText) && stateOf(ann) === before, `GET of the confirm link -> ${get.status}, or it changed the row`);
     const token = link!.searchParams.get("token")!;
     const press = (t: string, o: { origin?: "same" | "none" } = {}) => h.request("/api/lists/confirm", { body: { token: t }, origin: o.origin });
     check((await press(token, { origin: "none" })).status === 403 && stateOf(ann) === before, "a Confirm press with no Origin was not refused");
@@ -127,8 +133,9 @@ export async function marketingChecks(ctx: Ctx): Promise<void> {
 
     // 4. A confirmed address gets the same answer and no mail (the throttle is out of the way); the form answers the same for an unsubscribed one.
     age(ann, TEN_MINUTES + 5000);
+    const confirmedState = sendState(ann);
     const confirmedAnswer = await same(await subscribe(ann));
-    await settled(ann, 2, "a confirmed address");
+    await settled(ann, 2, "a confirmed address", confirmedState);
     check(confirmedAnswer === firstAnswer && consent(ann)[0]!.state === "confirmed", "a confirmed address got a different answer or was changed");
     const gone = addr("gone");
     seedSubscriber(h, gone, "unsubscribed");
@@ -178,8 +185,9 @@ export async function marketingChecks(ctx: Ctx): Promise<void> {
     check(stayAnswer.includes(CHECK_INBOX), `subscribe again -> ${stayAnswer}`);
     await settled(stay, 1, "subscribe again");
     check(consent(stay)[0]!.state === "pending" && consent(stay)[0]!.confirmed_at === null && consent(stay)[0]!.withdrawn_at === null, "subscribe again did not leave a pending row");
+    const stayState = sendState(stay);
     await again(stayToken);
-    await settled(stay, 1, "subscribe again inside ten minutes");
+    await settled(stay, 1, "subscribe again inside ten minutes", stayState);
     check((await same(await again("unknown-token"))) === stayAnswer, "subscribe again with an unknown token got a different answer");
     console.log("gate: marketing: Subscribe again mails one confirmation and leaves the row pending, never confirmed");
 

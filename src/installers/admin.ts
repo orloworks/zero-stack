@@ -22,7 +22,7 @@ function installInvites(dir: string): void {
 }
 
 // --admin on svelte: the admin module and guard, the schema, the pages, their tests, and edits at anchors in the Account page and the schema.
-// The auth.ts and env.ts parts come from the composers; ADMIN_EMAILS in .env from authEnv. Runs after installAuth and installStorage (their pages and routes exist).
+// The auth.ts and env.ts parts come from the composers; ADMIN_EMAILS in .env from authEnv. Runs after installAuth (its pages and routes exist).
 export function installAdmin(dir: string, config: Config): void {
   cpSync(join(here, "svelte"), dir, { recursive: true, force: false, errorOnExist: true });
   // tests/onboarding.test.ts and tests/invites-db.test.ts import these; declared so another install layout can't drop them.
@@ -45,50 +45,17 @@ export function installAdmin(dir: string, config: Config): void {
   editFile(dir, "db/schema.ts", (s) => replaceAnchor(s, 'import { integer, sqliteTable, text } from "void/schema-d1";\n', 'import { integer, sqliteTable, text } from "void/schema-d1";\n\nexport * from "./schema/admin";\n', "db/schema.ts"));
   if (config.inviteOnly) installInvites(dir); // after the schema edit it extends
 
-  // Account page: an Admin link for admins, a verify hint for a listed owner whose email is not verified yet (D9).
+  // Account page: an Admin link for admins and nothing for anyone else; it never says whether an unverified address is on the admin list (#153).
   editFile(dir, ACCOUNT_SERVER, (s) => {
     s = replaceAnchor(s, 'import { getUser } from "void/auth";\n', 'import { getUser } from "void/auth";\nimport { adminAccess } from "../src/admin";\n', ACCOUNT_SERVER);
     return replaceAnchor(s, "defineHandler(() => ({ user: getUser() }));", "defineHandler(() => {\n  const user = getUser();\n  return { user, admin: adminAccess(user) };\n});", ACCOUNT_SERVER);
   });
   editFile(dir, ACCOUNT, (s) => {
-    s = replaceAnchor(s, "  let { user }: Props = $props();\n", `  let { user, admin }: Props = $props();
-
-  let verifying = $state(false);
-  let verifyState = $state<"" | "requested" | "error">("");
-  async function sendVerification() {
-    if (!user) return;
-    verifying = true;
-    verifyState = "";
-    try {
-      const res = await auth.sendVerificationEmail({ email: user.email, callbackURL: "/settings" });
-      verifyState = res.error ? "error" : "requested";
-    } catch {
-      verifyState = "error";
-    } finally {
-      verifying = false;
-    }
-  }
-`, ACCOUNT);
+    s = replaceAnchor(s, "  let { user }: Props = $props();\n", "  let { user, admin }: Props = $props();\n", ACCOUNT);
     return replaceAnchor(s, "    <p>Signed in as {user.email}</p>\n", `    <p>Signed in as {user.email}</p>
     {#if admin === "admin"}
       <p><a href="/admin">Admin</a></p>
-    {:else if admin === "unverified"}
-      <p>Your email is on the admin list but isn't verified yet.</p>
-      <button type="button" onclick={sendVerification} disabled={verifying}>{verifying ? "Sending…" : "Send verification link"}</button>
-      {#if verifyState === "requested"}<p role="status">Verification link requested for {user.email}.</p>{/if}
-      {#if verifyState === "error"}<p role="alert">Couldn't request the link. Try again.</p>{/if}
     {/if}
 `, ACCOUNT);
   });
-
-  // An upload that finishes after its user was deleted leaves a file nothing sweeps (E16): check the user row after the put.
-  if (config.storage) {
-    cpSync(join(here, "storage"), dir, { recursive: true, force: false, errorOnExist: true });
-    const route = "routes/api/files/[name].ts";
-    editFile(dir, route, (s) => {
-      s = replaceAnchor(s, 'import { userKey } from "../../../src/storage";\n', 'import { userExists } from "../../../src/admin";\nimport { userKey } from "../../../src/storage";\nimport { discardIfUserGone } from "../../../src/upload-guard";\n', route);
-      s = replaceAnchor(s, 'export const PUT = defineHandler(async (c) => {\n  const key = userKey(requireAuth(c).id, c.req.param("name") ?? "");', 'export const PUT = defineHandler(async (c) => {\n  const user = requireAuth(c);\n  const key = userKey(user.id, c.req.param("name") ?? "");', route);
-      return replaceAnchor(s, '  return new Response(null, { status: 201 });\n', '  if (await discardIfUserGone(key, () => userExists(user.id), storage)) return new Response("This account was deleted.", { status: 404 });\n  return new Response(null, { status: 201 });\n', route);
-    });
-  }
 }

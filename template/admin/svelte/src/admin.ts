@@ -17,9 +17,8 @@ export type Person = { email: string; emailVerified?: boolean | null };
 // Admin = a verified email on ADMIN_EMAILS (the same matcher as the invite list). Checked live on every request; there is no promote button.
 export const isAdmin = (list: unknown, user: Person | null | undefined): boolean => !!user && user.emailVerified === true && signupAllowed(list, user.email);
 
-// For the Account page: a listed but unverified owner gets a hint; everyone else sees nothing.
-export const adminAccess = (user: Person | null | undefined): "admin" | "unverified" | null =>
-  !user ? null : isAdmin(env.ADMIN_EMAILS, user) ? "admin" : user.emailVerified !== true && signupAllowed(env.ADMIN_EMAILS, user.email) ? "unverified" : null;
+// For the Account page: "admin" gets the Admin link; everyone else sees nothing, so the page never says whether an address is on the list.
+export const adminAccess = (user: Person | null | undefined): "admin" | null => (isAdmin(env.ADMIN_EMAILS, user) ? "admin" : null);
 
 export const notFound = () => new HTTPException(404, { message: "Not Found" });
 
@@ -109,8 +108,6 @@ export async function listUsers(q: string, page: number) {
   const [{ n }] = await db.select({ n: count() }).from(userTable).where(where);
   return { rows, total: n };
 }
-
-export const userExists = async (id: string): Promise<boolean> => (await findUser(id)) !== null;
 
 export async function findUser(id: string) {
   const { db, eq, userTable } = await store();

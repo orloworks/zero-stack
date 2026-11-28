@@ -105,7 +105,7 @@ test("a failed set-password send leaves no unexpired reset-password row, and the
     APIError: Error,
   };
   const plugin = new Function(...Object.keys(stubs), `return (${INVITE_ONLY_PLUGIN});`)(...Object.values(stubs));
-  const handler = plugin.hooks.after[0].handler;
+  const handler = plugin.hooks.after.find((h: { matcher: (c: unknown) => boolean }) => h.matcher({ path: "/sign-in/email" })).handler;
   const ctx = {
     path: "/sign-in/email",
     body: { email: user.email },
@@ -141,6 +141,35 @@ test("a failed set-password send leaves no unexpired reset-password row, and the
   expect(mails).toEqual([user.email]);
 });
 
+// A reset marks the inbox proven only when Better Auth accepted the new password: the before-hook checks the token and the list, the after-hook writes
+// emailVerified, and only for a request that succeeded (a too-short password is a 400 that must leave the user unverified).
+async function reset(returned: unknown) {
+  const user = { id: "u1", email: "a@example.com", emailVerified: false };
+  const updates: unknown[] = [];
+  const stubs = { createAuthMiddleware: (fn: unknown) => fn, isAPIError: (r: unknown) => r instanceof Error, signupAllowed: () => true, env: {}, send: async () => {}, APIError: Error };
+  const plugin = new Function(...Object.keys(stubs), `return (${INVITE_ONLY_PLUGIN});`)(...Object.values(stubs));
+  const context = {
+    returned,
+    internalAdapter: {
+      findVerificationValue: async () => ({ value: user.id, expiresAt: new Date(Date.now() + 1e6) }),
+      findUserById: async () => user,
+      updateUser: async (_id: string, data: unknown) => void updates.push(data),
+    },
+  };
+  const ctx = { path: "/reset-password", body: { token: "t", newPassword: "x" }, context };
+  const hook = (list: { matcher: (c: unknown) => boolean; handler: (c: unknown) => Promise<unknown> }[]) => list.find((h) => h.matcher(ctx))?.handler(ctx);
+  await hook(plugin.hooks.before);
+  const beforeWrites = updates.length;
+  await hook(plugin.hooks.after);
+  return { beforeWrites, updates };
+}
+test("a reset that Better Auth rejects (too-short password) leaves the user unverified; an accepted one verifies them", async () => {
+  const bad = await reset(Object.assign(new Error("short"), { body: { code: "PASSWORD_TOO_SHORT" } }));
+  expect(bad).toEqual({ beforeWrites: 0, updates: [] });
+  const ok = await reset({ status: true });
+  expect(ok).toEqual({ beforeWrites: 0, updates: [{ emailVerified: true }] });
+});
+
 // E10: with --admin and --invite-only the three call sites read the env list and the database invites through inviteAllowed; without --admin nothing changes.
 test("--admin --invite-only swaps all three signup re-checks to inviteAllowed, and the matcher import goes with them", () => {
   const src = compose({ admin: true, inviteOnly: true });
@@ -170,4 +199,12 @@ test("with marketing, payments, storage, account deletion and admin: the subscri
   const g = [guard.indexOf("opts.removeSubscriber?.(target)"), guard.indexOf("opts.cancelBilling?.(target.id)"), guard.indexOf("await opts.purge(target.id)")];
   expect(g.every((i) => i >= 0)).toBe(true);
   expect(g).toEqual([...g].sort((a, b) => a - b));
+});
+
+test("--admin without --invite-only revokes a listed address's sessions and password when it is verified; --invite-only and no --admin do not", () => {
+  const src = compose({ admin: true });
+  expect(src).toContain('import { revokeUnprovenSessions } from "./src/admin-takeover";');
+  expect(src).toContain("update: {\n        after: revokeUnprovenSessions((user) => isAdmin(env.ADMIN_EMAILS, user)),");
+  expect(src.match(/databaseHooks:/g)).toHaveLength(1);
+  for (const o of [{ admin: true, inviteOnly: true }, { inviteOnly: true }, {}]) expect(compose(o)).not.toContain("revokeUnprovenSessions");
 });

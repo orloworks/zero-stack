@@ -80,6 +80,38 @@ test("--shadcn with a non-React framework exits 1 with the fix and creates nothi
   expect(existsSync(dir)).toBe(false);
 });
 
+test("--help and -h print the usage line and exit 0, even with no Node on PATH", () => {
+  for (const flag of ["--help", "-h"]) {
+    const r = Bun.spawnSync([process.execPath, "src/index.ts", flag], { env: { ...process.env, PATH: tmp() } });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toStartWith("Usage: create-zero-stack <directory>");
+  }
+});
+
+test("shadcn's @ alias is a file path, so a folder name with a space still resolves", () => {
+  const dir = tmp();
+  mkdirSync(join(dir, "pages"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, devDependencies: {} }));
+  writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  writeFileSync(join(dir, "vite.config.ts"), 'import { defineConfig } from "vite";\nexport default defineConfig({\n});\n');
+  writeFileSync(join(dir, "pages/style.css"), "");
+  writeFileSync(join(dir, "pages/index.tsx"), 'import "./style.css";\n<h1>Welcome to Void</h1>\n');
+  installShadcn(dir);
+  const vite = readFileSync(join(dir, "vite.config.ts"), "utf8");
+  expect(vite).toContain('import { fileURLToPath } from "node:url";');
+  expect(vite).toContain('"@": fileURLToPath(new URL("./src", import.meta.url))');
+  expect(vite).not.toContain(".pathname");
+});
+
+test("shadcn fails hard when vite.config.ts has no defineConfig import to anchor on", () => {
+  const dir = tmp();
+  mkdirSync(join(dir, "pages"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, devDependencies: {} }));
+  writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  writeFileSync(join(dir, "vite.config.ts"), 'import { defineConfig } from "vite-plus";\nexport default defineConfig({\n});\n');
+  expect(() => installShadcn(dir)).toThrow(/vite\.config\.ts/);
+});
+
 test("zodRpc adds zod, the validated route and the typed client sample", async () => {
   const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
   await scaffold({ ...cfg, zodRpc: true }, dir, exec);
@@ -507,6 +539,26 @@ test("svelte --storage --account-deletion purges before and after deletion and m
   expect(existsSync(join(off.dir, "src/storage.ts"))).toBe(false);
 });
 
+test("--storage checks the user row after an upload with --account-deletion (--admin is covered below); --storage alone and react/vue/solid keep the plain route", async () => {
+  const plain = readFileSync(join(import.meta.dir, "../../template/storage/routes/api/files/[name].ts"), "utf8");
+  const guarded = ['import { discardIfUserGone, userExists } from "../../../src/upload-guard"', "const user = requireAuth(c);", "discardIfUserGone(key, () => userExists(user.id), storage)"];
+  {
+    const app = storageApp({ framework: "svelte", auth: true, storage: true, accountDeletion: true });
+    await app.run();
+    const route = readFileSync(join(app.dir, "routes/api/files/[name].ts"), "utf8");
+    for (const t of guarded) expect(route).toContain(t);
+    for (const f of ["src/upload-guard.ts", "tests/upload-guard.test.ts"]) expect(existsSync(join(app.dir, f))).toBe(true);
+  }
+  for (const config of [{ framework: "svelte" }, { framework: "react" }, { framework: "vue" }, { framework: "solid" }]) {
+    const app = storageApp({ auth: true, storage: true, ...config });
+    await app.run();
+    const route = readFileSync(join(app.dir, "routes/api/files/[name].ts"), "utf8");
+    expect(route).not.toContain("upload-guard");
+    if (config.framework !== "svelte") expect(route).toBe(plain); // svelte's copy carries the scaffold-owned notice
+    expect(existsSync(join(app.dir, "src/upload-guard.ts"))).toBe(false);
+  }
+});
+
 // create-void's tsconfig.json (svelte): `include` lists directories, not scripts/.
 const REAL_TSCONFIG = JSON.stringify({ extends: "./.void/tsconfig.json", compilerOptions: { strict: true }, include: ["src", "pages", "routes", "middleware", "crons", "queues", "db"] }, null, 2);
 const withTsconfig = (s: ReturnType<typeof seeded>, body = REAL_TSCONFIG) => async (cmd: string[]) => {
@@ -572,10 +624,12 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
   expect(read("env.ts")).toContain('ADMIN_EMAILS: string().default(""),');
   expect(read(".env")).toContain("\nADMIN_EMAILS=@example.com\n");
   const account = read("pages/settings.svelte");
-  for (const t of ["let { user, admin }: Props", 'href="/admin"', "Your email is on the admin list but isn't verified yet.", "Send verification link"]) expect(account).toContain(t);
+  for (const t of ["let { user, admin }: Props", 'href="/admin"']) expect(account).toContain(t);
+  for (const t of ["admin list", "verified yet", "sendVerification"]) expect(account).not.toContain(t); // never tells an unverified user their address is listed (#153)
+  expect(existsSync(join(dir, "src/admin-takeover.ts"))).toBe(true);
   expect(read("pages/settings.server.ts")).toContain("admin: adminAccess(user)");
   const agents = read("AGENTS.md");
-  for (const t of ["## Admin area", "ADMIN_EMAILS", "sign in with an email on `ADMIN_EMAILS` and verify it", "audit_entry", "refused with a 404 on purpose", "set role"]) expect(agents).toContain(t);
+  for (const t of ["## Admin area", "ADMIN_EMAILS", "sign up with an email on `ADMIN_EMAILS` and prove it from the inbox", "src/admin-takeover.ts", "audit_entry", "refused with a 404 on purpose", "set role"]) expect(agents).toContain(t);
   expect(agents).not.toContain("${");
   expect(agents).toContain("Every admin change writes exactly one audit entry");
   expect(agents).toContain("self-delete. The deleted user's email");
@@ -610,7 +664,7 @@ test("svelte --admin --storage checks the user row after an upload; --admin --in
   const on = adminApp({ storage: true, inviteOnly: true });
   await on.run();
   const route = readFileSync(join(on.dir, "routes/api/files/[name].ts"), "utf8");
-  for (const t of ['import { discardIfUserGone } from "../../../src/upload-guard"', "const user = requireAuth(c);", "discardIfUserGone(key, () => userExists(user.id), storage)"]) expect(route).toContain(t);
+  for (const t of ['import { discardIfUserGone, userExists } from "../../../src/upload-guard"', "const user = requireAuth(c);", "discardIfUserGone(key, () => userExists(user.id), storage)"]) expect(route).toContain(t);
   for (const f of ["src/upload-guard.ts", "tests/upload-guard.test.ts"]) expect(existsSync(join(on.dir, f))).toBe(true);
   expect(readFileSync(join(on.dir, "src/admin.ts"), "utf8")).toContain("export const INVITE_ONLY = true;");
   expect(readFileSync(join(on.dir, "src/signup-allowlist.ts"), "utf8")).toContain("export function signupAllowed"); // invite-only's copy, not a second one

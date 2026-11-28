@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vite-plus/test";
 import { betterAuth } from "better-auth";
-import { createAuthEndpoint } from "better-auth/api";
+import { createAuthEndpoint, createAuthMiddleware } from "better-auth/api";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { admin, emailOTP } from "better-auth/plugins";
 import { extendAuth } from "../src/auth-extension";
@@ -19,8 +19,9 @@ const zero = [{ id: "zero-plugin", endpoints: { zeroThing: endpoint("/zero/thing
 
 // A real Better Auth instance with the extension's plugins, as the app builds it. Better Auth runs a plugin's `init` while it builds its context, so a refused
 // init shows as a rejected context. Hashing is not under test (scrypt makes every sign-up slow), so it is swapped for a plain compare.
-function start(plugins: unknown[]) {
+function start(plugins: unknown[], extra: Record<string, unknown> = {}) {
   return betterAuth({
+    ...extra,
     plugins: extendAuth([], { plugins: plugins as never }).plugins,
     secret: "test-secret-test-secret-test-secret-123",
     baseURL: "http://localhost:5173",
@@ -130,6 +131,16 @@ it("an init that changes a value inside its argument (rate limiting, origins, em
   await expect(start([{ id: "sec", init: (ctx: any) => void (ctx.secretConfig = "fixed") }]).$context).rejects.toThrow(/"sec".*inside its init argument/);
   await expect(start([{ id: "csrf", init: (ctx: any) => void (ctx.skipCSRFCheck = true) }]).$context).rejects.toThrow(/"csrf".*inside its init argument/);
   await expect(start([{ id: "quiet", init: (ctx: any) => void ctx.options.emailAndPassword.enabled }]).$context).resolves.toBeDefined(); // reading is fine
+}, SLOW);
+
+// What zero-stack's auth.ts sets, as an app would see it in its init argument: the invite-only gate, a hook list, and the plugin list itself.
+const gated = { databaseHooks: { user: { create: { before: async () => {} } } }, hooks: { before: createAuthMiddleware(async () => {}) } };
+it("an init that edits databaseHooks, hooks or plugins inside its argument is refused, naming the plugin", async () => {
+  await expect(start([{ id: "hk", init: (ctx: any) => void (ctx.options.databaseHooks.user.create = undefined) }], gated).$context).rejects.toThrow(/"hk".*inside its init argument/);
+  await expect(start([{ id: "hk2", init: (ctx: any) => void (ctx.options.databaseHooks = {}) }], gated).$context).rejects.toThrow(/"hk2".*inside its init argument/);
+  await expect(start([{ id: "hooks", init: (ctx: any) => void (ctx.options.hooks = undefined) }], gated).$context).rejects.toThrow(/"hooks".*inside its init argument/);
+  await expect(start([{ id: "plug", init: (ctx: any) => void ctx.options.plugins.splice(0, 1) }], gated).$context).rejects.toThrow(/"plug".*inside its init argument/);
+  await expect(start([{ id: "quiet", init: (ctx: any) => void [ctx.options.databaseHooks, ctx.options.hooks, ctx.options.plugins] }], gated).$context).resolves.toBeDefined();
 }, SLOW);
 
 it("a plugin may not add to a zero-stack table that is stored under a custom name", () => {

@@ -36,7 +36,7 @@ const note = (taken: Map<string, string>, owner: string, endpoints: Endpoints | 
 // off) would otherwise pass. Functions are told apart by identity. Never printed: it can hold the secret.
 function picture(v: unknown, ids = new Map<unknown, number>(), depth = 0): string {
   if (typeof v === "function") return `fn${ids.get(v) ?? (ids.set(v, ids.size), ids.size - 1)}`;
-  if (v === null || typeof v !== "object" || depth > 6) return `${typeof v}:${String(v)}`;
+  if (v === null || typeof v !== "object" || depth > 6) return `${typeof v}:${typeof v === "object" && v ? "" : String(v)}`; // String(v) throws on a null-prototype object past the depth limit
   if (v instanceof Map) return `map${picture([...v], ids, depth + 1)}`; // the secret can be a key map
   if (Array.isArray(v)) return `[${v.map((x) => picture(x, ids, depth + 1)).join()}]`;
   return `{${Object.keys(v).sort().map((k) => `${k}=${picture((v as Record<string, unknown>)[k], ids, depth + 1)}`).join()}}`;
@@ -111,13 +111,13 @@ export function extendAuth<Z extends BetterAuthPlugin[], A extends BetterAuthPlu
         const guarded = () => {
           const c = ctx as unknown as Record<string, unknown>;
           const o = (ctx.options ?? {}) as Record<string, unknown>;
-          return picture([c.rateLimit, c.trustedOrigins, c.secret, c.secretConfig, c.skipOriginCheck, c.skipCSRFCheck, c.sessionConfig, c.oauthConfig, c.trustedProviders, c.authCookies, o.rateLimit, o.trustedOrigins, o.emailAndPassword, o.emailVerification, o.advanced, o.session, o.user, o.account], ids);
+          return picture([c.rateLimit, c.trustedOrigins, c.secret, c.secretConfig, c.skipOriginCheck, c.skipCSRFCheck, c.sessionConfig, c.oauthConfig, c.trustedProviders, c.authCookies, o.rateLimit, o.trustedOrigins, o.emailAndPassword, o.emailVerification, o.advanced, o.session, o.user, o.account, o.databaseHooks, o.hooks, o.plugins], ids);
         };
         const before = { password: ctx.password, adapter: ctx.adapter, keys: Object.keys(ctx.options ?? {}).sort().join(), guarded: guarded() };
         const result = await init.call(plugin, ctx);
         if (ctx.password !== before.password || ctx.adapter !== before.adapter || Object.keys(ctx.options ?? {}).sort().join() !== before.keys)
           fail(`${name} changes the password hasher, the adapter or the option names in its init argument`);
-        if (guarded() !== before.guarded) fail(`${name} changes rate limiting, trusted origins, sessions or an auth option inside its init argument; return databaseHooks or trustedOrigins from init instead`);
+        if (guarded() !== before.guarded) fail(`${name} changes rate limiting, trusted origins, sessions, hooks, plugins or an auth option inside its init argument; return databaseHooks or trustedOrigins from init instead`);
         if (!result || typeof result !== "object") return;
         const { options, context } = result;
         if (context) fail(`${name} returns a context from init; a context could replace the password hasher or the adapter`);

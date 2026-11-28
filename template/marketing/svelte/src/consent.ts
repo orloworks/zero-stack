@@ -46,10 +46,21 @@ async function request(email: string, list: ListDecl, ask: Ask): Promise<void> {
   const now = new Date();
   const since = new Date(now.getTime() - RESEND_MS);
   const hour = hourOf(now);
+  // Opportunistic purge, no cron: an address whose consent is all pending, and whose newest request is past the link's lifetime, was never confirmed and never can be. Its
+  // consent rows go with it (the cascade). A failure is logged and does not stop this request.
+  const cutoff = now.getTime() - CONFIRM_TTL_MS;
+  try {
+    await db.delete(subscriber).where(
+      sql`${subscriber.id} in (select s.id from subscriber s where exists (select 1 from consent c where c.subscriber_id = s.id) and not exists (select 1 from consent c where c.subscriber_id = s.id and (c.state <> 'pending' or c.requested_at >= ${cutoff})) limit 100)`,
+    );
+  } catch (e) {
+    console.error("marketing: could not purge unconfirmed addresses", e instanceof Error ? e.message : "unknown error");
+  }
   // The row is made first because the address's slot lives on it and two first-time requests must meet at one row (the insert is one conditional write: the loser's does
   // nothing). An address is not kept unless it is mailed: whichever request made the row takes it away again, in one conditional delete, when no mail goes out.
   const created = (await db.insert(subscriber).values({ id: crypto.randomUUID(), email, unsubscribeToken: randomToken(), createdAt: now, lastMailAt: null }).onConflictDoNothing().returning({ id: subscriber.id })).length === 1;
-  const sub = (await db.select().from(subscriber).where(eq(subscriber.email, email)).limit(1))[0]!;
+  const sub = (await db.select().from(subscriber).where(eq(subscriber.email, email)).limit(1))[0];
+  if (!sub) return; // removed between the insert and this read (an account deletion): nothing to mail, and the answer is the same as for any address
   const row = (await db.select().from(consent).where(and(eq(consent.subscriberId, sub.id), eq(consent.list, list.name))).limit(1))[0];
   const sent = (await db.select({ sent: mailCeiling.sent }).from(mailCeiling).where(eq(mailCeiling.hour, hour)).limit(1))[0]?.sent ?? 0;
   const mailedRecently = !!sub.lastMailAt && sub.lastMailAt > since;
@@ -86,13 +97,23 @@ async function request(email: string, list: ListDecl, ask: Ask): Promise<void> {
   // 3. The consent row.
   const token = randomToken();
   const fresh = { state: "pending", source: "form", page: ask.page, wording: wordingOf(list), requestedAt: now, confirmedAt: null, withdrawnAt: null, withdrawnHow: null, confirmToken: token };
-  const claimed = row
-    ? await db
-        .update(consent)
-        .set(fresh)
-        .where(and(eq(consent.subscriberId, sub.id), eq(consent.list, list.name), ne(consent.state, "confirmed")))
-        .returning({ id: consent.subscriberId })
-    : await db.insert(consent).values({ subscriberId: sub.id, list: list.name, ...fresh }).onConflictDoNothing().returning({ id: consent.subscriberId });
+  let claimed: { id: string }[];
+  try {
+    claimed = row
+      ? await db
+          .update(consent)
+          .set(fresh)
+          .where(and(eq(consent.subscriberId, sub.id), eq(consent.list, list.name), ne(consent.state, "confirmed")))
+          .returning({ id: consent.subscriberId })
+      : await db.insert(consent).values({ subscriberId: sub.id, list: list.name, ...fresh }).onConflictDoNothing().returning({ id: consent.subscriberId });
+  } catch (e) {
+    // The write failed (a deletion removed the subscriber after the claims, so the foreign key refuses): the slots go back. A subscriber that is gone answers like any
+    // address; any other failure is the caller's to see.
+    await freeCeiling();
+    await freeSlot();
+    if ((await db.select({ id: subscriber.id }).from(subscriber).where(eq(subscriber.id, sub.id)).limit(1)).length) throw e;
+    return;
+  }
   if (!claimed.length) {
     await freeCeiling(); // confirmed meanwhile, or another request wrote the row first
     await freeSlot();

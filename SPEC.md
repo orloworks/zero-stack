@@ -45,7 +45,7 @@ tests/
    in `src/versions.ts` (empty since create-void 1.11.0; see `docs/facts.md`).
 8. Write the routing block into `AGENTS.md` and a `.mcp.json` with the Cloudflare Docs
    MCP (`https://docs.mcp.cloudflare.com/mcp`). Re-run `bun install` if deps changed.
-9. Svelte only (react, vue and solid output is unchanged, byte for byte). The formatting run of step 6 happens last, after step 8 and the setup files; around it:
+9. Svelte only (react, vue and solid output is unchanged, byte for byte; the one exception is #156, the `--shadcn` alias fix, which changes `vite.config.ts` for every framework). The formatting run of step 6 happens last, after step 8 and the setup files; around it:
    before it, add the notice to every scaffold-owned file (`src/ownership.ts`: one path rule; a comment on line 1, on line 2 under a shebang, an HTML comment in a svelte or markdown file; none in JSON)
    and add `.zero-stack/upgrade-tmp` to the app's `.gitignore`; after it, write `.zero-stack/manifest.json` and `.zero-stack/base.json` (`src/manifest.ts`).
 
@@ -231,7 +231,8 @@ in `AGENTS.md`.
   and DELETE of the signed-in user's own files, each behind `requireAuth`. No route ships
   without auth. With `--account-deletion`, `auth.ts` purges the user's files in `beforeDelete`
   (fail closed: a storage error aborts the deletion, code `STORAGE_PURGE_FAILED`, shown by the
-  page as partial-purge copy) and sweeps again in `afterDelete`.
+  page as partial-purge copy) and sweeps again in `afterDelete`. With `--account-deletion` or `--admin` (both svelte-only) the PUT also checks the user row after the put and
+  discards the object when the user is gone (`src/upload-guard.ts`: `discardIfUserGone`, `userExists`; `tests/upload-guard.test.ts`); `--storage` alone and react/vue/solid are unchanged.
 
 - `--admin` (svelte): an admin area at `/admin` in the same app (spec #51; tickets #52: guard, Users,
   User detail, Audit log, #53: invites and onboarding, #54: feature switches, and #55: settings). An **admin** is a signed-in
@@ -259,12 +260,15 @@ in `AGENTS.md`.
     its `beforeDelete` purge. A shared `databaseHooks.user.delete.after` sweeps the files again and clears the deleted
     user's email (and ban-reason text) from the audit log; the delete's own entry has no target id, email or free text. The
     purge is composed when `(--account-deletion || --admin) && --storage`. The upload route deletes the object when the user
-    row is gone after the `put`.
+    row is gone after the `put` (installed by the storage installer; see `--storage`).
   - **Pages** (`pages/admin/`, one `admin.css`, no framework): Users (search by email or name through one read-only
     `void/db` query, the U2 departure; 50 a page, newest first, "Showing 51–100 of 128"), User detail (status line from
     `userStatus`, the fixing action, sessions with "This device", ban with an optional admin-only reason, delete with a typed
-    email, "View audit log"), Audit log (`?user=` filter). The Account page gets an Admin link for admins and, for a listed
-    but unverified user, "Your email is on the admin list but isn't verified yet." with a verification link. Success copy says
+    email, "View audit log"), Audit log (`?user=` filter). The Account page gets an Admin link for admins and shows nobody
+    anything about the list. Without `--invite-only`, when `/verify-email` verifies a listed address (`src/admin-takeover.ts`, the
+    `databaseHooks.user.update.after` hook) every session of that user ends, the password becomes a random one, and the address is mailed a
+    reset link, so whoever signed up with the owner's address first cannot become admin (#153); a failed mail is logged and Forgot password
+    still works. Success copy says
     "requested", never "sent". Every form uses `runAction` (`src/lib/admin-action.ts`: pending, done, done-unaudited, error).
   - **Send link**: `POST /api/admin/users/:id/send-link` calls `requestPasswordReset` on the server (no Turnstile token
     needed) and audits it, and refuses a missing or foreign `Origin` with 403; with `--invite-only` an unverified user's link is mailed as "Set your password".
@@ -321,9 +325,9 @@ in `AGENTS.md`.
     that fits its type, onboarding steps unique and non-empty, features unique and non-empty, plans unique, lowercase and with unique lookup keys, and (with `--payments`) each
     `PLAN_FEATURES` entry naming a declared feature and declared plans, each failure naming its reason; it also feeds itself bad examples so a check that stops working fails.
   - `session.create.before` writes `lastSignInAt` (a `user.additionalFields` column) and nothing else.
-  - The CLI closes with "To use /admin, sign in with an email on ADMIN_EMAILS and verify it."; `AGENTS.md` gets an Admin
+  - The CLI closes with "To use /admin, sign up with an email on ADMIN_EMAILS, open the verification link, then set your password from the link that follows." (with `--invite-only`: "...and set your password from the link mailed to it."); `AGENTS.md` gets an Admin
     section. Generated tests: `tests/admin*.test.ts` (matcher, `userStatus`, the guard over a real Better Auth, the action
-    helper, D14 page checks) and, with `--storage`, `tests/upload-guard.test.ts`.
+    helper, D14 page checks).
 
 - `--payments` (svelte, spec #81; #82 is subscriptions, #84 is deletion; one-off purchases and the admin view are #83 and #85): `@better-auth/stripe`,
   `stripe` and `better-auth` pinned in `PAYMENTS_DEPS` (one better-auth copy, gate-asserted). `PLANS` is declared in the app-owned declaration file `src/app/plans.ts` (data only; #105)
@@ -331,7 +335,7 @@ in `AGENTS.md`.
   key (monthly price, optional trial days); `src/stripe.ts` builds the client and refuses `STRIPE_API_URL` off localhost;
   `src/billing.ts` holds `requirePlan` / `currentPlan` (active, trialing or past_due; read from the app's copy, never Stripe), `billingPlugins(env)`
   (the plugin plus the guard, spread into `auth.ts`), `billingGuard` (on upgrade, billing-portal, cancel and restore: 503 `STRIPE_NOT_CONFIGURED`
-  while `.env` has the placeholder key, 400 `SUBSCRIPTION_NEEDS_CARD` on upgrade while a past_due or unpaid row exists; the webhook answers 400
+  while `.env` has the placeholder key, 400 `SUBSCRIPTION_NEEDS_CARD` on upgrade while a past_due, unpaid or paused row exists; before every other upgrade it creates the user's Stripe customer itself (idempotency key from the user id, `metadata.userId`) and expires the customer's open Checkout sessions, 500 `BILLING_PREPARE_FAILED` when Stripe fails; the webhook answers 400
   `STRIPE_WEBHOOK_NOT_CONFIGURED` while the secret is the placeholder) and `syncStripeEvent`, the plugin's `onEvent`: for a subscription event on
   a declared price whose customer a user holds, `created` throws (a retried 400) when the row is missing (only for an event under an hour old; an older one is logged and answers 200), and `updated` / `deleted` read the live
   subscription from Stripe and write its plan (from the lookup key of the live item that is a declared plan, wherever it sits in the list), status, cancel-at-period-end, cancel-at and period when the row
@@ -469,10 +473,11 @@ page and posting the form from another site are later tickets.
   the ones before it, and a mail that fails gives back all three (the invites pattern). The link opens `/confirm?token=`: the GET changes nothing, the
   Confirm button posts to `POST /api/lists/confirm` (same origin), a link older than seven days says to ask again.
 - **Leaving.** `/unsubscribe?token=&list=` shows "Unsubscribe from <list>" and "Unsubscribe from everything" and reads nothing from the database. `POST /api/lists/unsubscribe?token=&list=` is the one-click route
-  (RFC 8058; the `List-Unsubscribe` header of a later marketing mail points here): no sign-in, cookie or Origin, JSON, form or multipart body (`scope=all` for everything), 200 with no redirect,
+  (RFC 8058; the `List-Unsubscribe` header of a later marketing mail points here): no sign-in, cookie or Origin, JSON, form or multipart body (`scope=all`, or no `list`, for everything), 200 with no redirect,
   repeatable, the same answer for an unknown token. **Its exemption is scoped to this one route**: Void applies no origin check to route handlers (page actions get one, Better Auth's covers
   `/api/auth`), so every other route under `/api/lists/` and every `/api/admin/` route calls `requireSameOrigin`, and this one does not and never reads a session or cookie, acting only on the
   secret token in its address. "Subscribe again" (`POST /api/lists/resubscribe`, same origin) is a new request: it mails a confirmation and confirms nothing by itself.
+- **Purge.** Each subscribe request first deletes up to 100 subscribers whose consent rows are all `pending` and whose newest request is older than the seven-day link lifetime (consent rows go by the cascade); no cron. A request that finds its subscriber gone mid-way answers as for any address, and a failed consent write gives back the ceiling and address slots.
 - **Account deletion.** For a **verified** account, the subscriber and consent rows for the user's email are removed first (an unverified account does not own its address: sign-up does not wait for verification, so deleting a squatter's account must not wipe the real owner's subscription, and it leaves them alone), ahead of the subscription cancel and the file purge, on both paths: in `deleteUser.beforeDelete`
   (`--account-deletion`) and as the admin guard's `removeSubscriber` option (the remove-user before-hook), both through `removeSubscriberOrRefuse` (`src/subscriber-removal.ts`). A failed removal
   refuses the deletion with 500 `SUBSCRIBER_REMOVAL_FAILED` ("Couldn't remove the account's email subscriptions, so the account was not deleted. Try again."), which the Account page and the

@@ -136,6 +136,25 @@ export async function paymentsChecks(ctx: Ctx, { port }: { port: number }): Prom
     check(portal.ok && ((await portal.json()) as Obj).url === "https://billing.stripe.test/session", `portal -> ${portal.status}`);
     console.log("gate: payments: the success redirect shows the plan before any webhook; created and checkout.session.completed answer 200 and keep one row; requirePlan 200; another user can't read or manage it; the portal opens");
 
+    // #154: two first Subscribe clicks at once make one Stripe customer, and a later click expires the Checkout session the earlier one opened.
+    const dblMail = `payer-dbl-${Date.now()}@example.com`;
+    const dbl = await user(b, dblMail), dblId = idOf(dblMail);
+    const clicks = await Promise.all([call(b, "/api/auth/subscription/upgrade", dbl, UPGRADE), call(b, "/api/auth/subscription/upgrade", dbl, UPGRADE)]);
+    check(clicks.every((r) => r.ok), `two concurrent first upgrades -> ${clicks.map((r) => r.status).join(", ")}`);
+    const dblCustomers = [...fake.customers.values()].filter((x) => x.metadata.userId === dblId);
+    check(dblCustomers.length === 1 && db((d) => (d.query("SELECT stripeCustomerId AS c FROM user WHERE id = ?").get(dblId) as Obj).c) === dblCustomers[0]!.id, `two concurrent first upgrades made ${dblCustomers.length} Stripe customers, or the user holds another`);
+    const dblSessions = (status: string) => [...fake.sessions.values()].filter((x) => x.customer === dblCustomers[0]!.id && x.status === status);
+    const firstOpen = dblSessions("open").map((x) => x.id);
+    check((await call(b, "/api/auth/subscription/upgrade", dbl, UPGRADE)).ok, "the second Subscribe click failed");
+    check(firstOpen.length > 0 && dblSessions("open").length === 1 && firstOpen.every((x) => fake.sessions.get(x)!.status === "expired"), `a second Subscribe click left ${dblSessions("open").length} open sessions, earlier ones ${firstOpen.map((x) => fake.sessions.get(x)!.status).join(",")}`);
+    // Stripe down: the click fails with a code and opens nothing.
+    const openNow = dblSessions("open").length;
+    fake.down = "all";
+    const downClick = await call(b, "/api/auth/subscription/upgrade", dbl, UPGRADE);
+    fake.down = "";
+    check(downClick.status === 500 && ((await downClick.json()) as Obj).code === "BILLING_PREPARE_FAILED" && dblSessions("open").length === openNow, `a Subscribe click with Stripe down -> ${downClick.status}`);
+    console.log("gate: payments: two first Subscribe clicks at once make one Stripe customer (stored on the user); a later click expires the earlier Checkout session; with Stripe down the click fails 500 BILLING_PREPARE_FAILED");
+
     // #85, with --admin: plan-gated feature switches and the admin Billing section. `a` is active on pro here; `other` has no plan and no Stripe customer.
     if (config.admin) {
       boss = await user(b, bossMail);
@@ -179,6 +198,12 @@ export async function paymentsChecks(ctx: Ctx, { port }: { port: number }): Prom
     if (config.admin) check((await call(b, "/api/example-feature", a)).status === 403, "an unpaid subscription still grants a plan feature");
     const third = await call(b, "/api/auth/subscription/upgrade", a, UPGRADE);
     check(third.status === 400 && ((await third.json()) as Obj).code === "SUBSCRIPTION_NEEDS_CARD" && fake.sessions.size === sessions, `an unpaid user's second upgrade -> ${third.status}`);
+    // paused (Stripe's pause-collection state): the same copy as unpaid, no plan, no second Checkout. Back to unpaid for the checks below.
+    check((await emit("customer.subscription.updated", { status: "paused" })).status === 200, "updated paused -> not 200");
+    check((await page(b, a)).includes("is paused because payments failed") && (await call(b, "/api/example-plan", a)).status === 403, "paused lacks the paused copy or passed requirePlan");
+    const fourth = await call(b, "/api/auth/subscription/upgrade", a, UPGRADE);
+    check(fourth.status === 400 && ((await fourth.json()) as Obj).code === "SUBSCRIPTION_NEEDS_CARD" && fake.sessions.size === sessions, `a paused user's second upgrade -> ${fourth.status}`);
+    check((await emit("customer.subscription.updated", { status: "unpaid" })).status === 200, "updated back to unpaid -> not 200");
     // A lost write: the database refuses the update (the plugin's and the sync's), so the event answers an error and Stripe retries; the retry lands.
     db((d) => d.run("CREATE TRIGGER gate_fail BEFORE UPDATE ON subscription WHEN NEW.status = 'active' BEGIN SELECT RAISE(ABORT, 'gate'); END"));
     const lost = await emit("customer.subscription.updated", { status: "active", cancel_at_period_end: true });
@@ -186,7 +211,7 @@ export async function paymentsChecks(ctx: Ctx, { port }: { port: number }): Prom
     check(lost.status >= 400 && subRows(aId)[0].status === "unpaid", `an update whose write failed -> ${lost.status}, row ${subRows(aId)[0].status}`);
     check((await emit("customer.subscription.updated", {})).status === 200, "the retried update -> not 200");
     check((await page(b, a)).includes("Pro. Cancelling, ends on"), "/billing for a cancelling plan lacks the end date");
-    console.log("gate: payments: past_due shows the fix-your-card copy, still passes requirePlan and refuses a second Checkout; unpaid fails requirePlan and refuses one too; a failed write answers an error and the retry lands; cancelling shows its end date");
+    console.log("gate: payments: past_due shows the fix-your-card copy, still passes requirePlan and refuses a second Checkout; unpaid and paused fail requirePlan and refuse one too; a failed write answers an error and the retry lands; cancelling shows its end date");
 
     // No user holds the customer (a dashboard subscription, or a deleted user whose rows are gone): 200 and nothing changes.
     const ghostMail = `payer-ghost-${Date.now()}@example.com`;
@@ -258,6 +283,8 @@ export async function paymentsChecks(ctx: Ctx, { port }: { port: number }): Prom
       check(refused.status === 500 && why.code === "BILLING_CANCEL_FAILED" && why.message === "Couldn't cancel the subscription in Stripe, so the account was not deleted. Try again.", `${how} with Stripe down (${outage}) -> ${refused.status} ${JSON.stringify(why)}`);
       check(h.hasUser(mail) && subRows(uid).length === 1 && statuses() === "past_due,active,canceled,incomplete_expired" && checkout.status === (outage === "all" ? "open" : "expired"), `${how} with Stripe down deleted the user or their rows, or cancelled something`);
       check(!config.storage || r2Keys().includes(file), `${how} with Stripe down purged the user's files`);
+      // Documented in SPEC (consent): the subscriber is removed before the billing cancel, so a Stripe-down refusal still unsubscribes the address.
+      if (config.marketing) check(subscriberCounts(h, mail).subscribers === 0, `${how} with Stripe down left the subscriber (the newsletter subscription is removed before the billing cancel)`);
       // Stripe is back: every subscription that hadn't ended is cancelled (past_due included, the ended ones left alone), then the user, rows and files go.
       const mark = fake.calls.length;
       const gone = await remove(d);
