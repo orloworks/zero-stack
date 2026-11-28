@@ -32,10 +32,12 @@ export function startFakeStripe() {
         // An idempotency key answers with the customer its first call made, as Stripe does.
         const key = req.headers.get("idempotency-key");
         const known = key && fake.idempotent.get(key);
-        if (known) return Response.json(known);
+        // Stripe refuses a reused key whose parameters differ.
+        if (known && known.params !== JSON.stringify(body)) return Response.json({ error: { type: "idempotency_error", message: "Keys for idempotent requests can only be used with the same parameters they were first used with." } }, { status: 400 });
+        if (known) return Response.json(known.customer);
         const c = { id: id("cus"), object: "customer", email: body.email, name: body.name, metadata: body.metadata ?? {} };
         fake.customers.set(c.id, c);
-        if (key) fake.idempotent.set(key, c);
+        if (key) fake.idempotent.set(key, { customer: c, params: JSON.stringify(body) });
         return Response.json(c);
       }
       if ((r = p.match(/^\/v1\/customers\/([^/]+)$/))) { const c = fake.customers.get(r[1]!); if (!c) return missing(); if (m === "POST") Object.assign(c, body); return Response.json(c); }

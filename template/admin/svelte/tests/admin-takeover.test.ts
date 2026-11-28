@@ -8,7 +8,7 @@ import { revokeUnprovenSessions } from "../src/admin-takeover";
 const PW = "attacker-chosen-password";
 const SLOW = 30_000;
 const LISTED = "owner@x.com";
-function setup(opts: { resetMailFails?: boolean } = {}) {
+function setup(opts: { resetMailFails?: boolean; raceSession?: boolean } = {}) {
   const db: Record<string, any[]> = { user: [], session: [], account: [], verification: [] };
   const mail: { verify: string[]; reset: { to: string; url: string }[] } = { verify: [], reset: [] };
   const auth = betterAuth({
@@ -26,8 +26,20 @@ function setup(opts: { resetMailFails?: boolean } = {}) {
       },
     },
     emailVerification: { sendOnSignUp: true, sendVerificationEmail: async ({ url }) => void mail.verify.push(url) },
-    databaseHooks: { user: { update: { after: revokeUnprovenSessions((u) => u.emailVerified && u.email === LISTED) } } },
+    databaseHooks: { user: { update: { after: (u, ctx) => hook(u as any, !opts.raceSession || !ctx ? ctx : raced(ctx)) } } },
   });
+  const hook = revokeUnprovenSessions((u) => u.emailVerified && u.email === LISTED);
+  // A sign-in on another isolate that read the user before the sessions were deleted: its session lands right after the first delete.
+  const raced = (ctx: any) => {
+    const ia = ctx.context.internalAdapter;
+    let first = true;
+    const deleteUserSessions = async (id: string) => {
+      await ia.deleteUserSessions(id);
+      if (first) await ctx.context.adapter.create({ model: "session", data: { token: "raced", userId: id, expiresAt: new Date(Date.now() + 1e6), createdAt: new Date(), updatedAt: new Date() } });
+      first = false;
+    };
+    return { ...ctx, context: { ...ctx.context, internalAdapter: { ...ia, deleteUserSessions } } };
+  };
   // Signs `email` up with the attacker's password, keeps the session cookie, and returns the link the address's inbox received.
   const signUp = async (email: string) => {
     const { headers } = await auth.api.signUpEmail({ body: { name: email, email, password: PW }, returnHeaders: true });
@@ -88,4 +100,20 @@ it("signing in again later (a lastSignInAt-style update) does not reset a listed
   await t.auth.api.updateUser({ headers: new Headers({ cookie: headers.getSetCookie().map((c) => c.split(";")[0]).join("; ") }), body: { name: "Owner" } });
   expect(t.mail.reset).toHaveLength(1);
   expect(await t.signsIn(LISTED, "owner-password")).toBe(true);
+}, SLOW);
+
+it("a session that lands after the first sweep is gone when /verify-email completes", async () => {
+  const t = setup({ raceSession: true });
+  const { link } = await t.signUp(LISTED);
+  await t.verify(link);
+  expect(t.db.session).toHaveLength(0);
+}, SLOW);
+
+it("an unsent set-password token is deleted when the mail fails", async () => {
+  const t = setup({ resetMailFails: true });
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  const { link } = await t.signUp(LISTED);
+  await t.verify(link);
+  log.mockRestore();
+  expect(t.db.verification.filter((v) => v.identifier.startsWith("reset-password:"))).toHaveLength(0);
 }, SLOW);

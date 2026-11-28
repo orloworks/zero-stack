@@ -45,7 +45,7 @@ tests/
    in `src/versions.ts` (empty since create-void 1.11.0; see `docs/facts.md`).
 8. Write the routing block into `AGENTS.md` and a `.mcp.json` with the Cloudflare Docs
    MCP (`https://docs.mcp.cloudflare.com/mcp`). Re-run `bun install` if deps changed.
-9. Svelte only (react, vue and solid output is unchanged, byte for byte). The formatting run of step 6 happens last, after step 8 and the setup files; around it:
+9. Svelte only (react, vue and solid output is unchanged, byte for byte; the one exception is #156, the `--shadcn` alias fix, which changes `vite.config.ts` for every framework). The formatting run of step 6 happens last, after step 8 and the setup files; around it:
    before it, add the notice to every scaffold-owned file (`src/ownership.ts`: one path rule; a comment on line 1, on line 2 under a shebang, an HTML comment in a svelte or markdown file; none in JSON)
    and add `.zero-stack/upgrade-tmp` to the app's `.gitignore`; after it, write `.zero-stack/manifest.json` and `.zero-stack/base.json` (`src/manifest.ts`).
 
@@ -325,7 +325,7 @@ in `AGENTS.md`.
     that fits its type, onboarding steps unique and non-empty, features unique and non-empty, plans unique, lowercase and with unique lookup keys, and (with `--payments`) each
     `PLAN_FEATURES` entry naming a declared feature and declared plans, each failure naming its reason; it also feeds itself bad examples so a check that stops working fails.
   - `session.create.before` writes `lastSignInAt` (a `user.additionalFields` column) and nothing else.
-  - The CLI closes with "To use /admin, sign in with an email on ADMIN_EMAILS and verify it."; `AGENTS.md` gets an Admin
+  - The CLI closes with "To use /admin, sign up with an email on ADMIN_EMAILS, open the verification link, then set your password from the link that follows." (with `--invite-only`: "...and set your password from the link mailed to it."); `AGENTS.md` gets an Admin
     section. Generated tests: `tests/admin*.test.ts` (matcher, `userStatus`, the guard over a real Better Auth, the action
     helper, D14 page checks).
 

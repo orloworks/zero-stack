@@ -115,7 +115,10 @@ type CancelSource = {
 };
 
 type GuardClient = Pick<CancelSource, "checkout"> & {
-  customers: { create: (p: { email: string; name: string; metadata: Record<string, string> }, o: { idempotencyKey: string }) => Promise<{ id: string }> };
+  customers: {
+    create: (p: { metadata: Record<string, string> }, o: { idempotencyKey: string }) => Promise<{ id: string }>;
+    update: (id: string, p: { email: string; name: string }) => Promise<unknown>;
+  };
 };
 type GuardUser = { id: string; email: string; name: string; stripeCustomerId?: string | null };
 
@@ -124,17 +127,19 @@ const expireOpenSessions = async (client: Pick<CancelSource, "checkout">, custom
 };
 
 // The guard's work before /subscription/upgrade (the save callback stores the customer id on the user). The customer is created as the plugin would
-// (metadata.userId, customerType user) but under an idempotency key from the user id, so concurrent or retried first upgrades get one customer; the
-// id is also set on the session user, which the plugin reads next. Then every open Checkout session of the customer is expired. Fails closed
+// (metadata.userId, customerType user) but under an idempotency key from the user id, so concurrent or retried first upgrades get one customer. Only the
+// fixed metadata is created under the key (Stripe rejects a reused key with other parameters, which a name change after a failed save would be); email and
+// name are set by a separate update, which the plugin does not need at create time. The id is also set on the session user, which the plugin reads next. Then every open Checkout session of the customer is expired. Fails closed
 // (500 BILLING_PREPARE_FAILED): a failed customer create or expire never lets the plugin go on to a second customer or a second open Checkout.
 // shortcut: two upgrades racing past this point can still leave two open sessions, upgrade when Stripe offers a lock or the app takes a database one.
 export async function prepareUpgrade(client: GuardClient, user: GuardUser, save: (customerId: string) => Promise<unknown>): Promise<void> {
   try {
     if (!user.stripeCustomerId) {
       const created = await client.customers.create(
-        { email: user.email, name: user.name, metadata: { userId: user.id, customerType: "user" } },
+        { metadata: { userId: user.id, customerType: "user" } },
         { idempotencyKey: `zero-stack-customer-${user.id}` },
       );
+      await client.customers.update(created.id, { email: user.email, name: user.name });
       await save(created.id);
       user.stripeCustomerId = created.id;
     }

@@ -103,6 +103,15 @@ test("shadcn's @ alias is a file path, so a folder name with a space still resol
   expect(vite).not.toContain(".pathname");
 });
 
+test("shadcn fails hard when vite.config.ts has no defineConfig import to anchor on", () => {
+  const dir = tmp();
+  mkdirSync(join(dir, "pages"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, devDependencies: {} }));
+  writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  writeFileSync(join(dir, "vite.config.ts"), 'import { defineConfig } from "vite-plus";\nexport default defineConfig({\n});\n');
+  expect(() => installShadcn(dir)).toThrow(/vite\.config\.ts/);
+});
+
 test("zodRpc adds zod, the validated route and the typed client sample", async () => {
   const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
   await scaffold({ ...cfg, zodRpc: true }, dir, exec);

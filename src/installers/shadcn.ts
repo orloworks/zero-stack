@@ -20,8 +20,8 @@ export function installShadcn(dir: string): void {
   editFile(dir, "vite.config.ts", (s) => {
     const f = "vite.config.ts";
     // fileURLToPath, not .pathname: a folder name with a space would stay percent-encoded and the alias would not resolve.
-    s = replaceAnchor(s, "export default defineConfig({", 'export default defineConfig({\n  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },', f);
-    return 'import { fileURLToPath } from "node:url";\n' + s;
+    s = replaceAnchor(s, 'import { defineConfig } from "vite";', 'import { fileURLToPath } from "node:url";\nimport { defineConfig } from "vite";', f);
+    return replaceAnchor(s, "export default defineConfig({", 'export default defineConfig({\n  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },', f);
   });
   appendFileSync(join(dir, "pages/style.css"), readFileSync(join(slice, "shadcn.css")));
   cpSync(join(slice, "src"), join(dir, "src"), { recursive: true });

@@ -22,7 +22,7 @@ function installInvites(dir: string): void {
 }
 
 // --admin on svelte: the admin module and guard, the schema, the pages, their tests, and edits at anchors in the Account page and the schema.
-// The auth.ts and env.ts parts come from the composers; ADMIN_EMAILS in .env from authEnv. Runs after installAuth and installStorage (their pages and routes exist).
+// The auth.ts and env.ts parts come from the composers; ADMIN_EMAILS in .env from authEnv. Runs after installAuth (its pages and routes exist).
 export function installAdmin(dir: string, config: Config): void {
   cpSync(join(here, "svelte"), dir, { recursive: true, force: false, errorOnExist: true });
   // tests/onboarding.test.ts and tests/invites-db.test.ts import these; declared so another install layout can't drop them.

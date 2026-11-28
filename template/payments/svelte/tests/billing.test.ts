@@ -79,16 +79,22 @@ it("a paused subscription reads as unpaid, needs a card before another Checkout,
 
 // A fake Stripe for the upgrade guard: customers.create honours the idempotency key as Stripe does; sessions are listed, then expired.
 function guardClient(o: { sessions?: string[]; expireFails?: boolean; createFails?: boolean } = {}) {
-  const made = new Map<string, { id: string; metadata: Record<string, string> }>(), keys: string[] = [], calls: string[] = [];
+  const made = new Map<string, { id: string; metadata: Record<string, string>; email?: string; name?: string }>(), keys: string[] = [], calls: string[] = [];
   const client = {
     customers: {
+      // Stripe rejects a reused key whose parameters differ.
       create: async (p: { metadata: Record<string, string> }, opts: { idempotencyKey: string }) => {
         calls.push("create");
+        if (Object.keys(p).join() !== "metadata") throw new Error("only the fixed metadata may be created under the key");
         await Promise.resolve(); // both concurrent callers are in flight before either is answered
         if (o.createFails) throw new Error("stripe down");
         keys.push(opts.idempotencyKey);
         if (!made.has(opts.idempotencyKey)) made.set(opts.idempotencyKey, { id: `cus_${made.size + 1}`, metadata: p.metadata });
         return made.get(opts.idempotencyKey)!;
+      },
+      update: async (id: string, p: { email: string; name: string }) => {
+        calls.push(`update ${id}`);
+        Object.assign([...made.values()].find((c) => c.id === id)!, p);
       },
     },
     checkout: {
@@ -115,9 +121,18 @@ it("prepareUpgrade: two first upgrades at once make one customer (one idempotenc
   await Promise.all([a, b].map((u) => prepareUpgrade(client, u, async (id) => void saved.push(id))));
   expect(new Set(keys)).toEqual(new Set(["zero-stack-customer-u9"]));
   expect(keys).toHaveLength(2);
-  expect([...made.values()]).toEqual([{ id: "cus_1", metadata: { userId: "u9", customerType: "user" } }]);
+  expect([...made.values()]).toEqual([{ id: "cus_1", metadata: { userId: "u9", customerType: "user" }, email: "u9@example.com", name: "U9" }]);
   expect(saved).toEqual(["cus_1", "cus_1"]);
   expect([a.stripeCustomerId, b.stripeCustomerId]).toEqual(["cus_1", "cus_1"]); // what the plugin reads next
+});
+
+it("prepareUpgrade: a retry after a failed save with a changed name and email reuses the key, gets the same customer and updates it", async () => {
+  const { client, made } = guardClient();
+  await expect(prepareUpgrade(client, guardUser(), async () => { throw new Error("db down"); })).rejects.toBeDefined();
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const user = guardUser({ name: "Renamed", email: "new@example.com" });
+  await prepareUpgrade(client, user, async () => {});
+  expect([user.stripeCustomerId, made.size, [...made.values()][0]!.name, [...made.values()][0]!.email]).toEqual(["cus_1", 1, "Renamed", "new@example.com"]);
 });
 
 it("prepareUpgrade: a user with a customer creates nothing, and every open Checkout session is expired before it returns", async () => {

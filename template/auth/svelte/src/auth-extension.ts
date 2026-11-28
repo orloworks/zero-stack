@@ -36,7 +36,7 @@ const note = (taken: Map<string, string>, owner: string, endpoints: Endpoints | 
 // off) would otherwise pass. Functions are told apart by identity. Never printed: it can hold the secret.
 function picture(v: unknown, ids = new Map<unknown, number>(), depth = 0): string {
   if (typeof v === "function") return `fn${ids.get(v) ?? (ids.set(v, ids.size), ids.size - 1)}`;
-  if (v === null || typeof v !== "object" || depth > 6) return `${typeof v}:${String(v)}`;
+  if (v === null || typeof v !== "object" || depth > 6) return `${typeof v}:${typeof v === "object" && v ? "" : String(v)}`; // String(v) throws on a null-prototype object past the depth limit
   if (v instanceof Map) return `map${picture([...v], ids, depth + 1)}`; // the secret can be a key map
   if (Array.isArray(v)) return `[${v.map((x) => picture(x, ids, depth + 1)).join()}]`;
   return `{${Object.keys(v).sort().map((k) => `${k}=${picture((v as Record<string, unknown>)[k], ids, depth + 1)}`).join()}}`;
