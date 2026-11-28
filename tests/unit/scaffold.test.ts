@@ -80,6 +80,29 @@ test("--shadcn with a non-React framework exits 1 with the fix and creates nothi
   expect(existsSync(dir)).toBe(false);
 });
 
+test("--help and -h print the usage line and exit 0, even with no Node on PATH", () => {
+  for (const flag of ["--help", "-h"]) {
+    const r = Bun.spawnSync([process.execPath, "src/index.ts", flag], { env: { ...process.env, PATH: tmp() } });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toStartWith("Usage: create-zero-stack <directory>");
+  }
+});
+
+test("shadcn's @ alias is a file path, so a folder name with a space still resolves", () => {
+  const dir = tmp();
+  mkdirSync(join(dir, "pages"));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: {}, devDependencies: {} }));
+  writeFileSync(join(dir, "tsconfig.json"), tsconfig());
+  writeFileSync(join(dir, "vite.config.ts"), 'import { defineConfig } from "vite";\nexport default defineConfig({\n});\n');
+  writeFileSync(join(dir, "pages/style.css"), "");
+  writeFileSync(join(dir, "pages/index.tsx"), 'import "./style.css";\n<h1>Welcome to Void</h1>\n');
+  installShadcn(dir);
+  const vite = readFileSync(join(dir, "vite.config.ts"), "utf8");
+  expect(vite).toContain('import { fileURLToPath } from "node:url";');
+  expect(vite).toContain('"@": fileURLToPath(new URL("./src", import.meta.url))');
+  expect(vite).not.toContain(".pathname");
+});
+
 test("zodRpc adds zod, the validated route and the typed client sample", async () => {
   const { dir, exec } = seeded("<!--injected-by-void-v1-->\n<!--/injected-by-void-->\n");
   await scaffold({ ...cfg, zodRpc: true }, dir, exec);

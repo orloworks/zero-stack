@@ -10,6 +10,11 @@ import { upgrade } from "./upgrade";
 const USAGE = `Usage: create-zero-stack <directory> [--framework react|vue|svelte|solid] ${FEATURE_LIST.map((f) => `[${argv(f).join(" ")}]`).join(" ")}`;
 
 try {
+  // Before parsing and the Node preflight: --help must work anywhere, and parseArgs would reject it as unknown.
+  if (process.argv.slice(2).some((a) => a === "--help" || a === "-h")) {
+    console.log(USAGE);
+    process.exit(0);
+  }
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
