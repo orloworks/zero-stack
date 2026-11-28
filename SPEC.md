@@ -231,7 +231,8 @@ in `AGENTS.md`.
   and DELETE of the signed-in user's own files, each behind `requireAuth`. No route ships
   without auth. With `--account-deletion`, `auth.ts` purges the user's files in `beforeDelete`
   (fail closed: a storage error aborts the deletion, code `STORAGE_PURGE_FAILED`, shown by the
-  page as partial-purge copy) and sweeps again in `afterDelete`.
+  page as partial-purge copy) and sweeps again in `afterDelete`. With `--account-deletion` or `--admin` (both svelte-only) the PUT also checks the user row after the put and
+  discards the object when the user is gone (`src/upload-guard.ts`: `discardIfUserGone`, `userExists`; `tests/upload-guard.test.ts`); `--storage` alone and react/vue/solid are unchanged.
 
 - `--admin` (svelte): an admin area at `/admin` in the same app (spec #51; tickets #52: guard, Users,
   User detail, Audit log, #53: invites and onboarding, #54: feature switches, and #55: settings). An **admin** is a signed-in
@@ -259,12 +260,15 @@ in `AGENTS.md`.
     its `beforeDelete` purge. A shared `databaseHooks.user.delete.after` sweeps the files again and clears the deleted
     user's email (and ban-reason text) from the audit log; the delete's own entry has no target id, email or free text. The
     purge is composed when `(--account-deletion || --admin) && --storage`. The upload route deletes the object when the user
-    row is gone after the `put`.
+    row is gone after the `put` (installed by the storage installer; see `--storage`).
   - **Pages** (`pages/admin/`, one `admin.css`, no framework): Users (search by email or name through one read-only
     `void/db` query, the U2 departure; 50 a page, newest first, "Showing 51–100 of 128"), User detail (status line from
     `userStatus`, the fixing action, sessions with "This device", ban with an optional admin-only reason, delete with a typed
-    email, "View audit log"), Audit log (`?user=` filter). The Account page gets an Admin link for admins and, for a listed
-    but unverified user, "Your email is on the admin list but isn't verified yet." with a verification link. Success copy says
+    email, "View audit log"), Audit log (`?user=` filter). The Account page gets an Admin link for admins and shows nobody
+    anything about the list. Without `--invite-only`, when `/verify-email` verifies a listed address (`src/admin-takeover.ts`, the
+    `databaseHooks.user.update.after` hook) every session of that user ends, the password becomes a random one, and the address is mailed a
+    reset link, so whoever signed up with the owner's address first cannot become admin (#153); a failed mail is logged and Forgot password
+    still works. Success copy says
     "requested", never "sent". Every form uses `runAction` (`src/lib/admin-action.ts`: pending, done, done-unaudited, error).
   - **Send link**: `POST /api/admin/users/:id/send-link` calls `requestPasswordReset` on the server (no Turnstile token
     needed) and audits it, and refuses a missing or foreign `Origin` with 403; with `--invite-only` an unverified user's link is mailed as "Set your password".
@@ -323,7 +327,7 @@ in `AGENTS.md`.
   - `session.create.before` writes `lastSignInAt` (a `user.additionalFields` column) and nothing else.
   - The CLI closes with "To use /admin, sign in with an email on ADMIN_EMAILS and verify it."; `AGENTS.md` gets an Admin
     section. Generated tests: `tests/admin*.test.ts` (matcher, `userStatus`, the guard over a real Better Auth, the action
-    helper, D14 page checks) and, with `--storage`, `tests/upload-guard.test.ts`.
+    helper, D14 page checks).
 
 - `--payments` (svelte, spec #81; #82 is subscriptions, #84 is deletion; one-off purchases and the admin view are #83 and #85): `@better-auth/stripe`,
   `stripe` and `better-auth` pinned in `PAYMENTS_DEPS` (one better-auth copy, gate-asserted). `PLANS` is declared in the app-owned declaration file `src/app/plans.ts` (data only; #105)

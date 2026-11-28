@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
-import { APIError } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { admin } from "better-auth/plugins";
 import { expect, it } from "vite-plus/test";
 import { adminGuard } from "../src/admin-guard";
@@ -8,7 +8,7 @@ import { adminGuard } from "../src/admin-guard";
 // The real Better Auth server API over an in-memory database: the guard's hooks run for auth.api calls exactly as for HTTP requests.
 const PW = "correct-horse-battery";
 const SLOW = 30_000; // a loaded machine: the default 5s is for tests that do not build a Better Auth instance
-function setup(opts: { purgeFails?: boolean; auditFails?: boolean; cancelFails?: boolean; subscriberFails?: boolean } = {}) {
+function setup(opts: { purgeFails?: boolean; auditFails?: boolean; cancelFails?: boolean; subscriberFails?: boolean; raceSession?: boolean } = {}) {
   const db: Record<string, any[]> = { user: [], session: [], account: [], verification: [] };
   const listed = new Set<string>();
   const audit: any[] = [];
@@ -23,6 +23,14 @@ function setup(opts: { purgeFails?: boolean; auditFails?: boolean; cancelFails?:
     emailAndPassword: { enabled: true, password: { hash: async (p) => p, verify: async ({ hash, password }) => hash === password } },
     plugins: [
       admin(),
+      // A sign-in on another isolate that read the user before the ban: its session lands after the plugin's own session deletion and before the guard's after-hook.
+      // Written through the plain adapter, which skips the session-create hook that refuses a banned user.
+      ...(opts.raceSession
+        ? [{
+            id: "racer",
+            hooks: { after: [{ matcher: (c: any) => c.path === "/admin/ban-user", handler: createAuthMiddleware(async (c: any) => void (await c.context.adapter.create({ model: "session", data: { token: "raced", userId: c.body.userId, expiresAt: new Date(Date.now() + 1e6), createdAt: new Date(), updatedAt: new Date() } }))) }] },
+          }]
+        : []),
       adminGuard({
         isAdmin: (u) => u.emailVerified && listed.has(u.email),
         audit: async (i) => {
@@ -266,4 +274,23 @@ it("a ban and an unban in parallel write one entry each", async () => {
   const { t, victim, h } = await adminAndVictim();
   await Promise.all([t.auth.api.banUser({ headers: h, body: { userId: victim.id } }), t.auth.api.unbanUser({ headers: h, body: { userId: victim.id } })]);
   expect(t.audit.map((a) => a.verb).sort()).toEqual(["ban", "unban"]);
+}, SLOW);
+
+it("a session that lands after the ban's own session deletion is gone once the ban request completes", async () => {
+  const t = setup({ raceSession: true });
+  const boss = await t.user("boss@x.com");
+  t.listed.add("boss@x.com");
+  const victim = await t.user("victim@x.com");
+  expect(await status(t.auth.api.banUser({ headers: boss.headers, body: { userId: victim.id } }))).toBe(200);
+  expect(t.db.session!.filter((x) => x.userId === victim.id)).toEqual([]);
+  expect(t.audit.map((a) => a.verb)).toEqual(["ban"]);
+}, SLOW);
+
+it("a refused ban touches no sessions", async () => {
+  const t = setup({ raceSession: true });
+  const boss = await t.user("boss@x.com");
+  t.listed.add("boss@x.com");
+  const victim = await t.user("victim@x.com");
+  expect(await status(t.auth.api.banUser({ headers: boss.headers, body: { userId: victim.id, banExpiresIn: 60 } }))).toBe(400);
+  expect(t.db.session!.some((x) => x.userId === victim.id)).toBe(true);
 }, SLOW);

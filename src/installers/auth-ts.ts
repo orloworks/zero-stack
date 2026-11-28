@@ -73,6 +73,11 @@ const ADMIN_SESSION_CREATE = `      create: {
           await ctx?.context.internalAdapter.updateUser(session.userId, { lastSignInAt: new Date() });
         },
       },`;
+// --admin without --invite-only: a listed address that /verify-email verifies loses every session and its password and is mailed a set-password link (src/admin-takeover.ts),
+// so whoever signed up with the owner's address first cannot become admin when the owner clicks the link.
+const ADMIN_VERIFY_UPDATE = `      update: {
+        after: revokeUnprovenSessions((user) => isAdmin(env.ADMIN_EMAILS, user)),
+      },`;
 // After any user is deleted (self-delete or the admin plugin's remove-user). --admin: sweep the files once more (an upload that raced the delete), then clear
 // the user's email from the audit log. --payments: delete the Stripe plugin's subscription rows, which have no foreign key to cascade (it logs its own failure).
 const userDelete = (config: Config) => `      delete: {
@@ -107,9 +112,12 @@ function databaseHooks(parts: DatabaseHookParts): string[] {
 //   so Better Auth never mints a plain verify link (/send-verification-email answers 400). Nothing is deleted, so a repeat sign-up cannot lock the owner out.
 //   Mail goes only for a request Better Auth accepted (sign-in: only the wrong-password refusal), only while the address is on the list, and only when the user
 //   has no unexpired set-password or reset link, so a new one goes out after the last expires or is used.
-// - reset-password: a valid token proves the inbox, so it marks an unverified user verified, if the list still holds the address; if not, the reset is refused
-//   with Better Auth's invalid-token error. Verified users reset as usual. The reset then replaces the random password.
-const invitePlugin = (db: boolean) => `{
+// - reset-password: a valid token proves the inbox, so the reset marks an unverified user verified once Better Auth accepted the new password (after-hook), if the
+//   list still holds the address; if not, the reset is refused with Better Auth's invalid-token error (before-hook). Verified users reset as usual. The reset then replaces the random password.
+const invitePlugin = (db: boolean) => `(() => {
+  // The user a valid set-password token belongs to, from the before-hook to the after-hook of the same request (both see one context object).
+  const proven = new WeakMap(); // context -> user id
+  return {
       id: "invite-only",
       hooks: {
         before: [
@@ -126,11 +134,19 @@ const invitePlugin = (db: boolean) => `{
               const user = await ctx.context.internalAdapter.findUserById(found.value);
               if (!user || user.emailVerified) return;
               if (!${allowed(db, "user.email")}) throw new APIError("BAD_REQUEST", { code: "INVALID_TOKEN", message: "Invalid token" });
-              await ctx.context.internalAdapter.updateUser(user.id, { emailVerified: true });
+              proven.set(ctx.context, user.id);
             }),
           },
         ],
         after: [
+          {
+            matcher: (ctx) => ctx.path === "/reset-password",
+            handler: createAuthMiddleware(async (ctx) => {
+              const id = proven.get(ctx.context);
+              if (!id || isAPIError(ctx.context.returned)) return; // a rejected reset (a too-short password) proves nothing
+              await ctx.context.internalAdapter.updateUser(id, { emailVerified: true });
+            }),
+          },
           {
             matcher: (ctx) => ctx.path === "/sign-up/email" || ctx.path === "/sign-in/email",
             handler: createAuthMiddleware(async (ctx) => {
@@ -167,7 +183,8 @@ const invitePlugin = (db: boolean) => `{
           },
         ],
       },
-    }`;
+    };
+})()`;
 export const INVITE_ONLY_PLUGIN = invitePlugin(false);
 
 // --payments (src/plans.ts, src/stripe.ts, src/billing.ts). Better Auth's Stripe plugin owns checkout, the portal, the webhook and the subscription table;
@@ -223,7 +240,7 @@ export function composeAuthTs(config: Config): string {
     // svelte: the one plugins and trustedOrigins keys come from the auth extension (below); react, vue and solid keep their file byte for byte.
     ...(svelte ? ["  plugins: app.plugins,", "  trustedOrigins: app.trustedOrigins,"] : zeroPlugins.length ? [`  plugins: [${zeroPlugins.join(", ")}],`] : []),
     ...databaseHooks({
-      user: [...(config.inviteOnly ? [inviteOnlyUserCreate(!!config.admin)] : []), ...(config.admin || (config.payments && config.accountDeletion) ? [userDelete(config)] : [])],
+      user: [...(config.inviteOnly ? [inviteOnlyUserCreate(!!config.admin)] : []), ...(config.admin && !config.inviteOnly ? [ADMIN_VERIFY_UPDATE] : []), ...(config.admin || (config.payments && config.accountDeletion) ? [userDelete(config)] : [])],
       session: config.admin ? [ADMIN_SESSION_CREATE] : [],
     }),
     ...userOption(config),
@@ -233,7 +250,7 @@ export function composeAuthTs(config: Config): string {
   const del = (config.accountDeletion || config.admin) && config.storage;
   const ba = config.accountDeletion || config.inviteOnly ? `import { APIError, createAuthMiddleware${config.inviteOnly ? ", isAPIError" : ""} } from "better-auth/api";\n` : "";
   return `import { defineAuth } from "void/auth";
-${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.marketing ? 'import { removeSubscriberOrRefuse } from "./src/subscriber-removal";\n' : ""}${config.payments ? paymentsImports(!!(config.accountDeletion || config.admin)) : ""}${svelte ? EXTENSION_IMPORTS : ""}
+${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.admin && !config.inviteOnly ? 'import { revokeUnprovenSessions } from "./src/admin-takeover";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.marketing ? 'import { removeSubscriberOrRefuse } from "./src/subscriber-removal";\n' : ""}${config.payments ? paymentsImports(!!(config.accountDeletion || config.admin)) : ""}${svelte ? EXTENSION_IMPORTS : ""}
 export default defineAuth(({ defaults${svelte || zeroPlugins.length ? ", env" : ""} }) => ${svelte ? `{
   const app = extendAuth([${zeroPlugins.join(", ")}], authExtension(env), defaults.trustedOrigins);
   return {` : "({"}
