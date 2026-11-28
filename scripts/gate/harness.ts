@@ -6,7 +6,7 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { killChildren, spawnTracked } from "../../src/children";
 import { editEnv } from "./env";
-import { firstLink, mailIds } from "./inbox";
+import { firstLink, linkByPath, mailIds } from "./inbox";
 
 // Request cookie header from a response's Set-Cookie headers.
 export const cookieOf = (r: Response) => r.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
@@ -159,22 +159,29 @@ export function createHarness(o: { app: string; vp: string; turnstile: boolean; 
 
   // ---- the dev inbox ----
   // List rows carry subject, recipient and a detail link; the detail page shows the text body escaped. The trigger token is read fresh (a restart may change it).
-  const mailUrls = async (subject: string, to: string, base = here) => {
+  const inbox = (path: string, base: string) => {
     const token = readFileSync(join(voidDir, "dev-trigger-token"), "utf8").trim();
-    const inbox = (path: string) => fetch(`${base}/__void/inbox${path}`, { headers: { "x-void-dev-trigger": token } }).then((r) => r.text());
+    return fetch(`${base}/__void/inbox${path}`, { headers: { "x-void-dev-trigger": token } }).then((r) => r.text());
+  };
+  // `path`: take the link whose path is exactly that, not the first link (a mail with several links).
+  const mailUrls = async (subject: string, to: string, base = here, path?: string) => {
     const urls: URL[] = [];
-    for (const id of mailIds(await inbox(""), subject, to)) {
-      const url = firstLink(await inbox(`/${id}`));
+    for (const id of mailIds(await inbox("", base), subject, to)) {
+      const detail = await inbox(`/${id}`, base);
+      const url = path ? linkByPath(detail, path) : firstLink(detail);
       if (url) urls.push(new URL(url));
     }
     return urls;
   };
-  const mailUrl = async (subject: string, to: string, base = here) => (await mailUrls(subject, to, base))[0] ?? null;
+  const mailUrl = async (subject: string, to: string, base = here, path?: string) => (await mailUrls(subject, to, base, path))[0] ?? null;
+  // Every raw message (the .eml: headers and every part) with this subject sent to this address, in the inbox's list order.
+  const rawMails = async (subject: string, to: string, base = here) =>
+    Promise.all(mailIds(await inbox("", base), subject, to).map((id) => inbox(`/${id}/raw`, base)));
   // Mail can be sent in the background of the request, so poll until `n` have arrived (or time out and return what is there).
-  const waitMails = async (subject: string, to: string, n: number, base = here) => {
+  const waitMails = async (subject: string, to: string, n: number, base = here, path?: string) => {
     let urls: URL[] = [];
     for (let i = 0; i < 40 && urls.length < n; i++) {
-      urls = await mailUrls(subject, to, base);
+      urls = await mailUrls(subject, to, base, path);
       if (urls.length < n) await Bun.sleep(250);
     }
     return urls;
@@ -230,7 +237,7 @@ export function createHarness(o: { app: string; vp: string; turnstile: boolean; 
     start, restart,
     request, authPost,
     eachDb, findDb, withDb, hasUser, onUser, idOf,
-    mailUrls, mailUrl, waitMails, follow, landing, resetToken, setPassword,
+    mailUrls, mailUrl, rawMails, waitMails, follow, landing, resetToken, setPassword,
     makeUser,
   };
 }

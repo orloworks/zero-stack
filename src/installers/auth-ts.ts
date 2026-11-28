@@ -22,6 +22,9 @@ const STORAGE_BEFORE_DELETE = `        try {
           console.error(\`storage purge failed for \${user.id}\`, e);
           throw APIError.from("INTERNAL_SERVER_ERROR", { code: "STORAGE_PURGE_FAILED", message: "Could not delete the account's files." });
         }`;
+// deleteUser with --marketing (#113): remove the user's subscriber and consent first, ahead of the billing cancel and the purge; a failure refuses the deletion
+// with its own code and message (removeSubscriberOrRefuse in src/subscriber-removal.ts), so nothing else has been touched.
+const SUBSCRIBER_BEFORE_DELETE = "        await removeSubscriberOrRefuse(user);";
 // deleteUser with --payments (#84): cancel the user's Stripe subscriptions first, ahead of the purge; it throws 500 BILLING_CANCEL_FAILED, so nothing is purged or deleted.
 const BILLING_BEFORE_DELETE = "        await cancelSubscriptions(env, user.id);";
 const STORAGE_AFTER_DELETE = `      afterDelete: async (user) => {
@@ -33,7 +36,7 @@ const STORAGE_AFTER_DELETE = `      afterDelete: async (user) => {
       },`;
 // With --admin the resweep after any delete (self or admin) lives in databaseHooks.user.delete.after, so deleteUser keeps only the before hook (U1).
 function deleteUser(config: Config): string {
-  const before = [config.payments && BILLING_BEFORE_DELETE, config.storage && STORAGE_BEFORE_DELETE].filter(Boolean);
+  const before = [config.marketing && SUBSCRIBER_BEFORE_DELETE, config.payments && BILLING_BEFORE_DELETE, config.storage && STORAGE_BEFORE_DELETE].filter(Boolean);
   if (!before.length) return "    deleteUser: { enabled: true },";
   return `    deleteUser: {
       enabled: true,
@@ -194,7 +197,7 @@ export function composeAuthTs(config: Config): string {
     config.turnstile && 'captcha({ provider: "cloudflare-turnstile", secretKey: turnstileSecret(env.TURNSTILE_SECRET_KEY, env.BETTER_AUTH_URL) })',
     config.inviteOnly && invitePlugin(!!config.admin),
     config.admin && `admin({ bannedUserMessage: "${BANNED_MESSAGE}" })`,
-    config.admin && `adminGuard({ isAdmin: (user) => isAdmin(env.ADMIN_EMAILS, user), audit: recordAudit${config.storage ? ", purge: purgeUserFiles" : ""}${config.payments ? ", cancelBilling: (id) => cancelSubscriptions(env, id)" : ""} })`,
+    config.admin && `adminGuard({ isAdmin: (user) => isAdmin(env.ADMIN_EMAILS, user), audit: recordAudit${config.storage ? ", purge: purgeUserFiles" : ""}${config.marketing ? ", removeSubscriber: removeSubscriberOrRefuse" : ""}${config.payments ? ", cancelBilling: (id) => cancelSubscriptions(env, id)" : ""} })`,
     config.payments && "...billingPlugins(env)",
   ].filter(Boolean) as string[];
   const options = [
@@ -230,7 +233,7 @@ export function composeAuthTs(config: Config): string {
   const del = (config.accountDeletion || config.admin) && config.storage;
   const ba = config.accountDeletion || config.inviteOnly ? `import { APIError, createAuthMiddleware${config.inviteOnly ? ", isAPIError" : ""} } from "better-auth/api";\n` : "";
   return `import { defineAuth } from "void/auth";
-${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.payments ? paymentsImports(!!(config.accountDeletion || config.admin)) : ""}${svelte ? EXTENSION_IMPORTS : ""}
+${ba}${config.turnstile || config.admin ? `import { ${[config.admin && "admin", config.turnstile && "captcha"].filter(Boolean).join(", ")} } from "better-auth/plugins";\n` : ""}${config.email ? 'import { send } from "./src/mail";\n' : ""}${config.turnstile ? 'import { turnstileSecret } from "./src/turnstile-guard";\n' : ""}${config.admin ? 'import { isAdmin, recordAudit, redactAudit } from "./src/admin";\nimport { adminGuard } from "./src/admin-guard";\n' : ""}${config.inviteOnly ? (config.admin ? 'import { inviteAllowed } from "./src/invites";\n' : 'import { signupAllowed } from "./src/signup-allowlist";\n') : ""}${del ? 'import { purgeUserFiles } from "./src/storage";\n' : ""}${config.marketing ? 'import { removeSubscriberOrRefuse } from "./src/subscriber-removal";\n' : ""}${config.payments ? paymentsImports(!!(config.accountDeletion || config.admin)) : ""}${svelte ? EXTENSION_IMPORTS : ""}
 export default defineAuth(({ defaults${svelte || zeroPlugins.length ? ", env" : ""} }) => ${svelte ? `{
   const app = extendAuth([${zeroPlugins.join(", ")}], authExtension(env), defaults.trustedOrigins);
   return {` : "({"}

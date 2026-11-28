@@ -53,7 +53,7 @@ test("add-ons are asked only after auth is yes, and only those valid for the fra
   expect(no.asked).not.toContain("Sync secrets with Infisical?");
   const yes = ui(yesAll);
   await fillPrompts({ name: "x", framework: "svelte" }, yes.ui);
-  expect(yes.asked.slice(-8)).toEqual(["Add account deletion?", "Add email?", "Add Turnstile?", "Restrict sign-up to invited emails?", "Add an admin area?", "Add Stripe payments?", "Add storage?", "Sync secrets with Infisical?"]);
+  expect(yes.asked.slice(-9)).toEqual(["Add account deletion?", "Add email?", "Add Turnstile?", "Restrict sign-up to invited emails?", "Add an admin area?", "Add Stripe payments?", "Add storage?", "Sync secrets with Infisical?", "Add marketing mail (lists, consent, unsubscribe)?"]);
   const vue = ui(yesAll);
   await fillPrompts({ name: "x", framework: "vue" }, vue.ui);
   expect(vue.asked.slice(-2)).toEqual(["Add storage?", "Sync secrets with Infisical?"]);
@@ -65,7 +65,17 @@ test("an add-on flag implies auth, so auth is not asked", async () => {
   await fillPrompts({ name: "x", framework: "svelte", email: true }, t.ui);
   expect(t.asked).not.toContain("Add auth?");
   expect(t.asked).not.toContain("Add email?");
-  expect(t.asked.slice(-7)).toEqual(["Add account deletion?", "Add Turnstile?", "Restrict sign-up to invited emails?", "Add an admin area?", "Add Stripe payments?", "Add storage?", "Sync secrets with Infisical?"]);
+  expect(t.asked.slice(-8)).toEqual(["Add account deletion?", "Add Turnstile?", "Restrict sign-up to invited emails?", "Add an admin area?", "Add Stripe payments?", "Add storage?", "Sync secrets with Infisical?", "Add marketing mail (lists, consent, unsubscribe)?"]);
+});
+
+test("--marketing implies admin, Turnstile, email and auth, so none of them is asked, and marketing is not asked on react", async () => {
+  const t = ui(yesAll);
+  await fillPrompts({ name: "x", framework: "svelte", marketing: true }, t.ui);
+  for (const q of ["Add auth?", "Add email?", "Add Turnstile?", "Add an admin area?", "Add marketing mail (lists, consent, unsubscribe)?"]) expect(t.asked).not.toContain(q);
+  expect(t.asked).toContain("Restrict sign-up to invited emails?");
+  const react = ui(yesAll);
+  await fillPrompts({ name: "x", framework: "react" }, react.ui);
+  expect(react.asked).not.toContain("Add marketing mail (lists, consent, unsubscribe)?");
 });
 
 test("shadcn is asked even when Tailwind was declined, and choosing it implies Tailwind", async () => {

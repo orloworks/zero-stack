@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { spawnTracked } from "../../../src/children";
 import { type Obj, startFakeStripe } from "../fake-stripe";
 import { authHelpers, type Ctx, GATE_PW } from "../shared";
+import { failRemoval, REMOVAL_FAILED, seedSubscriber, subscriberCounts } from "./marketing";
 import { signWebhook } from "../webhook";
 
 // `port` is the first dev server's port: the address the checks start from, before their first restart.
@@ -235,6 +236,20 @@ export async function paymentsChecks(ctx: Ctx, { port }: { port: number }): Prom
         const put = await fetch(`${b}/api/files/keep.txt`, { method: "PUT", body: "keep", headers: { cookie, "content-type": "text/plain" } });
         check(put.status === 201 && r2Keys().includes(file), `${how}: the doomed user's upload -> ${put.status}`);
       }
+      // --marketing (#113): the subscriber is removed before the cancel and the purge, so a removal made to fail stops the deletion with the user, the subscription (still
+      // open in Stripe, nothing cancelled), the files and the subscriber all as they were.
+      if (config.marketing) {
+        onUser(mail, "UPDATE user SET emailVerified = 1 WHERE id = ?"); // only a verified account's deletion removes the address's subscription
+        seedSubscriber(h, mail, "confirmed", ["newsletter"]);
+        const calls = fake.calls.length;
+        const stopped = await failRemoval(h, () => remove(d));
+        const stoppedWhy = (await stopped.json()) as Obj;
+        check(stopped.status === 500 && stoppedWhy.code === REMOVAL_FAILED.code && stoppedWhy.message === REMOVAL_FAILED.message, `${how} with the subscriber removal failing -> ${stopped.status} ${JSON.stringify(stoppedWhy)}`);
+        check(h.hasUser(mail) && subRows(uid).length === 1 && statuses() === "past_due,active,canceled,incomplete_expired" && checkout.status === "open" && fake.calls.length === calls, `${how} with the subscriber removal failing cancelled or changed the subscription`);
+        check(!config.storage || r2Keys().includes(file), `${how} with the subscriber removal failing purged the user's files`);
+        check(subscriberCounts(h, mail).subscribers === 1, `${how} with the subscriber removal failing removed the subscriber`);
+        console.log(`gate: payments: ${how} with the subscriber removal failing stops with 500 SUBSCRIBER_REMOVAL_FAILED before anything is cancelled${config.storage ? " or purged" : ""}`);
+      }
       // Stripe is down: the deletion stops with the code and message the pages show; the user, their rows, their files and their subscriptions are
       // untouched. Checkout sessions are expired first, so when only the cancel fails the open session is already expired (a retry is safe).
       fake.down = outage;
@@ -251,6 +266,7 @@ export async function paymentsChecks(ctx: Ctx, { port }: { port: number }): Prom
       check(statuses() === "canceled,canceled,canceled,incomplete_expired" && cancelled.join() === [subs[0]!, subs[1]!].map((x) => `DELETE /v1/subscriptions/${x.id}`).join(), `${how}: Stripe has ${statuses()} after ${cancelled.join(", ") || "no cancel"}`);
       check(checkout.status === "expired", `${how} left the user's Checkout session ${checkout.status}`);
       check(!h.hasUser(mail) && subRows(uid).length === 0, `${how} left the user or their subscription rows`);
+      check(!config.marketing || subscriberCounts(h, mail).subscribers === 0, `${how} left the user's subscriber`);
       check(!config.storage || !r2Keys().some((k) => k.startsWith(`users/${uid}/`)), `${how} left the user's files`);
       // Stripe's event for the cancellation arrives after the user is gone: 200, so Stripe doesn't retry. It is on a declared price, so the
       // sync does not skip it as someone else's: it gets as far as finding that no user holds the customer.

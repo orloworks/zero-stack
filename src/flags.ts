@@ -2,7 +2,7 @@ export const FRAMEWORKS = ["react", "vue", "svelte", "solid"] as const;
 export type Framework = (typeof FRAMEWORKS)[number];
 
 // The single list of installer flags. CLI parsing, usage, prompts, the gate argv and the ci:full matrix all derive from it.
-// `requires` is another feature's key that this one implies; `frameworks` limits where it is valid (omitted = any).
+// `requires` is the key (or keys) of other features that this one implies; `frameworks` limits where it is valid (omitted = any).
 export const FEATURES = [
   { flag: "tailwind", key: "tailwind", label: "Tailwind", prompt: "Add Tailwind?" },
   { flag: "shadcn", key: "shadcn", label: "shadcn/ui", prompt: "Add shadcn/ui?", requires: "tailwind", frameworks: ["react"] },
@@ -16,12 +16,16 @@ export const FEATURES = [
   { flag: "payments", key: "payments", label: "Stripe payments", prompt: "Add Stripe payments?", requires: "auth", frameworks: ["svelte"] },
   { flag: "storage", key: "storage", label: "storage", prompt: "Add storage?", requires: "auth" },
   { flag: "secrets", key: "secrets", label: "Infisical secrets", prompt: "Sync secrets with Infisical?", requires: "auth", value: "infisical" },
+  { flag: "marketing", key: "marketing", label: "marketing mail", prompt: "Add marketing mail (lists, consent, unsubscribe)?", requires: ["admin", "turnstile"], frameworks: ["svelte"] },
 ] as const satisfies readonly {
-  flag: string; key: string; label: string; prompt: string; requires?: string; frameworks?: readonly Framework[]; value?: string;
+  flag: string; key: string; label: string; prompt: string; requires?: string | readonly string[]; frameworks?: readonly Framework[]; value?: string;
 }[];
-export type Feature = { flag: string; key: FeatureKey; label: string; prompt: string; requires?: FeatureKey; frameworks?: readonly string[]; value?: string };
+export type Feature = { flag: string; key: FeatureKey; label: string; prompt: string; requires?: FeatureKey | readonly FeatureKey[]; frameworks?: readonly string[]; value?: string };
 export type FeatureKey = (typeof FEATURES)[number]["key"];
 export const FEATURE_LIST: readonly Feature[] = FEATURES;
+
+// The keys a feature implies, however its `requires` is written (none, one or several).
+export const impliedKeys = (f: Feature): readonly FeatureKey[] => (f.requires === undefined ? [] : typeof f.requires === "string" ? [f.requires] : f.requires);
 
 // The one place a feature's CLI form is derived: usage, parseArgs, the gate and the ci:full matrix all use it.
 // A feature with `value` is `--flag value` (config key stays a boolean); the rest are bare `--flag`.
@@ -35,7 +39,8 @@ export function parseFeature(f: Feature, raw: string | boolean | undefined): boo
 }
 
 // Add-on keys are optional so hand-built configs (test fixtures) need not list them; validateFlags always sets every key.
-type AddOnKey = Extract<(typeof FEATURES)[number], { requires: "auth" | "email" }>["key"];
+// Every feature that implies another, except shadcn (which implies Tailwind and stays required), however many keys its `requires` lists.
+type AddOnKey = (typeof FEATURES)[number] extends infer R ? (R extends { key: infer K; requires: infer Q } ? ([Q] extends ["tailwind"] ? never : K) : never) : never;
 export type Config = { name: string; framework: Framework } & Record<Exclude<FeatureKey, AddOnKey>, boolean> & Partial<Record<AddOnKey, boolean>>;
 export type FlagInput = Partial<Omit<Config, "framework">> & { name: string; framework?: string };
 
@@ -56,14 +61,15 @@ export function validateFlags(input: FlagInput): { config: Config; notes: string
   // Repeat until stable: --invite-only implies --email, which in turn implies --auth.
   for (let changed = true; changed; ) {
     changed = false;
-    for (const f of FEATURE_LIST) {
-      const req = FEATURE_LIST.find((r) => r.key === f.requires);
-      if (on[f.key] && req && !on[req.key]) {
-        on[req.key] = true;
-        changed = true;
-        notes.push(`--${f.flag} implies --${req.flag}; enabling ${req.label}.`);
+    for (const f of FEATURE_LIST)
+      for (const key of impliedKeys(f)) {
+        const req = FEATURE_LIST.find((r) => r.key === key)!;
+        if (on[f.key] && !on[req.key]) {
+          on[req.key] = true;
+          changed = true;
+          notes.push(`--${f.flag} implies --${req.flag}; enabling ${req.label}.`);
+        }
       }
-    }
   }
   return { config: { name, framework: framework as Framework, ...on }, notes };
 }

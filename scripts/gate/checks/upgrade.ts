@@ -57,6 +57,17 @@ export async function upgradeGate(ctx: Ctx): Promise<void> {
   if (!editedExtension.includes("https://app.example")) throw new Error("src/app/auth.ts has no empty trustedOrigins list to edit");
   writeFileSync(extension, editedExtension);
 
+  // A list relabelled and a second one added to the lists file, as an owner would (--marketing, #113).
+  const listsFile = join(app, "src/app/lists.ts");
+  const marketing = existsSync(listsFile);
+  const editedLists = marketing
+    ? readFileSync(listsFile, "utf8").replace('label: "Newsletter"', 'label: "Product news"').replace(/,?\s*\] as const satisfies/, `,\n  { name: "tips", label: "Tips", description: "Short how-tos." },\n] as const satisfies`)
+    : "";
+  if (marketing) {
+    if (!editedLists.includes("Product news") || !editedLists.includes('name: "tips"')) throw new Error("src/app/lists.ts has no list to edit");
+    writeFileSync(listsFile, editedLists);
+  }
+
   // 2. Make the app look older, four ways.
   const base: BaseCopy = JSON.parse(readFileSync(record, "utf8"));
   const [aged, dropped, stale, signIn] = ["src/mail.ts", "src/lib/setting-value.ts", "src/stale.ts", "pages/sign-in.svelte"] as const;
@@ -98,6 +109,7 @@ export async function upgradeGate(ctx: Ctx): Promise<void> {
   if (readFileSync(extension, "utf8") !== editedExtension) throw new Error("the upgrade changed the owner's edit in src/app/auth.ts");
   if (readFileSync(featuresFile, "utf8") !== editedFeatures) throw new Error("the upgrade changed the owner's edit in src/app/features.ts");
   if (plansExist && readFileSync(plansFile, "utf8") !== editedPlans) throw new Error("the upgrade changed the owner's edit in src/app/plans.ts");
+  if (marketing && readFileSync(listsFile, "utf8") !== editedLists) throw new Error("the upgrade changed the owner's edit in src/app/lists.ts");
   if (existsSync(exampleRoute) || existsSync(featureRoute) || existsSync(planRoute)) throw new Error("the upgrade brought back an example route the owner dropped");
   for (const f of ["manifest.json", "base.json"])
     if (readFileSync(join(app, RECORD_DIR, f), "utf8") !== readFileSync(join(freshApp, RECORD_DIR, f), "utf8")) throw new Error(`${RECORD_DIR}/${f} differs from a fresh scaffold's`);

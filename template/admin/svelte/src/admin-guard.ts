@@ -25,6 +25,9 @@ export type GuardOptions = {
   audit: (i: AuditInput) => Promise<void>;
   // Deletes the user's stored files; given only with --storage. A failure refuses the delete with everything intact.
   purge?: (userId: string) => Promise<void>;
+  // Removes the user's marketing subscriber and consent; given only with --marketing. It throws the 500 itself, and runs ahead of the billing cancel and the purge,
+  // so a failed removal leaves the billing and the files too.
+  removeSubscriber?: (user: { id: string; email: string; emailVerified?: boolean | null }) => Promise<void>;
   // Cancels the user's Stripe subscriptions; given only with --payments. It throws the 500 itself, and runs ahead of the purge so a failure leaves the files too.
   cancelBilling?: (userId: string) => Promise<void>;
 };
@@ -80,6 +83,7 @@ export function adminGuard(opts: GuardOptions) {
             if (!target) return; // the plugin answers 404 or 400
             if (path === "/admin/remove-user") {
               if (target.id === user.id) throw new APIError("BAD_REQUEST", { code: "YOU_CANNOT_REMOVE_YOURSELF", message: "You cannot remove yourself" });
+              await opts.removeSubscriber?.(target);
               await opts.cancelBilling?.(target.id);
               if (opts.purge) {
                 try {

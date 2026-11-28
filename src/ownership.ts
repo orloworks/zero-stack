@@ -6,7 +6,7 @@ import { listFiles } from "./manifest";
 // The admin layout holds the navigation an app extends, and src/app/ holds the declaration files, so both stay the app's.
 export const scaffoldOwned = (p: string): boolean =>
   /^(auth\.ts|docs\/setup\.md|middleware\/10\.admin\.ts|routes\/api\/files\/\[name\]\.ts)$/.test(p) ||
-  (/^(src|scripts|tests|db\/schema|pages\/admin|routes\/admin|routes\/api\/admin)\//.test(p) && !p.startsWith("src/app/") && p !== "pages/admin/layout.svelte");
+  (/^(src|scripts|tests|db\/schema|pages\/admin|routes\/admin|routes\/api\/admin|routes\/api\/lists)\//.test(p) && !p.startsWith("src/app/") && p !== "pages/admin/layout.svelte");
 
 // The app-owned file to edit instead, where there is one.
 const EDIT_INSTEAD: Record<string, string> = {
@@ -16,6 +16,7 @@ const EDIT_INSTEAD: Record<string, string> = {
   "src/access.ts": "Declare features (and the plans each is on for) in src/app/features.ts.",
   "src/plans.ts": "Declare plans in src/app/plans.ts.",
   "src/settings.ts": "Declare settings in src/app/settings.ts.",
+  "src/consent.ts": "Declare mailing lists in src/app/lists.ts.",
 };
 export const editInstead = (p: string): string => EDIT_INSTEAD[p] ?? "Move the change to an app-owned file (AGENTS.md lists them).";
 

@@ -12,10 +12,12 @@ const OWNED = [
   "pages/admin/invites.svelte", "pages/admin/settings.server.ts", "pages/admin/users/[id].server.ts", "pages/admin/users/[id].svelte",
   "routes/admin/users.ts", "routes/api/admin/features/[feature].ts", "routes/api/admin/invites.ts", "routes/api/admin/users/[id]/sessions/[sessionId]/revoke.ts",
   "routes/api/files/[name].ts", "scripts/doctor.sh", "scripts/secrets.ts", "scripts/setup-wizard.sh", "scripts/stripe-seed.ts",
+  "routes/api/lists/subscribe.ts", "db/schema/marketing.ts", "src/consent.ts", "src/lib/consent-core.ts", "tests/consent-db.test.ts",
   "src/access.ts", "src/admin.ts", "src/auth-extension.ts", "src/billing.ts", "src/lib/admin-action.ts", "src/lib/turnstile.ts", "src/mail.ts", "src/onboarding.ts", "src/rpc.ts", "src/settings.ts",
   "tests/access.test.ts", "tests/auth-extension.test.ts", "tests/signed-in.ts", "tests/signed-in.test.ts", "tests/hello.test.ts", "tests/onboarding.test.ts",
 ];
 const APP_OWNED = [
+  "src/app/lists.ts", "pages/subscribe.svelte", "pages/confirm.svelte", "pages/confirm.server.ts", "pages/unsubscribe.svelte", "pages/unsubscribe.server.ts",
   "src/app/auth.ts", "src/app/features.ts", "src/app/onboarding.ts", "src/app/plans.ts", "src/app/settings.ts", "pages/admin/layout.svelte", "pages/sign-in.svelte", "pages/sign-up.svelte", "pages/forgot-password.svelte", "pages/reset-password.svelte",
   "pages/settings.svelte", "pages/settings.server.ts", "pages/billing.svelte", "pages/billing.server.ts", "pages/index.svelte", "pages/index.server.ts", "pages/style.css",
   "routes/api/hello.ts", "routes/api/echo.ts", "routes/api/example-feature.ts", "routes/api/example-plan.ts", "routes/api/example-settings.ts",

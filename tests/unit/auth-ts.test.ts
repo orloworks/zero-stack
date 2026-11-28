@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { FEATURE_LIST, validateFlags } from "../../src/flags";
 import { INVITE_ONLY_PLUGIN, composeAuthTs } from "../../src/installers/auth-ts";
 
@@ -152,4 +154,20 @@ test("--admin --invite-only swaps all three signup re-checks to inviteAllowed, a
   expect(plain).not.toContain("inviteAllowed");
   expect(plain.match(/signupAllowed\(env\.SIGNUP_ALLOWLIST/g)).toHaveLength(3);
   expect(compose({ admin: true })).not.toContain("inviteAllowed");
+});
+
+test("with marketing, payments, storage, account deletion and admin: the subscriber goes first, then the billing cancel, then the file purge, on both delete paths", () => {
+  const src = composeAuthTs(validateFlags({ name: "x", framework: "svelte", marketing: true, payments: true, storage: true, accountDeletion: true, admin: true }).config);
+  // self-delete: the beforeDelete hook, in this order
+  const hook = src.slice(src.indexOf("beforeDelete"));
+  const order = ["removeSubscriberOrRefuse(user)", "cancelSubscriptions(env, user.id)", "purgeUserFiles(user.id)"].map((c) => hook.indexOf(c));
+  expect(order.every((i) => i >= 0)).toBe(true);
+  expect(order).toEqual([...order].sort((a, b) => a - b));
+  // the admin guard gets the option, and its own before-hook (template/admin/svelte/src/admin-guard.ts) runs it ahead of the cancel and the purge
+  expect(src).toMatch(/adminGuard\(\{[^]*?purge: purgeUserFiles, removeSubscriber: removeSubscriberOrRefuse, cancelBilling:/);
+  expect(src).toContain('import { removeSubscriberOrRefuse } from "./src/subscriber-removal";');
+  const guard = readFileSync(join(import.meta.dir, "../../template/admin/svelte/src/admin-guard.ts"), "utf8");
+  const g = [guard.indexOf("opts.removeSubscriber?.(target)"), guard.indexOf("opts.cancelBilling?.(target.id)"), guard.indexOf("await opts.purge(target.id)")];
+  expect(g.every((i) => i >= 0)).toBe(true);
+  expect(g).toEqual([...g].sort((a, b) => a - b));
 });
