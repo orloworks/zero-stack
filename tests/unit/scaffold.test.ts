@@ -600,7 +600,7 @@ test("svelte --admin ships the module, guard, schema, pages and tests, edits the
   expect(existsSync(join(dir, "src/admin-takeover.ts"))).toBe(true);
   expect(read("pages/settings.server.ts")).toContain("admin: adminAccess(user)");
   const agents = read("AGENTS.md");
-  for (const t of ["## Admin area", "ADMIN_EMAILS", "sign in with an email on `ADMIN_EMAILS` and verify it", "audit_entry", "refused with a 404 on purpose", "set role"]) expect(agents).toContain(t);
+  for (const t of ["## Admin area", "ADMIN_EMAILS", "sign up with an email on `ADMIN_EMAILS` and prove it from the inbox", "src/admin-takeover.ts", "audit_entry", "refused with a 404 on purpose", "set role"]) expect(agents).toContain(t);
   expect(agents).not.toContain("${");
   expect(agents).toContain("Every admin change writes exactly one audit entry");
   expect(agents).toContain("self-delete. The deleted user's email");
