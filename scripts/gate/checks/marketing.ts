@@ -63,8 +63,11 @@ export async function marketingChecks(ctx: Ctx): Promise<void> {
     const mails = (email: string) => h.mailUrls(SUBJECT, email, b, "/confirm");
     const settled = async (email: string, n: number, what: string) => { // `n` mails have arrived and no more do
       check((await h.waitMails(SUBJECT, email, n, b, "/confirm")).length === n, `${what}: expected ${n} confirmation mail(s) for ${email}`);
+      // A send writes last_mail_at and the consent's confirm_token before it mails, so a late wrong send shows there even if its mail has not landed yet.
+      const sendState = () => h.withDb("consent", (d) => JSON.stringify(d.query("SELECT s.last_mail_at, (SELECT group_concat(c.confirm_token) FROM consent c WHERE c.subscriber_id = s.id) AS tokens FROM subscriber s WHERE s.email = ?").get(email.toLowerCase())), { readonly: true });
+      const sent = sendState();
       await Bun.sleep(750);
-      check((await mails(email)).length === n, `${what}: more than ${n} confirmation mail(s) for ${email}`);
+      check((await mails(email)).length === n && sendState() === sent, `${what}: more than ${n} confirmation mail(s) for ${email}, or a send changed last_mail_at or the confirm token`);
     };
 
     // 1. The three pages are public and say what they should; a GET of each changes nothing (the rows are compared at the end of each step below).
@@ -110,7 +113,7 @@ export async function marketingChecks(ctx: Ctx): Promise<void> {
     const before = stateOf(ann);
     const get = await h.request(link!.pathname + link!.search, { origin: "none" });
     const getText = await get.text();
-    check(get.status === 200 && /Confirm/.test(getText) && !/older than seven days/.test(getText) && stateOf(ann) === before, `GET of the confirm link -> ${get.status}, or it changed the row`);
+    check(get.status === 200 && /Press Confirm to get/.test(getText) && /<button/.test(getText) && !/older than seven days/.test(getText) && stateOf(ann) === before, `GET of the confirm link -> ${get.status}, or it changed the row`);
     const token = link!.searchParams.get("token")!;
     const press = (t: string, o: { origin?: "same" | "none" } = {}) => h.request("/api/lists/confirm", { body: { token: t }, origin: o.origin });
     check((await press(token, { origin: "none" })).status === 403 && stateOf(ann) === before, "a Confirm press with no Origin was not refused");

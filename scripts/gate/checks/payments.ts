@@ -283,6 +283,8 @@ export async function paymentsChecks(ctx: Ctx, { port }: { port: number }): Prom
       check(refused.status === 500 && why.code === "BILLING_CANCEL_FAILED" && why.message === "Couldn't cancel the subscription in Stripe, so the account was not deleted. Try again.", `${how} with Stripe down (${outage}) -> ${refused.status} ${JSON.stringify(why)}`);
       check(h.hasUser(mail) && subRows(uid).length === 1 && statuses() === "past_due,active,canceled,incomplete_expired" && checkout.status === (outage === "all" ? "open" : "expired"), `${how} with Stripe down deleted the user or their rows, or cancelled something`);
       check(!config.storage || r2Keys().includes(file), `${how} with Stripe down purged the user's files`);
+      // Documented in SPEC (consent): the subscriber is removed before the billing cancel, so a Stripe-down refusal still unsubscribes the address.
+      if (config.marketing) check(subscriberCounts(h, mail).subscribers === 0, `${how} with Stripe down left the subscriber (the newsletter subscription is removed before the billing cancel)`);
       // Stripe is back: every subscription that hadn't ended is cancelled (past_due included, the ended ones left alone), then the user, rows and files go.
       const mark = fake.calls.length;
       const gone = await remove(d);
